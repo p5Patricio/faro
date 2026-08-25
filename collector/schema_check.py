@@ -6,9 +6,9 @@ import sys
 from dataclasses import asdict, dataclass
 from typing import Iterable
 
-from requests import RequestException
+import psycopg
 
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 REQUIRED_ML_RELATIONS = (
@@ -21,8 +21,7 @@ REQUIRED_ML_RELATIONS = (
     "backtest_trades",
     "paper_trading_runs",
     "paper_trading_events",
-    "risk_limits",
-    "user_risk_profiles",
+    "risk_profiles",
 )
 
 
@@ -35,41 +34,33 @@ class RelationStatus:
 
 
 def check_relations(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     relations: Iterable[str] = REQUIRED_ML_RELATIONS,
 ) -> list[RelationStatus]:
     statuses: list[RelationStatus] = []
     for relation in relations:
         try:
-            response = repository._session.get(
-                f"{repository.config.url}/rest/v1/{relation}",
-                headers=repository.headers,
-                params={"select": "*", "limit": "1"},
-                timeout=30,
-            )
-            statuses.append(
-                RelationStatus(
-                    name=relation,
-                    available=response.status_code < 400,
-                    status_code=response.status_code,
-                    error=None if response.status_code < 400 else response.text[:300],
-                )
-            )
-        except RequestException as exc:
+            available = repository.relation_exists(relation)
+            statuses.append(RelationStatus(name=relation, available=available))
+        except RuntimeError as exc:
             statuses.append(RelationStatus(name=relation, available=False, error=str(exc)))
     return statuses
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check required Supabase ML schema relations")
+    parser = argparse.ArgumentParser(description="Check required local Postgres ML schema relations")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    statuses = check_relations(repository)
+    connection_string = LocalPostgresConfig.from_env().dsn
+
+    with psycopg.connect(connection_string) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        statuses = check_relations(repository)
+
     missing = [status for status in statuses if not status.available]
 
     if args.json:
@@ -82,7 +73,7 @@ def main() -> None:
 
         if missing:
             print()
-            print("Apply pending files in supabase/migrations/ from the Supabase SQL Editor.")
+            print("Run py -3.14 -m db.migrate")
 
     sys.exit(1 if missing else 0)
 

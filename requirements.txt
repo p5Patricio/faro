@@ -9,5 +9,7 @@ scikit-learn
 joblib
 python-dotenv
 requests
+psycopg[binary]
+psycopg-pool
 pytest
 httpx

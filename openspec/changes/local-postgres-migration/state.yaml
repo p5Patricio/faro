@@ -1,0 +1,45 @@
+change: local-postgres-migration
+status: active
+mode: openspec
+created_at: 2026-08-10
+preflight:
+  pace: auto
+  artifact_store: openspec
+  delivery_strategy: ask-on-risk
+  review_budget_lines: 400
+artifacts:
+  exploration: openspec/changes/local-postgres-migration/exploration.md
+  proposal: openspec/changes/local-postgres-migration/proposal.md
+  design: openspec/changes/local-postgres-migration/design.md
+  specs:
+    - openspec/changes/local-postgres-migration/specs/local-persistence/spec.md
+    - openspec/changes/local-postgres-migration/specs/professional-operations/spec.md
+  tasks: openspec/changes/local-postgres-migration/tasks.md
+decisions:
+  data_migration: migrate_existing
+  risk_profiles: start_fresh
+  chain_strategy: stacked-to-main
+  size_exception_units: [2, 3]
+environment:
+  # Task 0.1 resolved 2026-08-25 against the real local instance.
+  postgres_version: "18.4"
+  host: localhost
+  port: 5432
+  database: ia_inversiones
+  test_database: ia_inversiones_test
+  role: postgres
+  dsn_env_var: LOCAL_DATABASE_URL
+  test_dsn_env_var: TEST_DATABASE_URL
+  notes: >-
+    Both databases created and verified reachable via psycopg 3.3.4 on
+    Python 3.14.3. Public schema empty at creation time. Credentials live only
+    in the developer's gitignored .env; .env.example could not be written by the
+    agent (harness denies .env* writes) and must be added manually.
+progress:
+  explore: complete
+  proposal: complete
+  specs: complete
+  design: complete
+  tasks: complete
+  apply: pending
+  verify: pending
