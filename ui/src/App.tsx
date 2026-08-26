@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import {
   Activity,
@@ -10,8 +10,6 @@ import {
   Clock3,
   Gauge,
   History,
-  LogIn,
-  LogOut,
   MinusCircle,
   RefreshCcw,
   Save,
@@ -19,11 +17,9 @@ import {
   SlidersHorizontal,
   TrendingDown,
   TrendingUp,
-  UserCircle,
   type LucideIcon,
 } from 'lucide-react';
 import type { PricePoint } from './components/FinancialChart';
-import { isSupabaseAuthConfigured, supabase, type Session } from './lib/supabase';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api').replace(/\/$/, '');
 const FinancialChart = lazy(() =>
@@ -271,12 +267,6 @@ function App() {
   const [paperStatus, setPaperStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const [authMode, setAuthMode] = useState<'sign-in' | 'sign-up'>('sign-in');
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authBusy, setAuthBusy] = useState(false);
-  const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [systemHealth, setSystemHealth] = useState<SystemHealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [riskProfile, setRiskProfile] = useState<RiskProfileResponse | null>(null);
@@ -284,12 +274,6 @@ function App() {
   const [riskScopeType, setRiskScopeType] = useState<RiskProfileScopeType>('default');
   const [riskStatus, setRiskStatus] = useState<string | null>(null);
   const [riskSaving, setRiskSaving] = useState(false);
-  const accessToken = session?.access_token;
-
-  const requestConfig = useMemo(
-    () => (accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : undefined),
-    [accessToken],
-  );
 
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.ticker === selectedTicker),
@@ -330,25 +314,25 @@ function App() {
         paperTradingResponse,
         paperRunsResponse,
       ] = await Promise.all([
-        axios.get<PricePoint[]>(`${API_BASE_URL}/prices/${ticker}?limit=240`, requestConfig),
-        axios.get<AnalysisResponse>(`${API_BASE_URL}/analysis/${ticker}`, requestConfig),
+        axios.get<PricePoint[]>(`${API_BASE_URL}/prices/${ticker}?limit=240`),
+        axios.get<AnalysisResponse>(`${API_BASE_URL}/analysis/${ticker}`),
         axios
-          .get<PredictionAuditRow[]>(`${API_BASE_URL}/predictions/${ticker}?limit=8`, requestConfig)
+          .get<PredictionAuditRow[]>(`${API_BASE_URL}/predictions/${ticker}?limit=8`)
           .catch(() => ({ data: [] as PredictionAuditRow[] })),
         axios
-          .get<FeedbackSummaryResponse>(`${API_BASE_URL}/feedback/${ticker}?limit=250`, requestConfig)
+          .get<FeedbackSummaryResponse>(`${API_BASE_URL}/feedback/${ticker}?limit=250`)
           .catch(() => ({ data: null as FeedbackSummaryResponse | null })),
         axios
-          .get<OperationalAlertsResponse>(`${API_BASE_URL}/alerts/${ticker}`, requestConfig)
+          .get<OperationalAlertsResponse>(`${API_BASE_URL}/alerts/${ticker}`)
           .catch(() => ({ data: null as OperationalAlertsResponse | null })),
         axios
-          .get<BacktestSummaryRow[]>(`${API_BASE_URL}/backtests/${ticker}?limit=5`, requestConfig)
+          .get<BacktestSummaryRow[]>(`${API_BASE_URL}/backtests/${ticker}?limit=5`)
           .catch(() => ({ data: [] as BacktestSummaryRow[] })),
         axios
-          .get<PaperTradingResponse>(`${API_BASE_URL}/paper-trading/${ticker}?limit=250`, requestConfig)
+          .get<PaperTradingResponse>(`${API_BASE_URL}/paper-trading/${ticker}?limit=250`)
           .catch(() => ({ data: null as PaperTradingResponse | null })),
         axios
-          .get<PaperTradingRunRow[]>(`${API_BASE_URL}/paper-trading-runs/${ticker}?limit=8`, requestConfig)
+          .get<PaperTradingRunRow[]>(`${API_BASE_URL}/paper-trading-runs/${ticker}?limit=8`)
           .catch(() => ({ data: [] as PaperTradingRunRow[] })),
       ]);
       setPrices(pricesResponse.data);
@@ -365,7 +349,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [requestConfig]);
+  }, []);
 
   const fetchSystemHealth = useCallback(async () => {
     setHealthLoading(true);
@@ -388,12 +372,10 @@ function App() {
     try {
       const response = await axios.get<PaperTradingResponse>(
         `${API_BASE_URL}/paper-trading/${selectedTicker}?limit=250&persist=true`,
-        requestConfig,
       );
       setPaperTrading(response.data);
       const runsResponse = await axios.get<PaperTradingRunRow[]>(
         `${API_BASE_URL}/paper-trading-runs/${selectedTicker}?limit=8`,
-        requestConfig,
       );
       setPaperTradingRuns(runsResponse.data);
       setPaperStatus(response.data.persisted_run_id ? 'Corrida guardada.' : 'Simulacion recalculada.');
@@ -402,18 +384,15 @@ function App() {
     } finally {
       setPaperSaving(false);
     }
-  }, [paperSaving, requestConfig, selectedTicker]);
+  }, [paperSaving, selectedTicker]);
 
-  const fetchRiskProfile = useCallback(async (activeSession: Session | null, scopeType: RiskProfileScopeType, scopeValue: string) => {
-    const config = activeSession?.access_token
-      ? { headers: { Authorization: `Bearer ${activeSession.access_token}` } }
-      : undefined;
+  const fetchRiskProfile = useCallback(async (scopeType: RiskProfileScopeType, scopeValue: string) => {
     const params = new URLSearchParams({ scope_type: scopeType });
     if (scopeValue) {
       params.set('scope_value', scopeValue);
     }
     try {
-      const response = await axios.get<RiskProfileResponse>(`${API_BASE_URL}/risk-profile?${params}`, config);
+      const response = await axios.get<RiskProfileResponse>(`${API_BASE_URL}/risk-profile?${params}`);
       const profile =
         response.data.source === 'default' && scopeType !== 'default'
           ? { ...response.data.profile, name: scopeValue || scopeType, scope_type: scopeType, scope_value: scopeValue }
@@ -432,53 +411,16 @@ function App() {
     }
   }, []);
 
-  const handleAuthSubmit = useCallback(
-    async (event: FormEvent<HTMLFormElement>) => {
-      event.preventDefault();
-      if (!supabase) {
-        return;
-      }
-      setAuthBusy(true);
-      setAuthMessage(null);
-      const credentials = { email: authEmail.trim(), password: authPassword };
-      const { error: authError } =
-        authMode === 'sign-in'
-          ? await supabase.auth.signInWithPassword(credentials)
-          : await supabase.auth.signUp(credentials);
-
-      setAuthBusy(false);
-      if (authError) {
-        setAuthMessage(authError.message);
-        return;
-      }
-      setAuthPassword('');
-      setAuthMessage(authMode === 'sign-in' ? 'Sesion iniciada.' : 'Revisa tu correo.');
-    },
-    [authEmail, authMode, authPassword],
-  );
-
-  const handleSignOut = useCallback(async () => {
-    if (!supabase) {
-      return;
-    }
-    await supabase.auth.signOut();
-    setAuthMessage('Sesion cerrada.');
-  }, []);
-
   const updateRiskDraft = useCallback((field: keyof RiskProfile, value: number | string | boolean) => {
     setRiskDraft((current) => ({ ...current, [field]: value }));
   }, []);
 
   const saveRiskProfile = useCallback(async () => {
-    if (!accessToken) {
-      setRiskStatus('Inicia sesion para guardar.');
-      return;
-    }
     setRiskSaving(true);
     setRiskStatus(null);
     try {
       const payload = { ...riskDraft, scope_type: riskScopeType, scope_value: riskScopeValue };
-      const response = await axios.put<RiskProfileResponse>(`${API_BASE_URL}/risk-profile`, payload, requestConfig);
+      const response = await axios.put<RiskProfileResponse>(`${API_BASE_URL}/risk-profile`, payload);
       setRiskProfile(response.data);
       setRiskDraft(response.data.profile);
       setRiskStatus('Perfil guardado.');
@@ -487,7 +429,7 @@ function App() {
     } finally {
       setRiskSaving(false);
     }
-  }, [accessToken, requestConfig, riskDraft, riskScopeType, riskScopeValue]);
+  }, [riskDraft, riskScopeType, riskScopeValue]);
 
   useEffect(() => {
     let disposed = false;
@@ -521,41 +463,17 @@ function App() {
   }, [fetchData, selectedTicker]);
 
   useEffect(() => {
-    if (!supabase) {
-      return;
-    }
-
-    let disposed = false;
-    void supabase.auth.getSession().then(({ data }) => {
-      if (!disposed) {
-        setSession(data.session);
-      }
-    });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-    });
-
-    return () => {
-      disposed = true;
-      subscription.unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
     let disposed = false;
     queueMicrotask(() => {
       if (!disposed) {
-        void fetchRiskProfile(session, riskScopeType, riskScopeValue);
+        void fetchRiskProfile(riskScopeType, riskScopeValue);
       }
     });
 
     return () => {
       disposed = true;
     };
-  }, [fetchRiskProfile, riskScopeType, riskScopeValue, session]);
+  }, [fetchRiskProfile, riskScopeType, riskScopeValue]);
 
   const analysis = analysisResponse?.analysis ?? null;
 
@@ -592,21 +510,6 @@ function App() {
 
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-4 py-5 md:px-6 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
-          <AccountPanel
-            authBusy={authBusy}
-            authEmail={authEmail}
-            authMessage={authMessage}
-            authMode={authMode}
-            authPassword={authPassword}
-            configured={isSupabaseAuthConfigured}
-            onAuthModeChange={setAuthMode}
-            onEmailChange={setAuthEmail}
-            onPasswordChange={setAuthPassword}
-            onSignOut={handleSignOut}
-            onSubmit={handleAuthSubmit}
-            session={session}
-          />
-
           <SystemHealthPanel health={systemHealth} loading={healthLoading} onRefresh={fetchSystemHealth} />
           <OperationalAlertsPanel report={operationalAlerts} />
 
@@ -661,7 +564,6 @@ function App() {
             onSave={saveRiskProfile}
             onScopeChange={setRiskScopeType}
             saving={riskSaving}
-            session={session}
             scopeType={riskScopeType}
             scopeValue={riskScopeValue}
             source={riskProfile?.source ?? 'default'}
@@ -715,119 +617,6 @@ function App() {
   );
 }
 
-function AccountPanel({
-  authBusy,
-  authEmail,
-  authMessage,
-  authMode,
-  authPassword,
-  configured,
-  onAuthModeChange,
-  onEmailChange,
-  onPasswordChange,
-  onSignOut,
-  onSubmit,
-  session,
-}: {
-  authBusy: boolean;
-  authEmail: string;
-  authMessage: string | null;
-  authMode: 'sign-in' | 'sign-up';
-  authPassword: string;
-  configured: boolean;
-  onAuthModeChange: (mode: 'sign-in' | 'sign-up') => void;
-  onEmailChange: (value: string) => void;
-  onPasswordChange: (value: string) => void;
-  onSignOut: () => void;
-  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
-  session: Session | null;
-}) {
-  return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <UserCircle aria-hidden="true" className="h-4 w-4 text-emerald-300" />
-        <h2 className="text-sm font-medium text-zinc-100">Cuenta</h2>
-      </div>
-
-      {!configured ? (
-        <div className="rounded-lg border border-amber-300/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-100">
-          Auth pendiente en VITE_SUPABASE_*.
-        </div>
-      ) : session ? (
-        <div className="space-y-3">
-          <p className="truncate text-sm text-zinc-300">{session.user.email ?? 'Sesion activa'}</p>
-          <button
-            type="button"
-            onClick={onSignOut}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 text-sm text-zinc-100 transition hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-emerald-300/40"
-          >
-            <LogOut aria-hidden="true" className="h-4 w-4" />
-            Salir
-          </button>
-        </div>
-      ) : (
-        <form className="space-y-3" onSubmit={onSubmit}>
-          <div className="grid grid-cols-2 gap-2 rounded-lg bg-black/20 p-1">
-            <button
-              type="button"
-              onClick={() => onAuthModeChange('sign-in')}
-              className={`h-8 rounded-md text-sm transition ${
-                authMode === 'sign-in' ? 'bg-emerald-300/15 text-emerald-100' : 'text-zinc-400 hover:text-zinc-100'
-              }`}
-            >
-              Entrar
-            </button>
-            <button
-              type="button"
-              onClick={() => onAuthModeChange('sign-up')}
-              className={`h-8 rounded-md text-sm transition ${
-                authMode === 'sign-up' ? 'bg-emerald-300/15 text-emerald-100' : 'text-zinc-400 hover:text-zinc-100'
-              }`}
-            >
-              Crear
-            </button>
-          </div>
-
-          <label className="block text-xs text-zinc-500">
-            Email
-            <input
-              type="email"
-              value={authEmail}
-              onChange={(event) => onEmailChange(event.target.value)}
-              className="mt-1 h-9 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/40"
-              autoComplete="email"
-              required
-            />
-          </label>
-          <label className="block text-xs text-zinc-500">
-            Password
-            <input
-              type="password"
-              value={authPassword}
-              onChange={(event) => onPasswordChange(event.target.value)}
-              className="mt-1 h-9 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-300/40"
-              autoComplete={authMode === 'sign-in' ? 'current-password' : 'new-password'}
-              minLength={6}
-              required
-            />
-          </label>
-
-          <button
-            type="submit"
-            disabled={authBusy}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg bg-emerald-300 px-3 text-sm font-medium text-zinc-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <LogIn aria-hidden="true" className="h-4 w-4" />
-            {authBusy ? 'Procesando' : authMode === 'sign-in' ? 'Entrar' : 'Crear cuenta'}
-          </button>
-        </form>
-      )}
-
-      {authMessage && <p className="mt-3 text-sm text-zinc-400">{authMessage}</p>}
-    </section>
-  );
-}
-
 function SystemHealthPanel({
   health,
   loading,
@@ -866,7 +655,7 @@ function SystemHealthPanel({
       <div className="space-y-2 text-sm">
         <InfoRow label="Estado" value={isOk ? 'Listo' : status === 'unknown' ? 'Sin lectura' : 'Revisar'} />
         <InfoRow label="Entorno" value={health?.environment ?? 'N/D'} />
-        <InfoRow label="Supabase" value={health?.checks.supabase?.status ?? 'N/D'} />
+        <InfoRow label="Base de datos" value={health?.checks.database?.status ?? 'N/D'} />
         <InfoRow label="Schema" value={health?.checks.schema?.status ?? 'N/D'} />
       </div>
       {missing.length > 0 ? <p className="mt-3 text-xs text-amber-200">Faltan: {missing.join(', ')}</p> : null}
@@ -975,7 +764,6 @@ function RiskProfilePanel({
   onSave,
   onScopeChange,
   saving,
-  session,
   scopeType,
   scopeValue,
   source,
@@ -987,7 +775,6 @@ function RiskProfilePanel({
   onSave: () => void;
   onScopeChange: (scopeType: RiskProfileScopeType) => void;
   saving: boolean;
-  session: Session | null;
   scopeType: RiskProfileScopeType;
   scopeValue: string;
   source: string;
@@ -1056,7 +843,7 @@ function RiskProfilePanel({
         <button
           type="button"
           onClick={onSave}
-          disabled={!session || saving}
+          disabled={saving}
           className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-medium text-sky-100 transition hover:bg-sky-300/15 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Save aria-hidden="true" className="h-4 w-4" />
@@ -1200,7 +987,7 @@ function RiskAdjustmentNotice({
   const title = adjusted ? `Modelo ${baseSignal} -> decision ${finalSignal}` : `Decision con perfil ${profileName ?? 'default'}`;
   const detail = adjusted
     ? 'La accion final fue ajustada por las reglas de riesgo antes de mostrarse como recomendacion operativa.'
-    : 'La recomendacion usa los limites del perfil autenticado para tamano, stop, objetivo y bloqueos.';
+    : 'La recomendacion usa los limites del perfil configurado para tamano, stop, objetivo y bloqueos.';
 
   return (
     <div className="mt-4 rounded-lg border border-sky-300/20 bg-sky-300/10 p-3">
