@@ -73,6 +73,14 @@ def run_latest_inference_job(
 
             model = joblib.load(artifact_path)
             feature_columns = feature_columns_for_set(model_run["feature_set"])
+
+            # Read the previously stored prediction for this ticker/model
+            # BEFORE generate_latest_prediction upserts the new one, otherwise
+            # this read would return the row we are about to write (Req:
+            # Signal Alerts Fire Only on Action Transition).
+            asset_id = repository.get_asset_id(ticker)
+            previous = repository.get_latest_prediction(asset_id, model_name=model_run["model_name"])
+
             prediction = generate_latest_prediction(
                 repository=repository,
                 ticker=ticker,
@@ -93,6 +101,7 @@ def run_latest_inference_job(
                     "ticker": ticker,
                     "predictions_loaded": prediction["predictions_loaded"],
                     "latest_prediction": prediction["predictions"][0] if prediction["predictions"] else None,
+                    "previous_action": previous.get("predicted_action") if previous else None,
                 }
             )
         except Exception as error:

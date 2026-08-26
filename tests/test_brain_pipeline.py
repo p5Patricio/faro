@@ -581,6 +581,22 @@ def test_load_promoted_model_runs_filters_unpromoted_runs() -> None:
     assert min_confidence_for_model_run(promoted) == 0.65
 
 
+class FakeInferenceRepository:
+    """Minimal repository stub for `run_latest_inference_job`'s previous-action
+    read (Req: Signal Alerts Fire Only on Action Transition)."""
+
+    def __init__(self, previous_predictions: dict[str, dict | None] | None = None) -> None:
+        self.previous_predictions = previous_predictions or {}
+        self.get_latest_prediction_calls: list[tuple] = []
+
+    def get_asset_id(self, ticker: str) -> str:
+        return f"asset-{ticker}"
+
+    def get_latest_prediction(self, asset_id, model_name=None, model_version=None):
+        self.get_latest_prediction_calls.append((asset_id, model_name, model_version))
+        return self.previous_predictions.get(asset_id)
+
+
 def test_run_latest_inference_job_records_success_and_errors(monkeypatch, tmp_path) -> None:
     good_artifact = tmp_path / "good.joblib"
     good_artifact.write_text("placeholder", encoding="utf-8")
@@ -613,14 +629,47 @@ def test_run_latest_inference_job_records_success_and_errors(monkeypatch, tmp_pa
 
     monkeypatch.setattr("brain.inference_job.generate_latest_prediction", fake_generate_latest_prediction)
 
-    result = run_latest_inference_job(object(), model_runs)
+    repository = FakeInferenceRepository(previous_predictions={"asset-BTC-USD": {"predicted_action": "HOLD"}})
+    result = run_latest_inference_job(repository, model_runs)
 
     assert result["attempted"] == 2
     assert result["succeeded"] == 1
     assert result["failed"] == 1
     assert result["results"][0]["ticker"] == "BTC-USD"
     assert result["results"][0]["latest_prediction"]["confidence"] == 0.65
+    assert result["results"][0]["previous_action"] == "HOLD"
     assert "artifact_not_found" in result["errors"][0]["error"]
+    assert repository.get_latest_prediction_calls == [("asset-BTC-USD", "extra_trees", None)]
+
+
+def test_run_latest_inference_job_first_ever_prediction_has_no_previous_action(monkeypatch, tmp_path) -> None:
+    good_artifact = tmp_path / "good.joblib"
+    good_artifact.write_text("placeholder", encoding="utf-8")
+    model_runs = [
+        {
+            "id": "run-1",
+            "model_name": "extra_trees",
+            "model_version": "v1",
+            "feature_set": "technical_v2",
+            "artifact_uri": str(good_artifact),
+            "params": {"source": "candidate_matrix_promotion", "target_ticker": "BTC-USD", "min_confidence": 0.65},
+        },
+    ]
+
+    monkeypatch.setattr("brain.inference_job.joblib.load", lambda path: object())
+
+    def fake_generate_latest_prediction(**kwargs):
+        return {
+            "predictions_loaded": 1,
+            "predictions": [{"action": "BUY", "confidence": kwargs["min_confidence"]}],
+        }
+
+    monkeypatch.setattr("brain.inference_job.generate_latest_prediction", fake_generate_latest_prediction)
+
+    repository = FakeInferenceRepository(previous_predictions={})
+    result = run_latest_inference_job(repository, model_runs)
+
+    assert result["results"][0]["previous_action"] is None
 
 
 def test_select_candidate_uses_top_promotable_rank() -> None:
