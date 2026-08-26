@@ -60,11 +60,19 @@ detection until that lands.
 
 ## Phase 3: Notification Rules & Policy (Req: Four-Trigger Rule Catalog Ships Active; Signal Alerts Fire Only on Action Transition; Per-Rule Cooldown Suppression; Deterministic Dedupe Prevents Duplicate Delivery; Degradation Thresholds Share One Default Source)
 
-- [ ] 3.1 Create `ops/notification_rules.py` (stdlib only): `DEFAULT_MAX_PRICE_AGE_HOURS=72.0`, `DEFAULT_MIN_FEEDBACK_SAMPLES=20`, `DEFAULT_MIN_ACCURACY=0.45`, `DEFAULT_MIN_MEAN_OUTCOME_RETURN=0.0`, `SEEDED_RULE_PARAMS`.
-- [ ] 3.2 Implement the 4 `dedupe_key` recipes from design §4 (`job_failure`, `signal_transition`, `model_degradation`, `stale_prices`) — `|`-joined, UTC dates, ticker uppercased, `rule_type` lowercased.
-- [ ] 3.3 Implement the 4 pure evaluator functions (no I/O): job-failure-from-report, signal-transition (compare `previous_action`/`predicted_action`, `None` fires only BUY/SELL), model-degradation (below `min_accuracy` → `low_accuracy`; below `min_mean_outcome_return` → `negative_edge`; below `min_feedback_samples` → no event), staleness (bucket on last observed price date, `none` when zero prices).
-- [ ] 3.4 `tests/test_notification_rules.py`: parametrized dedupe-key recipe tests; staleness key unchanged when `now` advances a week, changes only when `last_price_date` changes; HOLD→HOLD → no event, BUY→SELL → one, `previous_action=None`+HOLD → none, +BUY → one; degradation below `min_accuracy` → `low_accuracy`; `evaluated < min_feedback_samples` → none.
-- [ ] 3.5 Drift test: `json.loads` every `'{...}'::jsonb` literal parsed in order out of `db/migrations/0007_notifications.sql`, assert equality with `SEEDED_RULE_PARAMS`.
+- [x] 3.1 Create `ops/notification_rules.py` (stdlib only): `DEFAULT_MAX_PRICE_AGE_HOURS=72.0`, `DEFAULT_MIN_FEEDBACK_SAMPLES=20`, `DEFAULT_MIN_ACCURACY=0.45`, `DEFAULT_MIN_MEAN_OUTCOME_RETURN=0.0`, `SEEDED_RULE_PARAMS`.
+- [x] 3.2 Implement the 4 `dedupe_key` recipes from design §4 (`job_failure`, `signal_transition`, `model_degradation`, `stale_data`) — `|`-joined, UTC dates, ticker uppercased, `rule_type` lowercased.
+- [x] 3.3 Implement the 4 pure evaluator functions (no I/O): job-failure-from-report, signal-transition (compare `previous_action`/`predicted_action`, `None` fires only BUY/SELL), model-degradation (below `min_accuracy` → `low_accuracy`; below `min_mean_outcome_return` → `negative_edge`; below `min_feedback_samples` → no event), staleness (bucket on last observed price date, `none` when zero prices).
+- [x] 3.4 `tests/test_notification_rules.py`: parametrized dedupe-key recipe tests; staleness key unchanged when `now` advances a week, changes only when `last_price_date` changes; HOLD→HOLD → no event, BUY→SELL → one, `previous_action=None`+HOLD → none, +BUY → one; degradation below `min_accuracy` → `low_accuracy`; `evaluated < min_feedback_samples` → none.
+- [x] 3.5 Drift test: `json.loads` every `'{...}'::jsonb` literal parsed in order out of `db/migrations/0007_notifications.sql`, assert equality with `SEEDED_RULE_PARAMS`.
+
+> **Naming deviation from design.md** (flagged for sdd-verify): design.md's SQL/prose used
+> `signal_action_change`/`stale_prices` as `rule_type` values, but `specs/operational-notifications/spec.md`'s
+> Four-Trigger Rule Catalog requirement (and this batch's dispatch instructions) name them
+> `signal_transition`/`stale_data`. Implemented using the spec-aligned names throughout
+> (migration seed, repository, `ops/notification_rules.py`, tests) since the spec is the
+> acceptance-criteria source of truth. Phases 4+ (not in this batch) must use these same
+> names when wiring `brain/inference_job.py` and the dispatcher, not design.md's.
 
 ## Phase 4: Signal-Transition Emission (Req: Signal Alerts Fire Only on Action Transition)
 
