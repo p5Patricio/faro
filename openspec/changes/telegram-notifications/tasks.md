@@ -76,31 +76,31 @@ detection until that lands.
 
 ## Phase 4: Signal-Transition Emission (Req: Signal Alerts Fire Only on Action Transition)
 
-- [ ] 4.1 `brain/inference_job.py`, inside `run_latest_inference_job`, immediately before the `generate_latest_prediction` call (~line 76): resolve `asset_id = repository.get_asset_id(ticker)`, call `previous = repository.get_latest_prediction(asset_id, model_name=model_run["model_name"])`.
-- [ ] 4.2 Add `"previous_action": previous.get("predicted_action") if previous else None` to the `results.append({...})` entry (~line 90).
-- [ ] 4.3 `tests/test_brain_pipeline.py`: extend `test_run_latest_inference_job_records_success_and_errors` (or add a sibling test) asserting `previous_action` is present and reflects the prior stored prediction; a first-ever prediction yields `previous_action=None`.
+- [x] 4.1 `brain/inference_job.py`, inside `run_latest_inference_job`, immediately before the `generate_latest_prediction` call (~line 76): resolve `asset_id = repository.get_asset_id(ticker)`, call `previous = repository.get_latest_prediction(asset_id, model_name=model_run["model_name"])`.
+- [x] 4.2 Add `"previous_action": previous.get("predicted_action") if previous else None` to the `results.append({...})` entry (~line 90).
+- [x] 4.3 `tests/test_brain_pipeline.py`: extend `test_run_latest_inference_job_records_success_and_errors` (or add a sibling test) asserting `previous_action` is present and reflects the prior stored prediction; a first-ever prediction yields `previous_action=None`.
 
 ## Phase 5: Dashboard Threshold Binding (Req: Degradation Thresholds Share One Default Source)
 
-- [ ] 5.1 `api/main.py`, `get_operational_alerts`: replace the 4 literal `Query(default=...)` values (`max_price_age_hours`, `min_feedback_samples`, `min_accuracy`, `min_mean_outcome_return`) with references to the matching `ops.notification_rules` constants.
-- [ ] 5.2 `tests/test_api.py`: assert the endpoint's effective defaults equal `ops.notification_rules`'s constants (compile-time reference, no drift possible).
+- [x] 5.1 `api/main.py`, `get_operational_alerts`: replace the 4 literal `Query(default=...)` values (`max_price_age_hours`, `min_feedback_samples`, `min_accuracy`, `min_mean_outcome_return`) with references to the matching `ops.notification_rules` constants.
+- [x] 5.2 `tests/test_api.py`: assert the endpoint's effective defaults equal `ops.notification_rules`'s constants (compile-time reference, no drift possible).
 
 ## Phase 6a: Dispatch Orchestration (Req: P0 Alerts Deliver Immediately; Per-Rule Cooldown Suppression; Deterministic Dedupe Prevents Duplicate Delivery; Every Delivery Attempt Is Logged; Best-Effort Delivery Never Fails the Calling Job)
 
-- [ ] 6a.1 Create `ops/notification_dispatch.py`: iterate `repository.get_active_notification_rules(channel="telegram")`, evaluate each rule via `ops.notification_rules`, dedupe-first (`notification_already_sent`) then cooldown (`get_last_notification_fired_at` vs `cooldown_minutes`), send via `send_telegram_message`, log via `insert_notification` with `status="sent"|"failed"` and a redacted `error_reason`; suppressed-by-cooldown events are reported in the return value only, never inserted.
-- [ ] 6a.2 Wire the `stale_prices` evaluator to `repository.get_latest_price_timestamps()`, fanning a global rule (`asset_id IS NULL`) out to every asset.
-- [ ] 6a.3 Wire the `model_degradation` evaluator to `repository.get_prediction_feedback(only_evaluated=True)` grouped by `model_name`, calling `brain.feedback.analyze_prediction_feedback` per group.
-- [ ] 6a.4 Wire the `signal_transition` evaluator to the loaded `reports/inference_job.json` results (via the shared `load_reports` from Phase 6b once it exists — stub the report input for this unit's own tests).
-- [ ] 6a.5 `tests/test_notification_dispatch.py`: two `model_degradation` events with different `scope_key` do not suppress each other; a global and a scoped rule of the same `rule_type` do not suppress each other; cooldown 0 (both P0 rules) always proceeds past the cooldown check; end-to-end — a forced `failed > 0`-shaped input produces exactly one `FakeSession.post` and one `sent` row, re-invocation produces zero posts and still one row.
+- [x] 6a.1 Create `ops/notification_dispatch.py`: iterate `repository.get_active_notification_rules(channel="telegram")`, evaluate each rule via `ops.notification_rules`, dedupe-first (`notification_already_sent`) then cooldown (`get_last_notification_fired_at` vs `cooldown_minutes`), send via `send_telegram_message`, log via `insert_notification` with `status="sent"|"failed"` and a redacted `error_reason`; suppressed-by-cooldown events are reported in the return value only, never inserted.
+- [x] 6a.2 Wire the `stale_data` evaluator to `repository.get_latest_price_timestamps()`, fanning a global rule (`asset_id IS NULL`) out to every asset.
+- [x] 6a.3 Wire the `model_degradation` evaluator to `repository.get_prediction_feedback(only_evaluated=True)` grouped by `model_name`, calling `brain.feedback.analyze_prediction_feedback` per group.
+- [x] 6a.4 Wire the `signal_transition` evaluator to the loaded `reports/inference_job.json` results (via the shared `load_reports` from Phase 6b once it exists — stub the report input for this unit's own tests).
+- [x] 6a.5 `tests/test_notification_dispatch.py`: two `model_degradation` events with different `scope_key` do not suppress each other; a global and a scoped rule of the same `rule_type` do not suppress each other; cooldown 0 (both P0 rules) always proceeds past the cooldown check; end-to-end — a forced `failed > 0`-shaped input produces exactly one `FakeSession.post` and one `sent` row, re-invocation produces zero posts and still one row.
 
 ## Phase 6b: Notifier Transport Refactor (Req: Missing Telegram Configuration Is a Silent No-Op; The Bot Token Is Redacted From Every Surface; Best-Effort Delivery Never Fails the Calling Job)
 
-- [ ] 6b.1 **RED**: write a failing test asserting that with `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` set, the JSON body posted to the generic webhook contains neither the token nor the chat id (threat matrix: third-party payload egress).
-- [ ] 6b.2 Extract `load_reports(dir) -> dict[name, raw]` out of the existing inline glob in `ops/notify_operational_job.py`, shared with `ops/notification_dispatch.py`.
-- [ ] 6b.3 Add `send_telegram_notification(payload, config, *, session, sleep)` (renders via `render_operational_message`, delegates to `send_telegram_message`) and `dispatch_notification(payload, *, webhook_url, telegram_config, session, sleep)` (calls each transport independently, one failing transport never suppresses the other).
-- [ ] 6b.4 Wire `main()` to also invoke `ops.notification_dispatch`'s rule engine (DB connection inside a `try`; on failure record `{"dispatched": False, "reason": "database_unavailable"}` without blocking the webhook/Telegram summary path); result shape becomes `{"notification": {"webhook": {...}, "telegram": {...}, "rules": {...}}, "payload": ...}`.
-- [ ] 6b.5 Add `--no-telegram` and `--no-rule-notifications` CLI flags. No `--telegram-bot-token` flag — config comes only from `TelegramConfig.from_env()`.
-- [ ] 6b.6 `tests/test_operational_notifications.py`: confirm the 3 existing tests pass verbatim (proof the refactor is additive); both transports unconfigured → two no-ops, nothing raised; webhook `post` raising → Telegram still attempted; confirm the credential-boundary RED test from 6b.1 now passes.
+- [x] 6b.1 **RED**: write a failing test asserting that with `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` set, the JSON body posted to the generic webhook contains neither the token nor the chat id (threat matrix: third-party payload egress).
+- [x] 6b.2 Extract `load_reports(dir) -> dict[name, raw]` out of the existing inline glob in `ops/notify_operational_job.py`, shared with `ops/notification_dispatch.py`.
+- [x] 6b.3 Add `send_telegram_notification(payload, config, *, session, sleep)` (renders via `render_operational_message`, delegates to `send_telegram_message`) and `dispatch_notification(payload, *, webhook_url, telegram_config, session, sleep)` (calls each transport independently, one failing transport never suppresses the other).
+- [x] 6b.4 Wire `main()` to also invoke `ops.notification_dispatch`'s rule engine (DB connection inside a `try`; on failure record `{"dispatched": False, "reason": "database_unavailable"}` without blocking the webhook/Telegram summary path); result shape becomes `{"notification": {"webhook": {...}, "telegram": {...}, "rules": {...}}, "payload": ...}`.
+- [x] 6b.5 Add `--no-telegram` and `--no-rule-notifications` CLI flags. No `--telegram-bot-token` flag — config comes only from `TelegramConfig.from_env()`.
+- [x] 6b.6 `tests/test_operational_notifications.py`: confirm the 3 existing tests pass verbatim (proof the refactor is additive); both transports unconfigured → two no-ops, nothing raised; webhook `post` raising → Telegram still attempted; confirm the credential-boundary RED test from 6b.1 now passes.
 
 ## Phase 7: Scheduler Integration — BLOCKED (Req: P0 Alerts Deliver Immediately)
 
