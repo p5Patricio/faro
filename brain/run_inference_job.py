@@ -4,9 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.inference_job import load_promoted_model_runs, run_latest_inference_job
 from brain.risk import RiskPolicy
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,30 +33,31 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    model_runs, skipped = load_promoted_model_runs(
-        repository,
-        model_name=args.model_name,
-        model_version=args.model_version,
-        limit=args.limit,
-        include_unpromoted=args.include_unpromoted,
-    )
-    payload = run_latest_inference_job(
-        repository=repository,
-        model_runs=model_runs,
-        latest_feature_limit=args.latest_feature_limit,
-        min_confidence=args.min_confidence,
-        risk_policy=RiskPolicy(
-            max_position_size=args.max_position_size,
-            min_confidence_to_trade=args.min_confidence_to_trade,
-            max_expected_risk=args.max_expected_risk,
-            stop_loss=args.stop_loss,
-            take_profit=args.take_profit,
-            allow_short=not args.no_short,
-        ),
-        batch_size=args.batch_size,
-        continue_on_error=not args.fail_fast,
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        model_runs, skipped = load_promoted_model_runs(
+            repository,
+            model_name=args.model_name,
+            model_version=args.model_version,
+            limit=args.limit,
+            include_unpromoted=args.include_unpromoted,
+        )
+        payload = run_latest_inference_job(
+            repository=repository,
+            model_runs=model_runs,
+            latest_feature_limit=args.latest_feature_limit,
+            min_confidence=args.min_confidence,
+            risk_policy=RiskPolicy(
+                max_position_size=args.max_position_size,
+                min_confidence_to_trade=args.min_confidence_to_trade,
+                max_expected_risk=args.max_expected_risk,
+                stop_loss=args.stop_loss,
+                take_profit=args.take_profit,
+                allow_short=not args.no_short,
+            ),
+            batch_size=args.batch_size,
+            continue_on_error=not args.fail_fast,
+        )
     payload = {
         **payload,
         "selected_model_runs": len(model_runs),

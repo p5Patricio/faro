@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.promotion import (
     default_promotion_version,
     load_candidate_report,
@@ -11,7 +13,7 @@ from brain.promotion import (
     select_candidate,
 )
 from brain.risk import RiskPolicy
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,28 +52,29 @@ def main() -> None:
     artifact_uri = args.model_out or (
         f"models/{ticker}_{candidate['model_name']}_{report['feature_set']}_{candidate['scope']}_{args.model_version}.joblib"
     )
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    result = promote_candidate_from_report(
-        repository=repository,
-        report=report,
-        candidate=candidate,
-        model_version=args.model_version,
-        artifact_uri=artifact_uri,
-        limit=args.limit,
-        min_rows=args.min_rows,
-        persist=True,
-        generate_prediction=not args.skip_prediction,
-        latest_feature_limit=args.latest_feature_limit,
-        risk_policy=RiskPolicy(
-            max_position_size=args.max_position_size,
-            min_confidence_to_trade=args.min_confidence_to_trade,
-            max_expected_risk=args.max_expected_risk,
-            stop_loss=args.stop_loss,
-            take_profit=args.take_profit,
-            allow_short=not args.no_short,
-        ),
-        prediction_batch_size=args.prediction_batch_size,
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        result = promote_candidate_from_report(
+            repository=repository,
+            report=report,
+            candidate=candidate,
+            model_version=args.model_version,
+            artifact_uri=artifact_uri,
+            limit=args.limit,
+            min_rows=args.min_rows,
+            persist=True,
+            generate_prediction=not args.skip_prediction,
+            latest_feature_limit=args.latest_feature_limit,
+            risk_policy=RiskPolicy(
+                max_position_size=args.max_position_size,
+                min_confidence_to_trade=args.min_confidence_to_trade,
+                max_expected_risk=args.max_expected_risk,
+                stop_loss=args.stop_loss,
+                take_profit=args.take_profit,
+                allow_short=not args.no_short,
+            ),
+            prediction_batch_size=args.prediction_batch_size,
+        )
     payload = {
         "candidate": result.candidate,
         "model_run_id": result.model_run_id,

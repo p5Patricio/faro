@@ -6,11 +6,11 @@ from typing import Any
 import pandas as pd
 
 from brain.paper_trading import PaperTradingConfig, run_paper_trading
-from collector.supabase_repository import SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 def run_paper_trading_job(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     tickers: list[str] | None = None,
     model_name: str | None = None,
     model_version: str | None = None,
@@ -98,7 +98,7 @@ def run_paper_trading_job(
     }
 
 
-def _selected_assets(repository: SupabaseRepository, tickers: list[str] | None) -> list[dict[str, Any]]:
+def _selected_assets(repository: LocalPostgresRepository, tickers: list[str] | None) -> list[dict[str, Any]]:
     assets = repository.get_assets()
     if not tickers:
         return assets

@@ -1,27 +1,45 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from math import cos, sin
-from typing import Annotated
 
 import pandas as pd
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
-from requests import RequestException
 
 from app_config import AppConfig
 from brain.feedback import analyze_prediction_feedback
 from brain.logic import generate_signals
 from brain.paper_trading import PaperTradingConfig, run_paper_trading
 from brain.risk import RiskPolicy, apply_risk_policy
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.schema_check import check_relations
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
 
 
 APP_CONFIG = AppConfig.from_env()
 
-app = FastAPI(title="Plataforma IA Inversiones API", version="0.2.0")
+_POOL: ConnectionPool | None = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    global _POOL
+    try:
+        dsn = LocalPostgresConfig.from_env().dsn
+        _POOL = ConnectionPool(conninfo=dsn, configure=LocalPostgresRepository._configure, open=False)
+        _POOL.open()
+    except RuntimeError:
+        _POOL = None
+    yield
+    if _POOL is not None:
+        _POOL.close()
+
+
+app = FastAPI(title="Plataforma IA Inversiones API", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,38 +61,14 @@ class RiskProfilePayload(BaseModel):
     take_profit: float = Field(default=0.04, ge=0, le=5)
     allow_short: bool = True
 
-def get_repository() -> SupabaseRepository | None:
-    try:
-        return SupabaseRepository(SupabaseConfig.from_env())
-    except RuntimeError:
+def get_repository() -> LocalPostgresRepository | None:
+    if _POOL is None:
         return None
+    return LocalPostgresRepository(pool=_POOL)
 
 
 def get_app_config() -> AppConfig:
     return APP_CONFIG
-
-
-def get_access_token(authorization: Annotated[str | None, Header()] = None) -> str | None:
-    if not authorization:
-        return None
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token:
-        raise HTTPException(status_code=401, detail="Authorization Bearer token requerido")
-    return token
-
-
-def get_optional_user_id(
-    access_token: str | None = Depends(get_access_token),
-    repository: SupabaseRepository | None = Depends(get_repository),
-) -> str | None:
-    if access_token is None:
-        return None
-    if repository is None:
-        raise HTTPException(status_code=503, detail="Supabase no disponible para autenticar usuario")
-    try:
-        return repository.get_auth_user(access_token)["id"]
-    except (RuntimeError, RequestException):
-        raise HTTPException(status_code=401, detail="Token de usuario invalido") from None
 
 
 @app.get("/")
@@ -85,12 +79,12 @@ def read_root():
 @app.get("/api/health")
 def get_health(
     include_schema: bool = Query(default=True),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     checks = {
         "api": {"status": "ok"},
-        "supabase": {"status": "ok" if repository is not None else "unavailable"},
+        "database": {"status": "ok" if repository is not None else "unavailable"},
     }
     status = "ok" if repository is not None else "degraded"
 
@@ -105,7 +99,7 @@ def get_health(
         if missing:
             status = "degraded"
     elif include_schema:
-        checks["schema"] = {"status": "skipped", "reason": "supabase_unavailable"}
+        checks["schema"] = {"status": "skipped", "reason": "database_unavailable"}
 
     return {
         "status": status,
@@ -118,7 +112,7 @@ def get_health(
 
 @app.get("/api/assets")
 def get_assets(
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -127,7 +121,7 @@ def get_assets(
 
     try:
         return repository.get_assets()
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_fallback(config)
         return demo_assets()
 
@@ -136,7 +130,7 @@ def get_assets(
 def get_prices(
     ticker: str,
     limit: int = 100,
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -150,7 +144,7 @@ def get_prices(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     return demo_prices(ticker, limit=limit)
@@ -161,8 +155,7 @@ def analyze_ticker(
     ticker: str,
     model_name: str | None = Query(default=None),
     model_version: str | None = Query(default=None),
-    user_id: str | None = Depends(get_optional_user_id),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -184,13 +177,11 @@ def analyze_ticker(
                 model_name=model_name,
                 model_version=model_version,
             )
-        except (RuntimeError, RequestException):
+        except RuntimeError:
             prediction = None
 
         if prediction:
-            profile = get_user_risk_profile(
-                repository,
-                user_id,
+            profile = repository.get_risk_profile_for_asset(
                 ticker=asset.get("ticker") or ticker,
                 asset_class=asset.get("asset_class"),
             )
@@ -216,7 +207,7 @@ def analyze_ticker(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     prices = demo_prices(ticker, limit=100)
@@ -235,7 +226,7 @@ def get_prediction_history(
     model_name: str | None = Query(default=None),
     model_version: str | None = Query(default=None),
     only_evaluated: bool = Query(default=False),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -256,7 +247,7 @@ def get_prediction_history(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     return []
@@ -268,7 +259,7 @@ def get_feedback_summary(
     limit: int = Query(default=250, ge=1, le=1000),
     model_name: str | None = Query(default=None),
     model_version: str | None = Query(default=None),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -289,7 +280,7 @@ def get_feedback_summary(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     return format_feedback_report(analyze_prediction_feedback(pd.DataFrame()))
@@ -302,7 +293,7 @@ def get_operational_alerts(
     min_feedback_samples: int = Query(default=20, ge=1, le=1000),
     min_accuracy: float = Query(default=0.45, ge=0, le=1),
     min_mean_outcome_return: float = Query(default=0.0, ge=-1, le=1),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -344,7 +335,7 @@ def get_operational_alerts(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     return format_operational_alerts(ticker, [])
@@ -354,7 +345,7 @@ def get_operational_alerts(
 def get_backtest_history(
     ticker: str,
     limit: int = Query(default=10, ge=1, le=50),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -368,7 +359,7 @@ def get_backtest_history(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     return []
@@ -386,7 +377,7 @@ def get_paper_trading(
     slippage_bps: float = Query(default=5.0, ge=0),
     allow_short: bool = Query(default=True),
     persist: bool = Query(default=False),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -446,13 +437,13 @@ def get_paper_trading(
                         "allow_short": allow_short,
                     },
                 )
-            except (RuntimeError, RequestException):
+            except RuntimeError:
                 raise HTTPException(status_code=503, detail="No se pudo guardar la simulacion de paper trading") from None
         return format_paper_trading_response(ticker, result, persisted_run_id=persisted_run_id)
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     result = run_paper_trading(
@@ -474,7 +465,7 @@ def get_paper_trading_runs(
     ticker: str,
     limit: int = Query(default=10, ge=1, le=100),
     model_run_id: str | None = Query(default=None),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
     if repository is None:
@@ -493,7 +484,7 @@ def get_paper_trading_runs(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         require_demo_ticker(ticker, config)
 
     return []
@@ -503,33 +494,26 @@ def get_paper_trading_runs(
 def get_risk_profile(
     scope_type: str = Query(default="default"),
     scope_value: str | None = Query(default=None),
-    user_id: str | None = Depends(get_optional_user_id),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     scope_type, scope_value = normalize_risk_profile_scope(scope_type, scope_value)
-    if user_id is None or repository is None:
+    if repository is None:
         return format_risk_profile(None, source="default")
 
     try:
-        profile = repository.get_scoped_user_risk_profile(user_id, scope_type, scope_value)
-    except (RuntimeError, RequestException):
-        try:
-            profile = repository.get_default_user_risk_profile(user_id) if scope_type == "default" else None
-        except (RuntimeError, RequestException):
-            profile = None
+        profile = repository.get_scoped_risk_profile(scope_type, scope_value)
+    except RuntimeError:
+        profile = None
     return format_risk_profile(profile, source="user" if profile else "default")
 
 
 @app.put("/api/risk-profile")
 def update_risk_profile(
     payload: RiskProfilePayload,
-    user_id: str | None = Depends(get_optional_user_id),
-    repository: SupabaseRepository | None = Depends(get_repository),
+    repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Autenticacion requerida")
     if repository is None:
-        raise HTTPException(status_code=503, detail="Supabase no disponible para guardar perfil de riesgo")
+        raise HTTPException(status_code=503, detail="Base de datos no disponible para guardar perfil de riesgo")
 
     profile_payload = payload.model_dump()
     scope_type, scope_value = normalize_risk_profile_scope(
@@ -537,13 +521,12 @@ def update_risk_profile(
         profile_payload.pop("scope_value", None),
     )
     try:
-        profile = repository.upsert_user_risk_profile(
-            user_id,
+        profile = repository.upsert_risk_profile(
             profile_payload,
             scope_type=scope_type,
             scope_value=scope_value,
         )
-    except (RuntimeError, RequestException):
+    except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el perfil de riesgo") from None
     return format_risk_profile(profile, source="user")
 
@@ -613,23 +596,6 @@ def normalize_risk_profile_scope(scope_type: str, scope_value: str | None) -> tu
     else:
         normalized_value = normalized_value.lower()
     return normalized_type, normalized_value
-
-
-def get_user_risk_profile(
-    repository: SupabaseRepository | None,
-    user_id: str | None,
-    ticker: str | None = None,
-    asset_class: str | None = None,
-) -> dict | None:
-    if repository is None or user_id is None:
-        return None
-    try:
-        return repository.get_user_risk_profile_for_asset(user_id, ticker=ticker, asset_class=asset_class)
-    except (RuntimeError, RequestException):
-        try:
-            return repository.get_default_user_risk_profile(user_id)
-        except (RuntimeError, RequestException):
-            return None
 
 
 def apply_user_risk_profile_to_prediction(prediction: dict, profile: dict) -> dict:
@@ -907,7 +873,7 @@ def alert_status(alerts: list[dict]) -> str:
 
 
 def persist_paper_trading_run(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     ticker: str,
     asset_id: str,
     predictions: pd.DataFrame,

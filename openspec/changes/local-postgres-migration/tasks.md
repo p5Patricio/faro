@@ -78,18 +78,18 @@ earlier units (low re-review cost despite high line count).
 
 ## Phase 5: Collector/Brain Call-Site Swap (Req: Repository Contract Parity)
 
-- [ ] 5.1 Swap `collector.local_repository` import/constructor across `collector/` job modules.
-- [ ] 5.2 Swap in `brain/` job modules (config only — artifact calls stay untouched until Phase 8).
-- [ ] 5.3 Update `tests/test_collector_job.py` and `tests/test_brain_pipeline.py` imports/constructors (non-artifact assertions).
+- [x] 5.1 Swap `collector.local_repository` import/constructor across `collector/` job modules.
+- [x] 5.2 Swap in `brain/` job modules (config only — artifact calls stay untouched until Phase 8).
+- [x] 5.3 Update `tests/test_collector_job.py` and `tests/test_brain_pipeline.py` imports/constructors (non-artifact assertions).
 
 ## Phase 6: API Swap + Auth Removal (Req: Unauthenticated Risk-Profile Endpoints)
 
-- [ ] 6.1 `api/main.py`: swap import; create `_POOL` in `lifespan` with `FloatLoader` `configure=`; `get_repository()` uses pool, `None` on `RuntimeError` (degraded mode preserved).
-- [ ] 6.2 Delete `get_access_token`, `get_optional_user_id`, `get_user_risk_profile`; `except (RuntimeError, RequestException)` → `except RuntimeError` (~15 sites, safe per D3).
-- [ ] 6.3 `GET /api/risk-profile`: drop `user_id` dependency, call `get_scoped_risk_profile`.
-- [ ] 6.4 `PUT /api/risk-profile`: drop 401 path, call `upsert_risk_profile`; keep 503-when-unavailable and 422-on-invalid-`scope_type`.
-- [ ] 6.5 `/api/health`: rename `checks["supabase"]` → `checks["database"]`.
-- [ ] 6.6 `tests/test_api.py`: delete the 3 auth-required tests, rewrite the 3 scope tests without `Authorization` headers, rename `..._degraded_without_supabase` → `..._without_database`.
+- [x] 6.1 `api/main.py`: swap import; create `_POOL` in `lifespan` with `FloatLoader` `configure=`; `get_repository()` uses pool, `None` on `RuntimeError` (degraded mode preserved).
+- [x] 6.2 Delete `get_access_token`, `get_optional_user_id`, `get_user_risk_profile`; `except (RuntimeError, RequestException)` → `except RuntimeError` (~15 sites, safe per D3).
+- [x] 6.3 `GET /api/risk-profile`: drop `user_id` dependency, call `get_scoped_risk_profile`.
+- [x] 6.4 `PUT /api/risk-profile`: drop 401 path, call `upsert_risk_profile`; keep 503-when-unavailable and 422-on-invalid-`scope_type`.
+- [x] 6.5 `/api/health`: rename `checks["supabase"]` → `checks["database"]`.
+- [x] 6.6 `tests/test_api.py`: delete the 3 auth-required tests, rewrite the 3 scope tests without `Authorization` headers, rename `..._degraded_without_supabase` → `..._without_database`.
 
 ## Phase 7: Frontend Auth Removal (Req: Unauthenticated Risk-Profile Endpoints)
 

@@ -4,9 +4,11 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 
+import psycopg
+
 from brain.features import build_features, feature_columns_for_set
 from brain.labeling import fixed_horizon_labels, triple_barrier_labels
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 @dataclass(frozen=True)
@@ -36,8 +38,8 @@ class MaterializationResult:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Materialize ML features and labels from Supabase prices")
-    parser.add_argument("--ticker", required=True, help="Asset ticker stored in Supabase, e.g. AAPL")
+    parser = argparse.ArgumentParser(description="Materialize ML features and labels from local Postgres prices")
+    parser.add_argument("--ticker", required=True, help="Asset ticker stored locally, e.g. AAPL")
     parser.add_argument("--feature-set", default="technical_v1")
     parser.add_argument("--label-method", choices=["fixed_horizon", "triple_barrier"], default="triple_barrier")
     parser.add_argument("--horizon", type=int, default=5)
@@ -68,7 +70,7 @@ def build_labels(config: MaterializationConfig, prices):
 
 
 def materialize_asset_dataset(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     config: MaterializationConfig,
 ) -> MaterializationResult:
     asset_id = repository.get_asset_id(config.ticker)
@@ -107,22 +109,23 @@ def materialize_asset_dataset(
 
 def main() -> None:
     args = parse_args()
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    result = materialize_asset_dataset(
-        repository,
-        MaterializationConfig(
-            ticker=args.ticker,
-            feature_set=args.feature_set,
-            label_method=args.label_method,
-            horizon=args.horizon,
-            buy_threshold=args.buy_threshold,
-            sell_threshold=args.sell_threshold,
-            profit_take=args.profit_take,
-            stop_loss=args.stop_loss,
-            limit=args.limit,
-            batch_size=args.batch_size,
-        ),
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        result = materialize_asset_dataset(
+            repository,
+            MaterializationConfig(
+                ticker=args.ticker,
+                feature_set=args.feature_set,
+                label_method=args.label_method,
+                horizon=args.horizon,
+                buy_threshold=args.buy_threshold,
+                sell_threshold=args.sell_threshold,
+                profit_take=args.profit_take,
+                stop_loss=args.stop_loss,
+                limit=args.limit,
+                batch_size=args.batch_size,
+            ),
+        )
 
     print(
         json.dumps(

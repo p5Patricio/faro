@@ -12,11 +12,11 @@ from brain.scoped_evaluation import (
     run_scoped_walk_forward_backtest,
 )
 from brain.selection import PromotionCriteria, rank_candidate_summaries
-from collector.supabase_repository import SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 def load_candidate_datasets_from_supabase(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     feature_set: str,
     label_method: str,
     horizon: int,

@@ -4,17 +4,19 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.backtesting import BacktestConfig, run_confidence_threshold_sweep, run_walk_forward_model_backtest
 from brain.datasets import build_dataset_from_materialized
 from brain.features import feature_columns_for_set
 from brain.inference import PredictionPolicy
 from brain.models import DEFAULT_MODEL_NAME, available_model_names
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run walk-forward model backtesting from Supabase datasets")
-    parser.add_argument("--ticker", required=True, help="Asset ticker stored in Supabase")
+    parser = argparse.ArgumentParser(description="Run walk-forward model backtesting from local Postgres datasets")
+    parser.add_argument("--ticker", required=True, help="Asset ticker stored locally")
     parser.add_argument("--feature-set", default="technical_v1")
     parser.add_argument("--label-method", choices=["fixed_horizon", "triple_barrier"], default="triple_barrier")
     parser.add_argument("--horizon", type=int, default=5)
@@ -40,10 +42,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    asset_id = repository.get_asset_id(args.ticker)
-    features = repository.get_features(asset_id, args.feature_set, limit=args.limit)
-    labels = repository.get_labels(asset_id, args.label_method, args.horizon, limit=args.limit)
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        asset_id = repository.get_asset_id(args.ticker)
+        features = repository.get_features(asset_id, args.feature_set, limit=args.limit)
+        labels = repository.get_labels(asset_id, args.label_method, args.horizon, limit=args.limit)
+
     feature_columns = feature_columns_for_set(args.feature_set)
     dataset = build_dataset_from_materialized(features, labels, feature_columns=feature_columns)
 

@@ -16,7 +16,7 @@ from brain.inference import PredictionPolicy, predict_actions
 from brain.models import get_model_spec, train_final_model
 from brain.risk import RiskPolicy, apply_risk_policy
 from brain.scoped_evaluation import AssetDataset, asset_summaries, find_target_dataset, select_scope_datasets
-from collector.supabase_repository import SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def build_promoted_training_frame(
 
 
 def promote_candidate_from_report(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     report: dict[str, Any],
     candidate: dict[str, Any],
     model_version: str,
@@ -204,7 +204,7 @@ def build_promotion_metrics(
 
 
 def generate_latest_prediction(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     ticker: str,
     model,
     model_run_id: str,

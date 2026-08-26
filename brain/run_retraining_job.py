@@ -4,12 +4,15 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.artifacts import DEFAULT_MODEL_ARTIFACT_BUCKET
 from brain.evaluate_candidate_matrix_from_supabase import DEFAULT_CONFIDENCE_THRESHOLDS
 from brain.models import available_model_names
 from brain.retraining_job import RetrainingJobConfig, run_retraining_job
 from brain.scoped_evaluation import SCOPES
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
+from collector.supabase_repository import SupabaseConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -58,52 +61,56 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # supabase_config is still Supabase Storage config: brain/retraining_job.py uses it
+    # only to upload the trained artifact via upload_supabase_artifact. Phase 8 (local
+    # artifact storage, brain/artifacts.py rewrite) removes this parameter entirely.
     supabase_config = SupabaseConfig.from_env()
-    repository = SupabaseRepository(supabase_config)
-    payload = run_retraining_job(
-        repository=repository,
-        supabase_config=supabase_config,
-        tickers=parse_tickers(args.tickers),
-        config=RetrainingJobConfig(
-            feature_set=args.feature_set,
-            label_method=args.label_method,
-            horizon=args.horizon,
-            model_names=parse_model_names(args.models),
-            confidence_thresholds=parse_float_list(args.confidence_thresholds, "confidence-thresholds"),
-            scopes=parse_scopes(args.scopes),
-            splits=args.splits,
-            test_size=args.test_size,
-            embargo_rows=args.embargo_rows,
-            trade_stride=args.trade_stride,
-            limit=args.limit,
-            min_rows=args.min_rows,
-            initial_capital=args.initial_capital,
-            position_size=args.position_size,
-            fee_bps=args.fee_bps,
-            slippage_bps=args.slippage_bps,
-            allow_short=not args.no_short,
-            min_total_return=args.min_total_return,
-            min_profit_factor=args.min_profit_factor,
-            max_drawdown_floor=args.max_drawdown_floor,
-            min_active_trades=args.min_active_trades,
-            drawdown_penalty=args.drawdown_penalty,
-            generate_prediction=not args.skip_prediction,
-            latest_feature_limit=args.latest_feature_limit,
-            max_position_size=args.max_position_size,
-            min_confidence_to_trade=args.min_confidence_to_trade,
-            max_expected_risk=args.max_expected_risk,
-            stop_loss=args.stop_loss,
-            take_profit=args.take_profit,
-            upload_artifacts=not args.skip_upload,
-            artifact_bucket=args.artifact_bucket,
-            create_artifact_bucket=not args.no_create_artifact_bucket,
-            model_dir=args.model_dir,
-            require_incumbent_improvement=not args.no_require_incumbent_improvement,
-            min_objective_improvement=args.min_objective_improvement,
-            incumbent_lookup_limit=args.incumbent_lookup_limit,
-            continue_on_error=not args.fail_fast,
-        ),
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        payload = run_retraining_job(
+            repository=repository,
+            supabase_config=supabase_config,
+            tickers=parse_tickers(args.tickers),
+            config=RetrainingJobConfig(
+                feature_set=args.feature_set,
+                label_method=args.label_method,
+                horizon=args.horizon,
+                model_names=parse_model_names(args.models),
+                confidence_thresholds=parse_float_list(args.confidence_thresholds, "confidence-thresholds"),
+                scopes=parse_scopes(args.scopes),
+                splits=args.splits,
+                test_size=args.test_size,
+                embargo_rows=args.embargo_rows,
+                trade_stride=args.trade_stride,
+                limit=args.limit,
+                min_rows=args.min_rows,
+                initial_capital=args.initial_capital,
+                position_size=args.position_size,
+                fee_bps=args.fee_bps,
+                slippage_bps=args.slippage_bps,
+                allow_short=not args.no_short,
+                min_total_return=args.min_total_return,
+                min_profit_factor=args.min_profit_factor,
+                max_drawdown_floor=args.max_drawdown_floor,
+                min_active_trades=args.min_active_trades,
+                drawdown_penalty=args.drawdown_penalty,
+                generate_prediction=not args.skip_prediction,
+                latest_feature_limit=args.latest_feature_limit,
+                max_position_size=args.max_position_size,
+                min_confidence_to_trade=args.min_confidence_to_trade,
+                max_expected_risk=args.max_expected_risk,
+                stop_loss=args.stop_loss,
+                take_profit=args.take_profit,
+                upload_artifacts=not args.skip_upload,
+                artifact_bucket=args.artifact_bucket,
+                create_artifact_bucket=not args.no_create_artifact_bucket,
+                model_dir=args.model_dir,
+                require_incumbent_improvement=not args.no_require_incumbent_improvement,
+                min_objective_improvement=args.min_objective_improvement,
+                incumbent_lookup_limit=args.incumbent_lookup_limit,
+                continue_on_error=not args.fail_fast,
+            ),
+        )
 
     if args.out:
         out = Path(args.out)

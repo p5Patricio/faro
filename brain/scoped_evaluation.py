@@ -10,7 +10,7 @@ from brain.datasets import build_dataset_from_materialized
 from brain.features import FEATURE_COLUMNS, feature_columns_for_set
 from brain.inference import PredictionPolicy, predict_actions
 from brain.models import DEFAULT_MODEL_NAME, create_model
-from collector.supabase_repository import SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 SCOPE_LOCAL = "local"
@@ -36,7 +36,7 @@ class ScopedBacktestResult:
 
 
 def load_materialized_asset_dataset(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     asset: dict,
     feature_set: str,
     label_method: str,

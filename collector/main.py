@@ -6,9 +6,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
 
+import psycopg
+
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.providers import HistoricalPriceRequest, get_provider
 from collector.providers.base import PriceProvider
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ def apply_date_overrides(
 
 def collect_asset(
     asset: AssetCollectionConfig,
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     provider_factory: ProviderFactory = get_provider,
     batch_size: int = 500,
 ) -> AssetCollectionResult:
@@ -122,7 +124,7 @@ def collect_asset(
 
 def run_collection(
     assets: list[AssetCollectionConfig],
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     provider_factory: ProviderFactory = get_provider,
     batch_size: int = 500,
 ) -> list[AssetCollectionResult]:
@@ -140,7 +142,7 @@ def run_collection(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect configured assets into Supabase")
+    parser = argparse.ArgumentParser(description="Collect configured assets into local Postgres")
     parser.add_argument("--assets-file", help="JSON file with asset collection configs")
     parser.add_argument("--start", help="Override start date for all assets")
     parser.add_argument("--end", help="Override end date for all assets")
@@ -155,8 +157,9 @@ def main() -> None:
         start=args.start,
         end=args.end,
     )
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    results = run_collection(assets, repository, batch_size=args.batch_size)
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        results = run_collection(assets, repository, batch_size=args.batch_size)
 
     print(json.dumps([asdict(result) for result in results], indent=2))
 

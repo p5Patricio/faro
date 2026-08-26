@@ -1,11 +1,16 @@
 name: Operational Jobs
 
+# RETIRED: scheduled triggers are disabled.
+#
+# This workflow ran on GitHub-hosted runners against a hosted Supabase database.
+# The project has moved to a local-only PostgreSQL instance, which a hosted runner
+# has no network route to, so the scheduled cycle can no longer succeed by design
+# (its `collector.schema_check` step failed daily with every ML relation MISSING).
+#
+# Scheduled operation is replaced by a local scheduler entrypoint driven by Windows
+# Task Scheduler. This file is kept only until the local replacement lands, then
+# deleted; see openspec/changes/local-postgres-migration/tasks.md (Phase 9, Phase 10).
 on:
-  schedule:
-    # Daily operational cycle: data refresh, inference and paper trading.
-    - cron: "20 6 * * *"
-    # Weekly controlled retraining cycle.
-    - cron: "40 6 * * 0"
   workflow_dispatch:
     inputs:
       job:

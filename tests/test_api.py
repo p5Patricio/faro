@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 from fastapi.testclient import TestClient
-from requests import RequestException
 
 from app_config import AppConfig
 from api.main import app, get_app_config, get_repository
+from collector.local_repository import LocalPostgresRepository
 
 
 class FakeRepository:
@@ -219,43 +219,28 @@ class FakeRepository:
             ]
         )
 
-    def get_auth_user(self, access_token: str) -> dict:
-        if access_token == "bad-token":
-            raise RequestException("invalid token")
-        return {"id": "user-1", "email": "user@example.com"}
-
-    def get_default_user_risk_profile(self, user_id: str) -> dict | None:
-        return self.risk_profile
-
-    def get_scoped_user_risk_profile(self, user_id: str, scope_type: str, scope_value: str = "") -> dict | None:
-        self.profile_lookup_kwargs = {"user_id": user_id, "scope_type": scope_type, "scope_value": scope_value}
+    def get_scoped_risk_profile(self, scope_type: str, scope_value: str = "") -> dict | None:
+        self.profile_lookup_kwargs = {"scope_type": scope_type, "scope_value": scope_value}
         if self.risk_profile and self.risk_profile.get("scope_type", "default") == scope_type:
             if self.risk_profile.get("scope_value", "") == scope_value:
                 return self.risk_profile
         return None
 
-    def get_user_risk_profile_for_asset(
+    def get_risk_profile_for_asset(
         self,
-        user_id: str,
         ticker: str | None = None,
         asset_class: str | None = None,
     ) -> dict | None:
-        self.profile_lookup_kwargs = {"user_id": user_id, "ticker": ticker, "asset_class": asset_class}
+        self.profile_lookup_kwargs = {"ticker": ticker, "asset_class": asset_class}
         return self.risk_profile
 
-    def upsert_default_user_risk_profile(self, user_id: str, profile: dict) -> dict:
-        self.upserted_risk_profile = {"user_id": user_id, **profile}
-        return self.upserted_risk_profile
-
-    def upsert_user_risk_profile(
+    def upsert_risk_profile(
         self,
-        user_id: str,
         profile: dict,
         scope_type: str = "default",
         scope_value: str = "",
     ) -> dict:
         self.upserted_risk_profile = {
-            "user_id": user_id,
             "scope_type": scope_type,
             "scope_value": scope_value,
             **profile,
@@ -270,7 +255,7 @@ class PredictionUnavailableRepository(FakeRepository):
         model_name: str | None = None,
         model_version: str | None = None,
     ) -> dict | None:
-        raise RequestException("prediction feedback unavailable")
+        raise RuntimeError("prediction feedback unavailable")
 
 
 def make_prices(rows: int = 120) -> pd.DataFrame:
@@ -322,11 +307,11 @@ def test_health_endpoint_reports_ready_api_without_schema_check() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["checks"]["api"]["status"] == "ok"
-    assert payload["checks"]["supabase"]["status"] == "ok"
+    assert payload["checks"]["database"]["status"] == "ok"
     assert "schema" not in payload["checks"]
 
 
-def test_health_endpoint_reports_degraded_without_supabase() -> None:
+def test_health_endpoint_reports_degraded_without_database() -> None:
     app.dependency_overrides[get_repository] = lambda: None
     client = TestClient(app)
 
@@ -336,8 +321,8 @@ def test_health_endpoint_reports_degraded_without_supabase() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "degraded"
-    assert payload["checks"]["supabase"]["status"] == "unavailable"
-    assert payload["checks"]["schema"]["reason"] == "supabase_unavailable"
+    assert payload["checks"]["database"]["status"] == "unavailable"
+    assert payload["checks"]["schema"]["reason"] == "database_unavailable"
 
 
 def test_analysis_endpoint_prefers_latest_prediction() -> None:
@@ -405,7 +390,7 @@ def test_analysis_endpoint_applies_authenticated_risk_profile() -> None:
     override_repository(repository)
     client = TestClient(app)
 
-    response = client.get("/api/analysis/AAPL", headers={"Authorization": "Bearer good-token"})
+    response = client.get("/api/analysis/AAPL")
 
     clear_overrides()
     assert response.status_code == 200
@@ -418,7 +403,7 @@ def test_analysis_endpoint_applies_authenticated_risk_profile() -> None:
     assert payload["analysis"]["risk"]["profile_name"] == "conservador"
     assert payload["analysis"]["risk"]["profile_scope"] == "default"
     assert payload["analysis"]["risk"]["profile_scope_value"] == ""
-    assert repository.profile_lookup_kwargs == {"user_id": "user-1", "ticker": "AAPL", "asset_class": "stock"}
+    assert repository.profile_lookup_kwargs == {"ticker": "AAPL", "asset_class": "stock"}
     assert set(payload["analysis"]["risk"]["blocked_reasons"]) == {
         "confidence_below_trade_threshold",
         "expected_risk_above_limit",
@@ -901,35 +886,6 @@ def test_risk_profile_endpoint_returns_default_without_auth() -> None:
     assert payload["profile"]["allow_short"] is True
 
 
-def test_risk_profile_endpoint_returns_authenticated_profile() -> None:
-    override_repository(
-        FakeRepository(
-            risk_profile={
-                "name": "conservador",
-                "max_position_size": 0.03,
-                "min_confidence_to_trade": 0.72,
-                "max_expected_risk": 0.02,
-                "stop_loss": 0.01,
-                "take_profit": 0.025,
-                "allow_short": False,
-            }
-        )
-    )
-    client = TestClient(app)
-
-    response = client.get("/api/risk-profile", headers={"Authorization": "Bearer good-token"})
-
-    clear_overrides()
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["source"] == "user"
-    assert payload["profile"]["name"] == "conservador"
-    assert payload["profile"]["scope_type"] == "default"
-    assert payload["profile"]["scope_value"] == ""
-    assert payload["profile"]["max_position_size"] == 0.03
-    assert payload["profile"]["allow_short"] is False
-
-
 def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     repository = FakeRepository(
         risk_profile={
@@ -947,10 +903,7 @@ def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     override_repository(repository)
     client = TestClient(app)
 
-    response = client.get(
-        "/api/risk-profile?scope_type=asset_class&scope_value=Crypto",
-        headers={"Authorization": "Bearer good-token"},
-    )
+    response = client.get("/api/risk-profile?scope_type=asset_class&scope_value=Crypto")
 
     clear_overrides()
     assert response.status_code == 200
@@ -959,20 +912,9 @@ def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     assert payload["profile"]["scope_type"] == "asset_class"
     assert payload["profile"]["scope_value"] == "crypto"
     assert repository.profile_lookup_kwargs == {
-        "user_id": "user-1",
         "scope_type": "asset_class",
         "scope_value": "crypto",
     }
-
-
-def test_risk_profile_update_requires_auth() -> None:
-    override_repository(FakeRepository())
-    client = TestClient(app)
-
-    response = client.put("/api/risk-profile", json={"max_position_size": 0.04})
-
-    clear_overrides()
-    assert response.status_code == 401
 
 
 def test_risk_profile_update_persists_authenticated_profile() -> None:
@@ -982,7 +924,6 @@ def test_risk_profile_update_persists_authenticated_profile() -> None:
 
     response = client.put(
         "/api/risk-profile",
-        headers={"Authorization": "Bearer good-token"},
         json={
             "name": "agresivo",
             "max_position_size": 0.15,
@@ -997,7 +938,6 @@ def test_risk_profile_update_persists_authenticated_profile() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert repository.upserted_risk_profile == {
-        "user_id": "user-1",
         "scope_type": "default",
         "scope_value": "",
         "name": "agresivo",
@@ -1018,7 +958,6 @@ def test_risk_profile_update_persists_ticker_scope() -> None:
 
     response = client.put(
         "/api/risk-profile",
-        headers={"Authorization": "Bearer good-token"},
         json={
             "name": "btc",
             "scope_type": "ticker",
@@ -1035,7 +974,6 @@ def test_risk_profile_update_persists_ticker_scope() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert repository.upserted_risk_profile == {
-        "user_id": "user-1",
         "scope_type": "ticker",
         "scope_value": "BTC-USD",
         "name": "btc",
@@ -1049,11 +987,21 @@ def test_risk_profile_update_persists_ticker_scope() -> None:
     assert response.json()["profile"]["scope_value"] == "BTC-USD"
 
 
-def test_risk_profile_endpoint_rejects_invalid_token() -> None:
-    override_repository(FakeRepository())
+def test_health_endpoint_schema_check_succeeds_against_real_database(
+    repository: LocalPostgresRepository,
+) -> None:
+    """End-to-end regression for the interim gap flagged in apply-progress.md:
+    `/api/health?include_schema=true` must call `check_relations` with a real
+    `LocalPostgresRepository` (not a Fake) so `relation_exists` actually runs
+    against a migrated database, with no `AttributeError`."""
+    override_repository(repository)
     client = TestClient(app)
 
-    response = client.get("/api/risk-profile", headers={"Authorization": "Bearer bad-token"})
+    response = client.get("/api/health?include_schema=true")
 
     clear_overrides()
-    assert response.status_code == 401
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["checks"]["database"]["status"] == "ok"
+    assert payload["checks"]["schema"]["status"] == "ok"
+    assert payload["checks"]["schema"]["missing"] == []

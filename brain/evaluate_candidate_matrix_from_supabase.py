@@ -4,13 +4,15 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.backtesting import BacktestConfig
 from brain.candidate_matrix import load_candidate_datasets_from_supabase, run_candidate_matrix
 from brain.features import feature_columns_for_set
 from brain.models import available_model_names
 from brain.scoped_evaluation import SCOPES
 from brain.selection import PromotionCriteria
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 DEFAULT_CONFIDENCE_THRESHOLDS = "0.50,0.55,0.60,0.65,0.70,0.75"
@@ -57,16 +59,17 @@ def main() -> None:
     model_names = parse_model_names(args.models)
     confidence_thresholds = parse_float_list(args.confidence_thresholds, "confidence-thresholds")
     scopes = parse_scopes(args.scopes)
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    datasets, skipped_assets = load_candidate_datasets_from_supabase(
-        repository,
-        feature_set=args.feature_set,
-        label_method=args.label_method,
-        horizon=args.horizon,
-        feature_columns=feature_columns,
-        limit=args.limit,
-        min_rows=args.min_rows,
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        datasets, skipped_assets = load_candidate_datasets_from_supabase(
+            repository,
+            feature_set=args.feature_set,
+            label_method=args.label_method,
+            horizon=args.horizon,
+            feature_columns=feature_columns,
+            limit=args.limit,
+            min_rows=args.min_rows,
+        )
     promotion_criteria = PromotionCriteria(
         min_total_return=args.min_total_return,
         min_profit_factor=args.min_profit_factor,

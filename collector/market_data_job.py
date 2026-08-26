@@ -6,12 +6,12 @@ from typing import Any
 
 from brain.materialize_dataset import MaterializationConfig, materialize_asset_dataset
 from collector.main import AssetCollectionConfig, ProviderFactory, collect_asset
+from collector.local_repository import LocalPostgresRepository
 from collector.providers import get_provider
-from collector.supabase_repository import SupabaseRepository
 
 
 def run_market_data_job(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     assets: list[AssetCollectionConfig],
     provider_factory: ProviderFactory = get_provider,
     feature_sets: list[str] | None = None,

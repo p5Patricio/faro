@@ -9,14 +9,14 @@ from brain.artifacts import resolve_model_artifact
 from brain.features import feature_columns_for_set
 from brain.promotion import generate_latest_prediction
 from brain.risk import RiskPolicy
-from collector.supabase_repository import SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 PROMOTION_SOURCE = "candidate_matrix_promotion"
 
 
 def load_promoted_model_runs(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     model_name: str | None = None,
     model_version: str | None = None,
     limit: int | None = None,
@@ -46,7 +46,7 @@ def load_promoted_model_runs(
 
 
 def run_latest_inference_job(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     model_runs: list[dict[str, Any]],
     latest_feature_limit: int = 1,
     min_confidence: float | None = None,

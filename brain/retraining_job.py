@@ -15,7 +15,8 @@ from brain.promotion import default_promotion_version, promote_candidate_from_re
 from brain.risk import RiskPolicy
 from brain.scoped_evaluation import SCOPES
 from brain.selection import PromotionCriteria
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
+from collector.supabase_repository import SupabaseConfig
 
 
 @dataclass(frozen=True)
@@ -60,7 +61,7 @@ class RetrainingJobConfig:
 
 
 def run_retraining_job(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     supabase_config: SupabaseConfig,
     tickers: list[str] | None = None,
     config: RetrainingJobConfig | None = None,
@@ -289,7 +290,7 @@ def build_artifact_path(ticker: str, candidate: dict[str, Any], report: dict[str
 
 
 def find_incumbent_model_run(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     *,
     ticker: str,
     feature_set: str,
