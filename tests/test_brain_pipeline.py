@@ -24,7 +24,6 @@ from brain.risk import RiskPolicy, apply_risk_policy
 from brain.retraining_job import RetrainingJobConfig, compare_candidate_to_incumbent, run_retraining_job
 from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest
 from brain.selection import PromotionCriteria, evaluate_promotion, rank_candidate_summaries, score_candidate
-from collector.supabase_repository import SupabaseConfig
 
 
 def make_prices(rows: int = 120) -> pd.DataFrame:
@@ -795,14 +794,13 @@ def test_run_retraining_job_promotes_and_uploads_candidate(monkeypatch, tmp_path
 
     monkeypatch.setattr("brain.retraining_job.promote_candidate_from_report", fake_promote_candidate_from_report)
     monkeypatch.setattr(
-        "brain.retraining_job.upload_supabase_artifact",
-        lambda *args, **kwargs: "supabase://model-artifacts/models/model.joblib",
+        "brain.retraining_job.store_model_artifact",
+        lambda *args, **kwargs: "models/model.joblib",
     )
     repository = FakeRetrainingRepository()
 
     result = run_retraining_job(
         repository=repository,
-        supabase_config=SupabaseConfig(url="https://example.supabase.co", key="key"),
         tickers=["BTC-USD"],
         config=RetrainingJobConfig(
             model_names=["extra_trees"],
@@ -817,9 +815,9 @@ def test_run_retraining_job_promotes_and_uploads_candidate(monkeypatch, tmp_path
     assert result["succeeded"] == 1
     assert result["failed"] == 0
     assert result["results"][0]["model_run_id"] == "run-1"
-    assert result["results"][0]["artifact_uri"] == "supabase://model-artifacts/models/model.joblib"
+    assert result["results"][0]["artifact_uri"] == "models/model.joblib"
     assert result["results"][0]["incumbent_comparison"]["reason"] == "no_incumbent"
-    assert repository.updated_artifacts == [("run-1", "supabase://model-artifacts/models/model.joblib")]
+    assert repository.updated_artifacts == [("run-1", "models/model.joblib")]
 
 
 def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monkeypatch) -> None:
@@ -862,7 +860,6 @@ def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monk
 
     result = run_retraining_job(
         repository=FakeRetrainingRepository([incumbent]),
-        supabase_config=SupabaseConfig(url="https://example.supabase.co", key="key"),
         tickers=["BTC-USD"],
         config=RetrainingJobConfig(
             model_names=["extra_trees"],
@@ -915,7 +912,6 @@ def test_run_retraining_job_skips_when_no_candidate_passes(monkeypatch) -> None:
 
     result = run_retraining_job(
         repository=FakeRetrainingRepository(),
-        supabase_config=SupabaseConfig(url="https://example.supabase.co", key="key"),
         tickers=["BTC-USD"],
         config=RetrainingJobConfig(
             model_names=["extra_trees"],

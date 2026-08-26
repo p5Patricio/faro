@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from brain.artifacts import DEFAULT_MODEL_ARTIFACT_BUCKET, upload_supabase_artifact
+from brain.artifacts import store_model_artifact
 from brain.backtesting import BacktestConfig
 from brain.candidate_matrix import load_candidate_datasets_from_supabase, run_candidate_matrix
 from brain.features import feature_columns_for_set
@@ -16,7 +16,6 @@ from brain.risk import RiskPolicy
 from brain.scoped_evaluation import SCOPES
 from brain.selection import PromotionCriteria
 from collector.local_repository import LocalPostgresRepository
-from collector.supabase_repository import SupabaseConfig
 
 
 @dataclass(frozen=True)
@@ -51,8 +50,6 @@ class RetrainingJobConfig:
     stop_loss: float = 0.02
     take_profit: float = 0.04
     upload_artifacts: bool = True
-    artifact_bucket: str = DEFAULT_MODEL_ARTIFACT_BUCKET
-    create_artifact_bucket: bool = True
     model_dir: str = "models"
     continue_on_error: bool = True
     require_incumbent_improvement: bool = True
@@ -62,7 +59,6 @@ class RetrainingJobConfig:
 
 def run_retraining_job(
     repository: LocalPostgresRepository,
-    supabase_config: SupabaseConfig,
     tickers: list[str] | None = None,
     config: RetrainingJobConfig | None = None,
 ) -> dict[str, Any]:
@@ -165,18 +161,10 @@ def run_retraining_job(
                 ),
             )
 
-            remote_artifact_uri = None
+            stored_artifact_uri = promotion.artifact_uri
             if job_config.upload_artifacts and promotion.model_run_id:
-                remote_artifact_uri = str(
-                    upload_supabase_artifact(
-                        promotion.artifact_uri,
-                        config=supabase_config,
-                        bucket=job_config.artifact_bucket,
-                        object_path=f"models/{Path(promotion.artifact_uri).name}",
-                        create_bucket=job_config.create_artifact_bucket,
-                    )
-                )
-                repository.update_model_run_artifact_uri(promotion.model_run_id, remote_artifact_uri)
+                stored_artifact_uri = store_model_artifact(promotion.artifact_uri)
+                repository.update_model_run_artifact_uri(promotion.model_run_id, stored_artifact_uri)
 
             results.append(
                 {
@@ -189,7 +177,7 @@ def run_retraining_job(
                     "min_confidence": candidate.get("min_confidence"),
                     "objective_score": candidate.get("objective_score"),
                     "local_artifact_uri": promotion.artifact_uri,
-                    "artifact_uri": remote_artifact_uri or promotion.artifact_uri,
+                    "artifact_uri": stored_artifact_uri,
                     "prediction_loaded": bool(promotion.prediction),
                     "ranking_count": len(report.get("ranking") or []),
                     "incumbent_comparison": incumbent_comparison,
@@ -371,7 +359,6 @@ def summarize_config(config: RetrainingJobConfig) -> dict[str, Any]:
         "max_drawdown_floor": config.max_drawdown_floor,
         "min_active_trades": config.min_active_trades,
         "upload_artifacts": config.upload_artifacts,
-        "artifact_bucket": config.artifact_bucket,
         "require_incumbent_improvement": config.require_incumbent_improvement,
         "min_objective_improvement": config.min_objective_improvement,
         "incumbent_lookup_limit": config.incumbent_lookup_limit,

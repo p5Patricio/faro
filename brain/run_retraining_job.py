@@ -6,13 +6,11 @@ from pathlib import Path
 
 import psycopg
 
-from brain.artifacts import DEFAULT_MODEL_ARTIFACT_BUCKET
 from brain.evaluate_candidate_matrix_from_supabase import DEFAULT_CONFIDENCE_THRESHOLDS
 from brain.models import available_model_names
 from brain.retraining_job import RetrainingJobConfig, run_retraining_job
 from brain.scoped_evaluation import SCOPES
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
-from collector.supabase_repository import SupabaseConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -47,9 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-expected-risk", type=float, default=0.05)
     parser.add_argument("--stop-loss", type=float, default=0.02)
     parser.add_argument("--take-profit", type=float, default=0.04)
-    parser.add_argument("--skip-upload", action="store_true", help="Keep promoted artifacts local")
-    parser.add_argument("--artifact-bucket", default=DEFAULT_MODEL_ARTIFACT_BUCKET)
-    parser.add_argument("--no-create-artifact-bucket", action="store_true")
+    parser.add_argument("--skip-upload", action="store_true", help="Skip normalizing the artifact into models/")
     parser.add_argument("--model-dir", default="models")
     parser.add_argument("--no-require-incumbent-improvement", action="store_true")
     parser.add_argument("--min-objective-improvement", type=float, default=0.0)
@@ -61,15 +57,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    # supabase_config is still Supabase Storage config: brain/retraining_job.py uses it
-    # only to upload the trained artifact via upload_supabase_artifact. Phase 8 (local
-    # artifact storage, brain/artifacts.py rewrite) removes this parameter entirely.
-    supabase_config = SupabaseConfig.from_env()
     with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
         repository = LocalPostgresRepository(connection=connection)
         payload = run_retraining_job(
             repository=repository,
-            supabase_config=supabase_config,
             tickers=parse_tickers(args.tickers),
             config=RetrainingJobConfig(
                 feature_set=args.feature_set,
@@ -102,8 +93,6 @@ def main() -> None:
                 stop_loss=args.stop_loss,
                 take_profit=args.take_profit,
                 upload_artifacts=not args.skip_upload,
-                artifact_bucket=args.artifact_bucket,
-                create_artifact_bucket=not args.no_create_artifact_bucket,
                 model_dir=args.model_dir,
                 require_incumbent_improvement=not args.no_require_incumbent_improvement,
                 min_objective_improvement=args.min_objective_improvement,

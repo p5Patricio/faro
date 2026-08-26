@@ -1,5 +1,186 @@
 # Apply Progress: local-postgres-migration
 
+## Batch 3 — Phase 8 (this batch)
+
+### Status: Phase 8 (Local Artifact Storage) complete and verified.
+
+Scope was intentionally narrow per the batch handoff: `brain/artifacts.py`,
+`brain/upload_model_artifact.py` (deleted), and the specific call sites listed in
+design.md's "Local Artifact Storage" section. `brain/inference_job.py` and `api/main.py`
+were explicitly flagged as concurrently-owned by the `telegram-notifications` sibling
+session; this batch touched neither file's substance (see "Concurrent work" below).
+
+### `brain/artifacts.py` rewrite (8.1, 8.2)
+
+Full rewrite, 34 lines (down from 246): `MODEL_ARTIFACT_ROOT = Path(os.getenv("MODEL_ARTIFACT_DIR", "models"))`,
+`resolve_model_artifact(artifact_uri, cache_dir=None)` (kept the `cache_dir` parameter per
+design's literal signature even though it is now unused — no download step exists to cache
+for — accepted but ignored, for call-site signature stability), and the new
+`store_model_artifact(local_path, object_path=None) -> str`.
+
+`resolve_model_artifact` deviates slightly from a bare reading of design.md by adding a
+third fallback: after the as-is and `\`→`/`-normalized checks, it also tries
+`MODEL_ARTIFACT_ROOT / normalized_path.name`. This matters if `MODEL_ARTIFACT_DIR` is ever
+pointed somewhere other than the literal `models/` string baked into an old `artifact_uri`
+row, or if a URI loses its directory prefix — without it, only exact-path and cwd-relative
+resolution would work. Not explicitly in design.md's one-line description but doesn't
+contradict it and adds no new failure mode.
+
+`store_model_artifact` composes the target as `MODEL_ARTIFACT_ROOT / object_path` (or
+`MODEL_ARTIFACT_ROOT / source.name` when `object_path` is omitted), creates parent dirs,
+and no-ops (returns the path without copying) when `source.resolve() == target.resolve()`
+— i.e., when the artifact is already sitting under `models/`, which is the common case
+since `promote_candidate_from_report` already writes there directly. Returns
+`target.as_posix()`.
+
+Deleted: `SupabaseArtifactUri`, `is_supabase_artifact_uri`, `parse_supabase_artifact_uri`,
+`download_supabase_artifact`, `upload_supabase_artifact`, `upload_supabase_artifact_resumable`,
+`create_resumable_upload_url`, `ensure_artifact_bucket`, `storage_headers`, `storage_object_url`,
+`resumable_upload_endpoint`, `encode_tus_metadata`, `DEFAULT_MODEL_ARTIFACT_BUCKET`,
+`RESUMABLE_UPLOAD_THRESHOLD_BYTES`, `TUS_CHUNK_SIZE_BYTES`, `TUS_VERSION`. The `requests`
+import and the `collector.supabase_repository.SupabaseConfig` import are both gone from this
+file. `brain/upload_model_artifact.py` deleted outright (`git rm`), not repurposed, per D11.
+
+### Call sites (8.3)
+
+- `brain/retraining_job.py`: `upload_supabase_artifact` → `store_model_artifact`.
+  `RetrainingJobConfig` lost `artifact_bucket` and `create_artifact_bucket` fields (both
+  bucket concepts are meaningless for local storage — `create_artifact_bucket` wasn't
+  explicitly named in design.md's removal list but has no purpose once buckets don't
+  exist, so it went too). Kept the `upload_artifacts: bool` field name as-is (still gates
+  whether the artifact gets normalized into `models/` and the `model_runs.artifact_uri`
+  row gets updated) — design.md didn't ask for a rename and renaming would have rippled
+  into the CLI flag and both test call sites for no behavioral gain.
+  **Also removed the `supabase_config: SupabaseConfig` parameter entirely** from
+  `run_retraining_job()`, not just the fields that referenced it. This isn't explicit in
+  design.md's one-line "Call sites" bullet, but `brain/run_retraining_job.py` already had a
+  pre-existing code comment (written in an earlier batch) stating verbatim: *"Phase 8 (local
+  artifact storage, brain/artifacts.py rewrite) removes this parameter entirely."* Followed
+  that explicit forward-looking note as the authoritative source. `local_artifact_uri` and
+  `artifact_uri` in the results dict are now the same value when `upload_artifacts=True`,
+  matching design.md's "artifact_uri and local_artifact_uri become the same value" line.
+- `brain/run_retraining_job.py`: dropped `--artifact-bucket` and `--no-create-artifact-bucket`
+  CLI flags, the `SupabaseConfig.from_env()` call, and the `supabase_config=` kwarg.
+  `--skip-upload`'s help text reworded from "Keep promoted artifacts local" (which no longer
+  makes sense — everything is already local) to "Skip normalizing the artifact into models/".
+- `brain/inference_job.py`, `brain/predict_from_supabase.py`: **zero changes needed.** Both
+  already call `resolve_model_artifact(str(artifact_uri))` with no `config` kwarg, so the
+  dropped parameter has no call-site impact. Confirmed by reading both files fully, not
+  assumed from the batch handoff's phrasing ("if they pass one" — they don't).
+
+### Tests (8.4, 8.5)
+
+`tests/test_model_artifacts.py`: deleted `test_parse_supabase_artifact_uri`,
+`test_download_supabase_artifact_writes_cache_file`,
+`test_upload_supabase_artifact_creates_bucket_and_uploads_bytes`,
+`test_upload_supabase_artifact_uses_resumable_upload_for_large_files` (the `FakeStorageResponse`/
+`FakeStorageSession` fakes went with them, nothing else used them). Kept
+`test_resolve_model_artifact_accepts_normalized_local_path` verbatim. Added 5 new tests:
+`test_resolve_model_artifact_raises_for_missing_file`,
+`test_store_model_artifact_copies_into_model_root`,
+`test_store_model_artifact_respects_object_path`,
+`test_store_model_artifact_is_a_noop_when_already_under_model_root`,
+`test_store_model_artifact_raises_for_missing_source`. Net: 5 → 6 tests in this file.
+
+All new `store_model_artifact` tests monkeypatch `brain.artifacts.MODEL_ARTIFACT_ROOT` to a
+relative `Path("models")` **combined with `monkeypatch.chdir(tmp_path)`**, not an absolute
+`tmp_path / "models"`. This matters: `store_model_artifact` returns `target.as_posix()`,
+and if `MODEL_ARTIFACT_ROOT` were patched to an absolute tmp path, the returned URI would be
+an absolute path string instead of the production-shaped relative `"models/<file>"` string
+the assertions check for. Chdir-ing into `tmp_path` and keeping `MODEL_ARTIFACT_ROOT`
+relative reproduces the real production shape (`Path("models")`, relative to process cwd)
+faithfully.
+
+`tests/test_brain_pipeline.py`: in all 3 `run_retraining_job(...)` call sites, dropped the
+`supabase_config=SupabaseConfig(...)` kwarg (matching the parameter removal above) and
+removed the now-unused `from collector.supabase_repository import SupabaseConfig` import.
+In `test_run_retraining_job_promotes_and_uploads_candidate`, retargeted
+`monkeypatch.setattr("brain.retraining_job.upload_supabase_artifact", ...)` to
+`"brain.retraining_job.store_model_artifact"` returning the literal string
+`"models/model.joblib"` (matching design.md's testing-strategy line exactly), and updated
+the two `supabase://model-artifacts/...` assertions to `"models/model.joblib"`. No test
+functions were added or removed in this file — same 36 before and after.
+
+### `brain/README.md` (8.6)
+
+There was no literal "## Supabase Storage" header — the content lived as a paragraph under
+"Promover un candidato" describing `python -m brain.upload_model_artifact`. Replaced that
+paragraph (which documented a command that no longer exists) with one sentence noting that
+training, inference, and the local scheduler now share one filesystem, so
+`store_model_artifact`/`resolve_model_artifact` make the artifact available under `models/`
+with no separate upload step. Left the rest of the file's Supabase-flavored prose (e.g.
+"Materializar features y labels en Supabase") untouched — that's Phase 9.5's broader doc
+pass, not this task's "Supabase Storage" scope.
+
+### Concurrent work (read before merging)
+
+Two commits from the concurrent `telegram-notifications` session landed on this branch
+**during** this batch: `046ec7f feat(inference): emit previous_action for signal-transition
+detection` (touches `brain/inference_job.py` + `tests/test_brain_pipeline.py`) and
+`bdf7c8a feat(api): bind operational alerts thresholds to notification_rules constants`
+(touches `api/main.py` + `tests/test_api.py`). Neither overlaps this batch's edits:
+`brain/inference_job.py` needed no Phase 8 change (confirmed above) and was never opened
+with a write tool in this batch; `tests/test_brain_pipeline.py`'s diff (`git diff` reviewed
+in full before finalizing) shows this batch's changes are a clean, disjoint layer on top of
+the concurrent session's `previous_action` additions — no lines were reverted or
+double-edited. `api/main.py` and `tests/test_api.py` were never touched by this batch.
+Test-count accounting: HEAD (with both concurrent commits already in, before this batch's
+edits) collected **221** tests; after this batch's edits, **222** — the +1 is
+`tests/test_model_artifacts.py`'s net new-test count (6 - 5), confirmed via
+`grep -c "^def test_"` before/after. The 219 baseline figure quoted in this batch's handoff
+prompt was stale by the time this batch ran (the two concurrent commits had already landed
++2 tests on top of it); 221 → 222 is the figure that is actually attributable to this
+batch's own diff.
+
+### Verification
+
+- `py -3.14 -m pytest` with both DSNs exported: **222 passed, 0 failed** (up from 221 at
+  the HEAD this batch started from; see test-count accounting above).
+- Real (unmocked) round trip: wrote a throwaway file under `reports/`, called
+  `store_model_artifact` on it, confirmed the returned URI (`models/_phase8_smoke_artifact.joblib`),
+  then called `resolve_model_artifact` on that exact URI and confirmed the resolved path
+  exists and its bytes match, then cleaned up both files. Confirmed via
+  `'supabase' not in open('brain/artifacts.py').read().lower()` that zero Supabase
+  references remain in the rewritten module.
+- **`py -3.14 -m brain.run_retraining_job --tickers BTC-USD --models logistic_regression
+  --scopes local --confidence-thresholds 0.55` was run for real** against the local
+  `ia_inversiones` database. It completed cleanly with **no `supabase` import errors**,
+  returning `{"attempted": 0, "succeeded": 0, "failed": 0, ...}`. This is an honest report,
+  not a fabricated success: the local database currently has **zero rows** in `assets`,
+  `features_daily`, `labels_daily`, and `model_runs` (confirmed via a direct `SELECT
+  count(*)` on each table) — Phase 4 was skipped (no Supabase ML data existed to migrate)
+  and fresh yfinance ingestion for the widened ~100-stock universe has not run yet, so there
+  is no real candidate for `run_retraining_job` to promote in this environment. The command
+  exercises every line of the new import graph (`brain.artifacts` has no Supabase import,
+  `brain.retraining_job` imports `store_model_artifact` cleanly) but **does not**
+  exercise the `store_model_artifact` call itself end-to-end inside that specific CLI
+  invocation, because it never reaches a promotable candidate. The direct unmocked
+  `store_model_artifact`/`resolve_model_artifact` round trip above, plus the 6 passing unit
+  tests in `tests/test_model_artifacts.py`, are what actually cover that function's
+  filesystem behavior in this batch.
+
+### Commits (this batch)
+
+7. `feat(brain): replace Supabase Storage artifact transport with local filesystem storage`
+   (Phase 8) — `brain/artifacts.py`, `brain/upload_model_artifact.py` (deleted),
+   `brain/retraining_job.py`, `brain/run_retraining_job.py`, `brain/README.md`,
+   `tests/test_model_artifacts.py`, `tests/test_brain_pipeline.py`,
+   `openspec/changes/local-postgres-migration/tasks.md`,
+   `openspec/changes/local-postgres-migration/apply-progress.md`. Explicit file paths only
+   (no `git add -A`), to avoid capturing `api/main.py`/`tests/test_api.py`/
+   `brain/inference_job.py` state that belongs to the concurrent session's own commits.
+
+### Remaining work (not this batch's scope)
+
+Phases 9 and 10 are still `[ ]` in `tasks.md`. Phase 9 (local scheduler + CI) and Phase 10
+(final Supabase removal) are unaffected by this batch — `ops/run_local_scheduler.py`'s
+future `retraining` job mode will call the now-artifact-storage-agnostic
+`run_retraining_job()` unchanged.
+
+---
+
+# Apply Progress: local-postgres-migration
+
 ## Batch 2 — Phases 5-7 (this batch)
 
 ### Status: Phases 5-7 complete and verified against a live local Postgres database.

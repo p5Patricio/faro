@@ -2,73 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from brain.artifacts import (
-    download_supabase_artifact,
-    parse_supabase_artifact_uri,
-    resolve_model_artifact,
-    upload_supabase_artifact,
-)
-from collector.supabase_repository import SupabaseConfig
+import pytest
 
-
-class FakeStorageResponse:
-    def __init__(
-        self,
-        content: bytes = b"",
-        status_code: int = 200,
-        text: str = "",
-        headers: dict[str, str] | None = None,
-    ) -> None:
-        self.content = content
-        self.status_code = status_code
-        self.text = text
-        self.headers = headers or {}
-
-    def raise_for_status(self) -> None:
-        if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
-
-
-class FakeStorageSession:
-    def __init__(self) -> None:
-        self.get_calls: list[dict] = []
-        self.post_calls: list[dict] = []
-        self.patch_calls: list[dict] = []
-
-    def get(self, url: str, headers: dict, timeout: int) -> FakeStorageResponse:
-        self.get_calls.append({"url": url, "headers": headers, "timeout": timeout})
-        return FakeStorageResponse(content=b"model-bytes")
-
-    def post(
-        self,
-        url: str,
-        headers: dict,
-        timeout: int,
-        json: dict | None = None,
-        data: bytes | None = None,
-    ) -> FakeStorageResponse:
-        self.post_calls.append({"url": url, "headers": headers, "json": json, "data": data, "timeout": timeout})
-        if "upload/resumable" in url:
-            return FakeStorageResponse(status_code=201, headers={"Location": "/storage/v1/upload/resumable/upload-id"})
-        return FakeStorageResponse(status_code=201)
-
-    def patch(
-        self,
-        url: str,
-        headers: dict,
-        data: bytes,
-        timeout: int,
-    ) -> FakeStorageResponse:
-        self.patch_calls.append({"url": url, "headers": headers, "data": data, "timeout": timeout})
-        return FakeStorageResponse(status_code=204)
-
-
-def test_parse_supabase_artifact_uri() -> None:
-    parsed = parse_supabase_artifact_uri("supabase://model-artifacts/models/btc.joblib")
-
-    assert parsed.bucket == "model-artifacts"
-    assert parsed.path == "models/btc.joblib"
-    assert str(parsed) == "supabase://model-artifacts/models/btc.joblib"
+from brain.artifacts import resolve_model_artifact, store_model_artifact
 
 
 def test_resolve_model_artifact_accepts_normalized_local_path(tmp_path: Path) -> None:
@@ -81,63 +17,64 @@ def test_resolve_model_artifact_accepts_normalized_local_path(tmp_path: Path) ->
     assert resolved.exists()
 
 
-def test_download_supabase_artifact_writes_cache_file(tmp_path: Path) -> None:
-    session = FakeStorageSession()
-    config = SupabaseConfig(url="https://example.supabase.co", key="test-key")
+def test_resolve_model_artifact_raises_for_missing_file(tmp_path: Path) -> None:
+    missing = tmp_path / "does_not_exist.joblib"
 
-    resolved = download_supabase_artifact(
-        "supabase://model-artifacts/models/btc.joblib",
-        config=config,
-        cache_dir=tmp_path,
-        session=session,  # type: ignore[arg-type]
-    )
-
-    assert resolved.read_bytes() == b"model-bytes"
-    assert session.get_calls[0]["url"] == "https://example.supabase.co/storage/v1/object/model-artifacts/models/btc.joblib"
-    assert session.get_calls[0]["headers"]["Authorization"] == "Bearer test-key"
+    with pytest.raises(ValueError, match="artifact_not_found"):
+        resolve_model_artifact(str(missing))
 
 
-def test_upload_supabase_artifact_creates_bucket_and_uploads_bytes(tmp_path: Path) -> None:
-    session = FakeStorageSession()
-    config = SupabaseConfig(url="https://example.supabase.co", key="test-key")
-    artifact = tmp_path / "btc.joblib"
+def _use_relative_model_root(monkeypatch, tmp_path: Path) -> None:
+    """Chdir into tmp_path and point MODEL_ARTIFACT_ROOT at the relative "models" dir,
+    mirroring the production default (`Path("models")` relative to the process cwd)."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("brain.artifacts.MODEL_ARTIFACT_ROOT", Path("models"))
+
+
+def test_store_model_artifact_copies_into_model_root(tmp_path: Path, monkeypatch) -> None:
+    _use_relative_model_root(monkeypatch, tmp_path)
+
+    source = tmp_path / "outside" / "trained.joblib"
+    source.parent.mkdir()
+    source.write_bytes(b"model-bytes")
+
+    artifact_uri = store_model_artifact(source)
+
+    stored_path = tmp_path / "models" / "trained.joblib"
+    assert artifact_uri == "models/trained.joblib"
+    assert stored_path.read_bytes() == b"model-bytes"
+
+
+def test_store_model_artifact_respects_object_path(tmp_path: Path, monkeypatch) -> None:
+    _use_relative_model_root(monkeypatch, tmp_path)
+
+    source = tmp_path / "outside" / "trained.joblib"
+    source.parent.mkdir()
+    source.write_bytes(b"model-bytes")
+
+    artifact_uri = store_model_artifact(source, object_path="AAPL/trained_v2.joblib")
+
+    stored_path = tmp_path / "models" / "AAPL" / "trained_v2.joblib"
+    assert artifact_uri == "models/AAPL/trained_v2.joblib"
+    assert stored_path.read_bytes() == b"model-bytes"
+
+
+def test_store_model_artifact_is_a_noop_when_already_under_model_root(tmp_path: Path, monkeypatch) -> None:
+    _use_relative_model_root(monkeypatch, tmp_path)
+
+    existing = tmp_path / "models"
+    existing.mkdir()
+    artifact = existing / "trained.joblib"
     artifact.write_bytes(b"model-bytes")
 
-    uri = upload_supabase_artifact(
-        artifact,
-        config=config,
-        bucket="model-artifacts",
-        object_path="models/btc.joblib",
-        session=session,  # type: ignore[arg-type]
-    )
+    artifact_uri = store_model_artifact(artifact)
 
-    assert str(uri) == "supabase://model-artifacts/models/btc.joblib"
-    assert session.post_calls[0]["url"] == "https://example.supabase.co/storage/v1/bucket"
-    assert session.post_calls[0]["json"]["public"] is False
-    assert session.post_calls[1]["url"] == "https://example.supabase.co/storage/v1/object/model-artifacts/models/btc.joblib"
-    assert session.post_calls[1]["headers"]["x-upsert"] == "true"
-    assert session.post_calls[1]["data"] == b"model-bytes"
+    assert artifact_uri == "models/trained.joblib"
+    assert artifact.read_bytes() == b"model-bytes"
 
 
-def test_upload_supabase_artifact_uses_resumable_upload_for_large_files(tmp_path: Path) -> None:
-    session = FakeStorageSession()
-    config = SupabaseConfig(url="https://example.supabase.co", key="test-key")
-    artifact = tmp_path / "large.joblib"
-    artifact.write_bytes(b"abcdef")
+def test_store_model_artifact_raises_for_missing_source(tmp_path: Path, monkeypatch) -> None:
+    _use_relative_model_root(monkeypatch, tmp_path)
 
-    uri = upload_supabase_artifact(
-        artifact,
-        config=config,
-        bucket="model-artifacts",
-        object_path="models/large.joblib",
-        resumable_threshold_bytes=1,
-        session=session,  # type: ignore[arg-type]
-    )
-
-    assert str(uri) == "supabase://model-artifacts/models/large.joblib"
-    assert session.post_calls[1]["url"] == "https://example.storage.supabase.co/storage/v1/upload/resumable"
-    assert "bucketName" in session.post_calls[1]["headers"]["Upload-Metadata"]
-    assert session.post_calls[1]["headers"]["Tus-Resumable"] == "1.0.0"
-    assert session.patch_calls[0]["url"] == "https://example.storage.supabase.co/storage/v1/upload/resumable/upload-id"
-    assert session.patch_calls[0]["headers"]["Upload-Offset"] == "0"
-    assert session.patch_calls[0]["data"] == b"abcdef"
+    with pytest.raises(ValueError, match="artifact_not_found"):
+        store_model_artifact(tmp_path / "missing.joblib")

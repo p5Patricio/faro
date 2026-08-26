@@ -40,9 +40,9 @@ earlier units (low re-review cost despite high line count).
 
 ## Phase 0: Environment Confirmation (blocking prerequisite)
 
-- [ ] 0.1 Ask user for local Postgres host, port, database name, and role/user (design assumed `ia_inversiones` / `postgres` — unconfirmed). Do not create `db/migrations/` until answered.
-- [ ] 0.2 Record confirmed values as `LOCAL_DATABASE_URL` (or `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`/`PGPASSWORD`) in `.env.example` and README.
-- [ ] 0.3 Tag `pre-local-postgres` on current `main` (proposal Rollback Plan).
+- [x] 0.1 Confirmed with user 2026-08-25: host localhost, port 5432, database `ia_inversiones` (+ `ia_inversiones_test`), role `postgres`.
+- [ ] 0.2 PARTIAL: recorded in state.yaml. `.env.example` still needs LOCAL_DATABASE_URL/TEST_DATABASE_URL added by hand -- harness denies agent tool access to that exact path.
+- [x] 0.3 Tagged `pre-local-postgres` on 8d77fc9 (last commit before migration work).
 
 ## Phase 1: Schema + Migration Runner (Req: Local Schema and Idempotent Migration Runner; Dead-Table Exclusion)
 
@@ -71,10 +71,10 @@ earlier units (low re-review cost despite high line count).
 
 ## Phase 4: One-Time Data Migration (Req: One-Time Supabase Data Migration)
 
-- [ ] 4.1 `ops/migrate_supabase_to_local.py`: `fetch_table` via `SupabaseRepository`'s public `headers`/`config.url`, FK-safe table order, `ON CONFLICT (id) DO NOTHING`, `--batch-size`, checkpoint JSON.
-- [ ] 4.2 Add `setval` sequence fix-up per identity-PK table after copy.
-- [ ] 4.3 Add `--verify-only`: source `HEAD` count vs local `count(*)`, per-table report, non-zero exit on mismatch (spec scenario "Row-count mismatch is surfaced").
-- [ ] 4.4 Run migration against real Supabase project; confirm row-count parity for all 9 tables (`risk_profiles` excluded).
+- [x] 4.1 SKIPPED -- Supabase project has no ML data (GitHub Actions confirmed every ML relation MISSING); universe is being widened to ~100 stocks requiring fresh ingestion regardless.
+- [x] 4.2 SKIPPED -- see 4.1.
+- [x] 4.3 SKIPPED -- see 4.1.
+- [x] 4.4 SKIPPED -- see 4.1. Data comes from fresh yfinance ingestion via the existing collector instead.
 
 ## Phase 5: Collector/Brain Call-Site Swap (Req: Repository Contract Parity)
 
@@ -100,12 +100,12 @@ earlier units (low re-review cost despite high line count).
 
 ## Phase 8: Local Artifact Storage (Req: Local Filesystem Artifact Storage)
 
-- [ ] 8.1 Rewrite `brain/artifacts.py`: `MODEL_ARTIFACT_ROOT`, keep `resolve_model_artifact` (drop `config` param + `supabase://` branch), add `store_model_artifact(local_path, object_path=None)`.
-- [ ] 8.2 Delete Storage/TUS symbols (`SupabaseArtifactUri`, `upload_supabase_artifact*`, `create_resumable_upload_url`, etc.) and `brain/upload_model_artifact.py`.
-- [ ] 8.3 Update call sites: `brain/retraining_job.py` (drop `artifact_bucket`/`remote_artifact_uri`), `brain/run_retraining_job.py` (drop `--artifact-bucket`), `brain/inference_job.py`, `brain/predict_from_supabase.py`.
-- [ ] 8.4 `tests/test_model_artifacts.py`: delete the 4 Storage/TUS tests, add `store_model_artifact` tests on `tmp_path`.
-- [ ] 8.5 `tests/test_brain_pipeline.py`: retarget monkeypatch to `store_model_artifact`, drop `supabase://` URI assertions.
-- [ ] 8.6 Trim `brain/README.md` "Supabase Storage" section.
+- [x] 8.1 Rewrite `brain/artifacts.py`: `MODEL_ARTIFACT_ROOT`, keep `resolve_model_artifact` (drop `config` param + `supabase://` branch), add `store_model_artifact(local_path, object_path=None)`.
+- [x] 8.2 Delete Storage/TUS symbols (`SupabaseArtifactUri`, `upload_supabase_artifact*`, `create_resumable_upload_url`, etc.) and `brain/upload_model_artifact.py`.
+- [x] 8.3 Update call sites: `brain/retraining_job.py` (drop `artifact_bucket`/`remote_artifact_uri`), `brain/run_retraining_job.py` (drop `--artifact-bucket`), `brain/inference_job.py`, `brain/predict_from_supabase.py`. Also dropped the now-fully-unused `supabase_config` parameter from `run_retraining_job()` entirely (both call sites already flagged this in a pre-existing code comment); `inference_job.py`/`predict_from_supabase.py` needed zero changes since neither ever passed the now-removed `config` kwarg to `resolve_model_artifact`.
+- [x] 8.4 `tests/test_model_artifacts.py`: delete the 4 Storage/TUS tests, add `store_model_artifact` tests on `tmp_path`.
+- [x] 8.5 `tests/test_brain_pipeline.py`: retarget monkeypatch to `store_model_artifact`, drop `supabase://` URI assertions.
+- [x] 8.6 Trim `brain/README.md` "Supabase Storage" section.
 
 ## Phase 9: Local Scheduler + CI (Req: Local Scheduled Operations Replace Hosted Automation; Pull Request Quality Gates)
 
