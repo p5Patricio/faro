@@ -844,6 +844,124 @@ class LocalPostgresRepository:
             cur.execute(query, params)
             return cur.fetchone()
 
+    # -- Notifications -----------------------------------------------------
+
+    def get_active_notification_rules(
+        self,
+        rule_type: str | None = None,
+        channel: str | None = None,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = ["is_active"]
+        params: list[Any] = []
+        if rule_type:
+            conditions.append("rule_type = %s")
+            params.append(rule_type)
+        if channel:
+            conditions.append("channel = %s")
+            params.append(channel)
+        where_clause = " AND ".join(conditions)
+        query = (
+            "SELECT id, rule_type, asset_id, channel, params, cooldown_minutes "
+            f"FROM notification_rules WHERE {where_clause} "
+            "ORDER BY rule_type ASC, asset_id ASC NULLS FIRST"
+        )
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+    def notification_already_sent(self, dedupe_key: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM notifications WHERE dedupe_key = %s AND status = 'sent' LIMIT 1",
+                (dedupe_key,),
+            )
+            return cur.fetchone() is not None
+
+    def get_last_notification_fired_at(
+        self,
+        rule_type: str,
+        asset_id: str | None = None,
+        scope_key: str = "",
+    ) -> datetime | None:
+        # Branch on NULL instead of `IS NOT DISTINCT FROM`: btree cannot serve that
+        # operator, so the branch is what keeps notifications_cooldown_idx usable.
+        if asset_id is None:
+            query = (
+                "SELECT max(fired_at) AS fired_at FROM notifications "
+                "WHERE rule_type = %s AND asset_id IS NULL AND scope_key = %s AND status = 'sent'"
+            )
+            params: tuple[Any, ...] = (rule_type, scope_key)
+        else:
+            query = (
+                "SELECT max(fired_at) AS fired_at FROM notifications "
+                "WHERE rule_type = %s AND asset_id = %s AND scope_key = %s AND status = 'sent'"
+            )
+            params = (rule_type, asset_id, scope_key)
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            row = cur.fetchone()
+        return row["fired_at"] if row else None
+
+    def insert_notification(
+        self,
+        rule_id: str | None,
+        rule_type: str,
+        asset_id: str | None,
+        scope_key: str,
+        channel: str,
+        dedupe_key: str,
+        severity: str,
+        title: str,
+        body: str,
+        status: str,
+        error_reason: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Insert a delivery-log row.
+
+        Returns the inserted row, or ``None`` when the partial unique index
+        rejected a duplicate *sent* delivery (the caller reports
+        ``raced_duplicate``). The index predicate must be restated here for
+        Postgres to infer ``notifications_dedupe_sent_key``.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO notifications
+                    (rule_id, rule_type, asset_id, scope_key, channel, dedupe_key,
+                     severity, title, body, status, error_reason, payload)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (dedupe_key) WHERE status = 'sent' DO NOTHING
+                RETURNING *
+                """,
+                (
+                    rule_id,
+                    rule_type,
+                    asset_id,
+                    scope_key,
+                    channel,
+                    dedupe_key,
+                    severity,
+                    title,
+                    body,
+                    status,
+                    error_reason,
+                    Jsonb(_json_safe(payload or {})),
+                ),
+            )
+            return cur.fetchone()
+
+    def get_latest_price_timestamps(self) -> list[dict[str, Any]]:
+        """One row per asset for the staleness check -- including assets with
+        zero prices, distinguished from stale via the LEFT JOIN."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT a.id AS asset_id, a.ticker, max(p.timestamp) AS latest_price_at "
+                "FROM assets a LEFT JOIN prices p ON p.asset_id = a.id "
+                "GROUP BY a.id, a.ticker ORDER BY a.ticker ASC"
+            )
+            return cur.fetchall()
+
     # -- Schema introspection --------------------------------------------------
 
     def relation_exists(self, name: str) -> bool:

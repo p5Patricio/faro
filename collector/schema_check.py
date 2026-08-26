@@ -22,6 +22,8 @@ REQUIRED_ML_RELATIONS = (
     "paper_trading_runs",
     "paper_trading_events",
     "risk_profiles",
+    "notification_rules",
+    "notifications",
 )
 
 
