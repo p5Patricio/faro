@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import json
 
-from ops.notify_operational_job import build_notification_payload, send_notification
+import requests
+
+from ops.notify_operational_job import (
+    build_notification_payload,
+    dispatch_notification,
+    load_reports,
+    send_notification,
+    send_telegram_notification,
+)
+from ops.telegram_notifier import TelegramConfig
 
 
 def test_build_notification_payload_summarizes_reports(tmp_path) -> None:
@@ -58,3 +67,122 @@ def test_send_notification_skips_when_webhook_is_missing() -> None:
     result = send_notification({"status": "success"}, None)
 
     assert result == {"sent": False, "reason": "missing_webhook_url"}
+
+
+# -- Threat matrix: third-party payload egress (task 6b.1, RED before dispatch_notification existed) --
+
+
+TOKEN = "123456789:AAFakeTokenForTestingPurposesOnly12"
+CHAT_ID = "-100999"
+
+
+class FakeResponse:
+    def __init__(self, status_code: int = 200) -> None:
+        self.status_code = status_code
+
+    def json(self) -> dict:
+        return {}
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class FakeSession:
+    def __init__(self, webhook_raises: Exception | None = None) -> None:
+        self.requests: list[dict] = []
+        self._webhook_raises = webhook_raises
+
+    def post(self, url: str, json: dict, timeout: int):
+        self.requests.append({"url": url, "json": json, "timeout": timeout})
+        if url == "https://example.com/webhook" and self._webhook_raises is not None:
+            raise self._webhook_raises
+        return FakeResponse(status_code=200)
+
+
+def _telegram_config() -> TelegramConfig:
+    return TelegramConfig(bot_token=TOKEN, chat_id=CHAT_ID)
+
+
+def test_dispatch_notification_never_puts_telegram_credentials_in_the_webhook_payload() -> None:
+    payload = {"title": "Operational job failed", "status": "failure", "failed": 1, "reports": []}
+    session = FakeSession()
+
+    dispatch_notification(
+        payload,
+        webhook_url="https://example.com/webhook",
+        telegram_config=_telegram_config(),
+        session=session,
+        sleep=lambda *_args: None,
+    )
+
+    webhook_calls = [call for call in session.requests if call["url"] == "https://example.com/webhook"]
+    assert len(webhook_calls) == 1
+    body = json.dumps(webhook_calls[0]["json"])
+    assert TOKEN not in body
+    assert CHAT_ID not in body
+    assert webhook_calls[0]["json"] == payload
+
+
+def test_dispatch_notification_webhook_failure_does_not_suppress_telegram() -> None:
+    payload = {"title": "Operational job failed", "status": "failure", "failed": 1, "reports": []}
+    session = FakeSession(webhook_raises=requests.ConnectionError("webhook down"))
+
+    result = dispatch_notification(
+        payload,
+        webhook_url="https://example.com/webhook",
+        telegram_config=_telegram_config(),
+        session=session,
+        sleep=lambda *_args: None,
+    )
+
+    telegram_calls = [call for call in session.requests if "api.telegram.org" in call["url"]]
+    assert len(telegram_calls) == 1
+    assert result["webhook"]["sent"] is False
+    assert result["telegram"]["sent"] is True
+
+
+def test_dispatch_notification_both_transports_unconfigured_are_two_no_ops() -> None:
+    payload = {"title": "Operational job ok", "status": "success", "failed": 0, "reports": []}
+    session = FakeSession()
+
+    result = dispatch_notification(
+        payload,
+        webhook_url=None,
+        telegram_config=None,
+        session=session,
+        sleep=lambda *_args: None,
+    )
+
+    assert result == {
+        "webhook": {"sent": False, "reason": "missing_webhook_url"},
+        "telegram": {"sent": False, "reason": "missing_telegram_config"},
+    }
+    assert session.requests == []
+
+
+def test_send_telegram_notification_renders_payload_and_delegates_to_transport() -> None:
+    payload = {"title": "Operational job failed", "status": "failure", "failed": 2, "reports": []}
+    session = FakeSession()
+
+    result = send_telegram_notification(payload, _telegram_config(), session=session, sleep=lambda *_args: None)
+
+    assert result["sent"] is True
+    assert len(session.requests) == 1
+    assert "Failed: 2" in session.requests[0]["json"]["text"]
+
+
+def test_load_reports_returns_raw_parsed_json_keyed_by_filename(tmp_path) -> None:
+    (tmp_path / "market_data_job.json").write_text(json.dumps({"attempted": 1, "failed": 1}), encoding="utf-8")
+
+    reports = load_reports(tmp_path)
+
+    assert reports == {"market_data_job.json": {"attempted": 1, "failed": 1}}
+
+
+def test_load_reports_marks_unreadable_files_without_raising(tmp_path) -> None:
+    (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
+
+    reports = load_reports(tmp_path)
+
+    assert "broken.json" in reports
+    assert "unreadable_report" in str(reports["broken.json"])
