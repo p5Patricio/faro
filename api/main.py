@@ -18,6 +18,12 @@ from brain.paper_trading import PaperTradingConfig, run_paper_trading
 from brain.risk import RiskPolicy, apply_risk_policy
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.schema_check import check_relations
+from ops.notification_rules import (
+    DEFAULT_MAX_PRICE_AGE_HOURS,
+    DEFAULT_MIN_ACCURACY,
+    DEFAULT_MIN_FEEDBACK_SAMPLES,
+    DEFAULT_MIN_MEAN_OUTCOME_RETURN,
+)
 
 
 APP_CONFIG = AppConfig.from_env()
@@ -289,10 +295,10 @@ def get_feedback_summary(
 @app.get("/api/alerts/{ticker}")
 def get_operational_alerts(
     ticker: str,
-    max_price_age_hours: float = Query(default=72.0, gt=0),
-    min_feedback_samples: int = Query(default=20, ge=1, le=1000),
-    min_accuracy: float = Query(default=0.45, ge=0, le=1),
-    min_mean_outcome_return: float = Query(default=0.0, ge=-1, le=1),
+    max_price_age_hours: float = Query(default=DEFAULT_MAX_PRICE_AGE_HOURS, gt=0),
+    min_feedback_samples: int = Query(default=DEFAULT_MIN_FEEDBACK_SAMPLES, ge=1, le=1000),
+    min_accuracy: float = Query(default=DEFAULT_MIN_ACCURACY, ge=0, le=1),
+    min_mean_outcome_return: float = Query(default=DEFAULT_MIN_MEAN_OUTCOME_RETURN, ge=-1, le=1),
     repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):

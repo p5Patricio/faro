@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import inspect
+
 import pandas as pd
 from fastapi.testclient import TestClient
 
 from app_config import AppConfig
-from api.main import app, get_app_config, get_repository
+from api.main import app, get_app_config, get_operational_alerts, get_repository
 from collector.local_repository import LocalPostgresRepository
+from ops.notification_rules import (
+    DEFAULT_MAX_PRICE_AGE_HOURS,
+    DEFAULT_MIN_ACCURACY,
+    DEFAULT_MIN_FEEDBACK_SAMPLES,
+    DEFAULT_MIN_MEAN_OUTCOME_RETURN,
+)
 
 
 class FakeRepository:
@@ -559,6 +567,18 @@ def test_feedback_summary_endpoint_returns_empty_demo_report() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert response.json()["summary"]["evaluated_predictions"] == 0
+
+
+def test_operational_alerts_endpoint_defaults_match_notification_rules_constants() -> None:
+    """Req: Degradation Thresholds Share One Default Source. The endpoint's
+    `Query(default=...)` values must be the exact `ops.notification_rules`
+    constants (a compile-time import), never a duplicated literal, so the two
+    can never silently drift."""
+    parameters = inspect.signature(get_operational_alerts).parameters
+    assert parameters["max_price_age_hours"].default.default == DEFAULT_MAX_PRICE_AGE_HOURS
+    assert parameters["min_feedback_samples"].default.default == DEFAULT_MIN_FEEDBACK_SAMPLES
+    assert parameters["min_accuracy"].default.default == DEFAULT_MIN_ACCURACY
+    assert parameters["min_mean_outcome_return"].default.default == DEFAULT_MIN_MEAN_OUTCOME_RETURN
 
 
 def test_operational_alerts_endpoint_returns_ok_when_thresholds_pass() -> None:
