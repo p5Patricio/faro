@@ -5,6 +5,7 @@ import json
 import requests
 
 from ops.notify_operational_job import (
+    _parse_failed_steps,
     build_notification_payload,
     dispatch_notification,
     load_reports,
@@ -186,3 +187,17 @@ def test_load_reports_marks_unreadable_files_without_raising(tmp_path) -> None:
 
     assert "broken.json" in reports
     assert "unreadable_report" in str(reports["broken.json"])
+
+
+# -- Task 7: --failed-steps CLI parsing (ops.run_local_scheduler gap-filling) --
+
+
+def test_parse_failed_steps_none_or_empty_stays_none() -> None:
+    assert _parse_failed_steps(None) is None
+    assert _parse_failed_steps("") is None
+    assert _parse_failed_steps("   ,  ,") is None
+
+
+def test_parse_failed_steps_splits_comma_joined_names_and_strips_whitespace() -> None:
+    assert _parse_failed_steps("schema_check") == ["schema_check"]
+    assert _parse_failed_steps("schema_check, market_data") == ["schema_check", "market_data"]

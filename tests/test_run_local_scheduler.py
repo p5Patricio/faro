@@ -328,6 +328,95 @@ def test_run_writes_a_tee_log_file(tmp_path: Path) -> None:
     assert "job output" in content
 
 
+# ---------------------------------------------------------------------------
+# 7.3/7.4: --failed-steps gap-filling for a pre-report step failure
+# ---------------------------------------------------------------------------
+
+
+def test_run_appends_failed_steps_for_a_step_that_fails_before_writing_a_report(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """collector.schema_check never writes a --out report at all, so a
+    non-zero exit there is invisible to the notifier's report-derived
+    `failed > 0` check. The scheduler must append `--failed-steps` naming it
+    as a single, unsplit comma-joined argv element (design.md section 7-A)."""
+    monkeypatch.chdir(tmp_path)
+    captured_notify_argv: list[str] = []
+
+    class _Completed:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_runner(argv: list[str], **kwargs: object) -> _Completed:
+        module = argv[2]
+        if module == "ops.notify_operational_job":
+            captured_notify_argv.extend(argv)
+        if module == "collector.schema_check":
+            return _Completed(1)
+        return _Completed(0)
+
+    ns = parse_args(["--job", "market_data"])
+    run(ns, cwd=tmp_path, runner=fake_runner)
+
+    assert "--failed-steps" in captured_notify_argv
+    assert captured_notify_argv.count("--failed-steps") == 1
+    value_index = captured_notify_argv.index("--failed-steps") + 1
+    assert captured_notify_argv[value_index] == "schema_check"
+
+
+def test_run_does_not_append_failed_steps_when_failure_is_already_report_derived(
+    tmp_path: Path,
+) -> None:
+    """A step that exits 0 but writes a report showing `failed > 0` is
+    already covered by the notifier's existing report-derived detection --
+    `--failed-steps` must stay absent so job_failure's dedupe_key does not
+    gain a spurious extra discriminator."""
+    captured_notify_argv: list[str] = []
+
+    class _Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_runner(argv: list[str], **kwargs: object) -> _Completed:
+        if argv[2] == "ops.notify_operational_job":
+            captured_notify_argv.extend(argv)
+        if "--out" in argv:
+            out_path = Path(argv[argv.index("--out") + 1])
+            full_path = tmp_path / out_path
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+            full_path.write_text(
+                json.dumps({"attempted": 1, "succeeded": 0, "failed": 1}), encoding="utf-8"
+            )
+        return _Completed()
+
+    ns = parse_args(["--job", "market_data"])
+    run(ns, cwd=tmp_path, runner=fake_runner)
+
+    assert "--failed-steps" not in captured_notify_argv
+
+
+def test_run_does_not_append_failed_steps_when_everything_succeeds(tmp_path: Path) -> None:
+    captured_notify_argv: list[str] = []
+
+    class _Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_runner(argv: list[str], **kwargs: object) -> _Completed:
+        if argv[2] == "ops.notify_operational_job":
+            captured_notify_argv.extend(argv)
+        return _Completed()
+
+    ns = parse_args(["--job", "market_data"])
+    run(ns, cwd=tmp_path, runner=fake_runner)
+
+    assert "--failed-steps" not in captured_notify_argv
+
+
 def test_main_returns_run_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
 

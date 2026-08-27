@@ -269,9 +269,25 @@ def run(ns: argparse.Namespace, *, cwd: Path = REPO_ROOT, runner: Runner = subpr
     primary_ok = all(result.ok for result in results)
     status = "success" if primary_ok else "failure"
 
+    # Task 7.3 (design.md section 7-A): a step that exits non-zero *before*
+    # writing its own report JSON -- `collector.schema_check` never writes
+    # one at all, and any other step can crash before its own `json.dump` --
+    # leaves `report_failed == 0` even though the step failed, so the
+    # notifier's report-derived `failed > 0` check cannot see it. Name these
+    # steps explicitly so `ops.notification_dispatch`'s job_failure rule
+    # still fires; a step whose own report already shows `failed > 0` needs
+    # no help here.
+    pre_report_failed_steps = [
+        result.name for result in results if result.returncode != 0 and result.report_failed == 0
+    ]
+
     notify_ok = True
     if not ns.no_notify:
         notify_args = ["--reports-dir", str(reports_dir), "--status", status, "--job-mode", ns.job]
+        if pre_report_failed_steps:
+            # Single unsplit argv element (D13): a comma-joined string, not
+            # one `--failed-steps` per step name.
+            notify_args += ["--failed-steps", ",".join(pre_report_failed_steps)]
         notify_result = run_step("notify", "ops.notify_operational_job", notify_args, cwd=cwd, runner=runner)
         results.append(notify_result)
         notify_ok = notify_result.returncode == 0

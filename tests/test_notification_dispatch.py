@@ -418,6 +418,41 @@ def test_job_failure_events_nothing_failed_emits_nothing() -> None:
     assert events == []
 
 
+# -- 7.3: pre-report failed_steps gap-filling (ops.run_local_scheduler --failed-steps) --
+
+
+def test_job_failure_events_fires_from_failed_steps_alone_when_no_report_shows_it() -> None:
+    """collector.schema_check crashes with no --out report at all: reports is
+    empty, so only the scheduler-supplied failed_steps name can surface the
+    failure."""
+    now = datetime(2026, 1, 16, tzinfo=timezone.utc)
+    rule = _dispatch_rule("job_failure")
+
+    events = notification_dispatch._job_failure_events(
+        rule, {}, job_mode="market_data", failed_steps=["schema_check"], now=now
+    )
+
+    assert len(events) == 1
+    assert "schema_check" in events[0].dedupe_key
+    assert "schema_check" in events[0].body
+
+
+def test_job_failure_events_merges_report_derived_and_failed_steps_without_double_counting() -> None:
+    now = datetime(2026, 1, 16, tzinfo=timezone.utc)
+    reports = {"market_data_job.json": {"failed": 2}}
+    rule = _dispatch_rule("job_failure")
+
+    events = notification_dispatch._job_failure_events(
+        rule, reports, job_mode="market_data", failed_steps=["market_data_job.json", "paper_trading"], now=now
+    )
+
+    assert len(events) == 1
+    body = events[0].body
+    assert body.startswith("3 step(s) failed")  # 2 report-derived + 1 new from failed_steps
+    assert "paper_trading" in events[0].dedupe_key
+    assert "market_data_job.json" in events[0].dedupe_key
+
+
 # -- 6a.5: dedupe-first-then-cooldown suppression semantics, real test DB --
 
 
@@ -616,6 +651,36 @@ def test_dispatch_notifications_end_to_end_job_failure_sends_once_and_dedupes_on
     assert second["outcomes"][0]["outcome"] == "deduped"
 
     dedupe_key = first["outcomes"][0]["dedupe_key"]
+    assert repository.notification_already_sent(dedupe_key) is True
+
+
+def test_dispatch_notifications_end_to_end_job_failure_from_failed_steps_writes_a_notifications_row(
+    repository: LocalPostgresRepository,
+) -> None:
+    """Task 7: proves the `ops.run_local_scheduler` --failed-steps seam
+    reaches `ops.notification_dispatch`'s dedupe/cooldown/send pipeline and
+    produces a real `notifications` row with `rule_type = 'job_failure'`,
+    even when no report JSON shows `failed > 0` -- the exact gap `--out`-less
+    steps like `collector.schema_check` leave (design.md section 7-A)."""
+    session = FakeDispatchSession()
+    now = datetime(2026, 1, 17, tzinfo=timezone.utc)
+
+    result = notification_dispatch.dispatch_notifications(
+        repository,
+        reports={},
+        failed_steps=["schema_check"],
+        telegram_config=_telegram_config(),
+        rule_types={"job_failure"},
+        now=now,
+        session=session,
+        sleep=lambda *_args: None,
+    )
+
+    assert len(session.requests) == 1
+    assert result["outcomes"][0]["outcome"] == "sent"
+
+    dedupe_key = result["outcomes"][0]["dedupe_key"]
+    assert "schema_check" in dedupe_key
     assert repository.notification_already_sent(dedupe_key) is True
 
 

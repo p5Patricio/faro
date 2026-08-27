@@ -143,6 +143,7 @@ def _dispatch_rule_notifications(
     reports_dir: str | Path,
     *,
     job_mode: str | None,
+    failed_steps: list[str] | None = None,
     telegram_config: TelegramConfig | None,
 ) -> dict[str, Any]:
     """Connect to the local database and run `ops.notification_dispatch`'s
@@ -161,6 +162,7 @@ def _dispatch_rule_notifications(
             repository,
             reports=reports,
             job_mode=job_mode,
+            failed_steps=failed_steps,
             telegram_config=telegram_config,
         )
     except Exception as error:
@@ -174,6 +176,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reports-dir", default="reports")
     parser.add_argument("--status", default=os.getenv("GITHUB_JOB_STATUS", "unknown"))
     parser.add_argument("--job-mode", default=os.getenv("JOB_MODE"))
+    parser.add_argument(
+        "--failed-steps",
+        default=None,
+        help=(
+            "Comma-joined names of scheduler steps that exited non-zero before "
+            "writing their own report JSON (ops.run_local_scheduler task 7.3). "
+            "Fills the job_failure gap the report-derived failed>0 check cannot "
+            "see; absent, that report-derived check is the sole detection path."
+        ),
+    )
     parser.add_argument("--webhook-url", default=os.getenv("OPERATIONAL_WEBHOOK_URL"))
     parser.add_argument("--run-url", default=os.getenv("GITHUB_RUN_URL"))
     parser.add_argument("--repository", default=os.getenv("GITHUB_REPOSITORY"))
@@ -188,6 +200,16 @@ def parse_args() -> argparse.Namespace:
         help="Skip ops.notification_dispatch's rule engine this run",
     )
     return parser.parse_args()
+
+
+def _parse_failed_steps(raw: str | None) -> list[str] | None:
+    """Split `--failed-steps`' comma-joined argv value into step names,
+    dropping blanks; `None`/empty stays `None` (report-derived detection
+    only, task 7's degrade-gracefully default)."""
+    if not raw:
+        return None
+    steps = [step.strip() for step in raw.split(",") if step.strip()]
+    return steps or None
 
 
 def main() -> None:
@@ -214,6 +236,7 @@ def main() -> None:
         notification["rules"] = _dispatch_rule_notifications(
             args.reports_dir,
             job_mode=args.job_mode,
+            failed_steps=_parse_failed_steps(args.failed_steps),
             telegram_config=telegram_config,
         )
 

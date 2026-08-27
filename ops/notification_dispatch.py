@@ -58,6 +58,7 @@ def dispatch_notifications(
     *,
     reports: dict[str, Any] | None = None,
     job_mode: str | None = None,
+    failed_steps: list[str] | None = None,
     telegram_config: TelegramConfig | None = None,
     rule_types: set[str] | None = None,
     now: datetime | None = None,
@@ -71,6 +72,14 @@ def dispatch_notifications(
     example, to isolate a single trigger in a test or a future targeted
     invocation); the default ``None`` evaluates every active rule, matching
     design.md's full four-trigger dispatch loop.
+
+    ``failed_steps`` (task 7.3) names scheduler steps that exited non-zero
+    *before* writing their own report JSON -- ``collector.schema_check`` has
+    no ``--out`` report at all, and any step can crash before it manages to
+    write one. The report-derived ``failed > 0`` check in
+    ``_job_failure_events`` cannot see either case, so the scheduler passes
+    these names through explicitly via ``ops.notify_operational_job
+    --failed-steps``.
     """
     now = now or datetime.now(tz=UTC)
     reports = reports or {}
@@ -89,7 +98,14 @@ def dispatch_notifications(
     outcomes: list[dict[str, Any]] = []
     for rule in rules:
         try:
-            events = _events_for_rule(rule, repository=repository, reports=reports, job_mode=job_mode, now=now)
+            events = _events_for_rule(
+                rule,
+                repository=repository,
+                reports=reports,
+                job_mode=job_mode,
+                failed_steps=failed_steps,
+                now=now,
+            )
         except Exception as error:
             outcomes.append(
                 {"rule_type": rule.get("rule_type"), "outcome": "evaluation_error", "detail": str(error)}
@@ -192,11 +208,12 @@ def _events_for_rule(
     repository: Any,
     reports: dict[str, Any],
     job_mode: str | None,
+    failed_steps: list[str] | None,
     now: datetime,
 ) -> list[NotificationEvent]:
     rule_type = rule.get("rule_type")
     if rule_type == "job_failure":
-        return _job_failure_events(rule, reports, job_mode=job_mode, now=now)
+        return _job_failure_events(rule, reports, job_mode=job_mode, failed_steps=failed_steps, now=now)
     if rule_type == "signal_transition":
         return _signal_transition_events(rule, reports, repository=repository)
     if rule_type == "model_degradation":
@@ -207,7 +224,12 @@ def _events_for_rule(
 
 
 def _job_failure_events(
-    rule: dict[str, Any], reports: dict[str, Any], *, job_mode: str | None, now: datetime
+    rule: dict[str, Any],
+    reports: dict[str, Any],
+    *,
+    job_mode: str | None,
+    failed_steps: list[str] | None = None,
+    now: datetime,
 ) -> list[NotificationEvent]:
     if rule.get("asset_id") is not None:
         # A job failure is not asset-scoped; only the global seeded rule applies.
@@ -223,6 +245,17 @@ def _job_failure_events(
         failed_count += report_failed
         if report_failed:
             failing_steps.append(name)
+
+    # A step that crashes before writing its own report JSON (for example
+    # `collector.schema_check`, which never writes one, or any step that
+    # dies before its own `json.dump`) has no `failed` key any report can
+    # show. The scheduler passes such step names through explicitly (task
+    # 7.3, design.md section 7-A); merge rather than overwrite so a step
+    # already counted via its report is never double-counted.
+    for step_name in failed_steps or ():
+        if step_name not in failing_steps:
+            failing_steps.append(step_name)
+            failed_count += 1
 
     event = evaluate_job_failure(
         job_mode=job_mode,
