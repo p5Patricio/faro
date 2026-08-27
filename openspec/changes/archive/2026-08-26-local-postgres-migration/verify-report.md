@@ -167,3 +167,62 @@ given the C1 fix above.
 3. An rg success-criterion grep scoped to specific file extensions (py/ts/tsx/yml) can pass cleanly while a root-level package.json devDependency tied to the same vendor remains completely unaffected by that grep scope.
 4. An untested declared spec scenario is CRITICAL under verify hard rules even when the underlying code behavior pre-dates the SDD change and is demonstrably correct by direct code reading.
 5. Gitignored local CLI cache directories, such as supabase/.temp/, can make a deleted-in-git directory appear to still exist on disk; git ls-files on that directory is the correct check for whether a deletion actually landed in the tracked repository state.
+
+
+## Re-verification (2026-08-26, post-remediation)
+
+Re-ran verification against the remediation batch (commit `0e41de3`). All three
+original CRITICAL findings and the W1 warning are confirmed genuinely closed with
+independent evidence, not just trusted from the remediation prose:
+
+- **C1 closed** — `specs/local-persistence/spec.md` now has a proper
+  `## REMOVED Requirements` section for "One-Time Supabase Data Migration", with
+  `(Reason: ...)` citing the 2026-08-25 zero-rows decision and the widened asset
+  universe, plus a `(Migration: ...)` note stating no data migrates and the script
+  was never created. `proposal.md`'s Success Criteria checkbox no longer asserts a
+  false claim — the "Row counts...match" line is replaced with
+  `[x] N/A — no source data existed to migrate` with rationale, and the "Data &
+  Profile Migration Decisions" section carries a "Superseded 2026-08-25" note
+  pointing at the same REMOVED requirement so the two artifacts no longer contradict
+  each other.
+- **C2 closed** — `tests/test_api.py::test_risk_profile_endpoint_rejects_invalid_scope_type`
+  exists (line 940), calls `GET /api/risk-profile?scope_type=bogus`, and asserts
+  `response.status_code == 422`. Ran in isolation:
+  `py -3.14 -m pytest tests/test_api.py -k invalid_scope_type -v` → 1 passed. Also
+  green inside the full suite run below.
+- **C3 closed** — `git show HEAD:.env.example` confirms zero occurrences of
+  `SUPABASE_URL`, `SUPABASE_KEY`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, and
+  both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` placeholder lines are present.
+  `tasks.md` task 0.2 is checked, and its text matches the file's actual content
+  exactly (no drift between the checkbox rationale and reality). `rg -n "^\s*-\s*\[ \]"
+  tasks.md` returns zero matches — no unchecked task boxes remain anywhere in the file.
+- **W1 closed** — `git ls-files package.json package-lock.json` returns empty (not
+  tracked), `ls package.json`/`ls package-lock.json` both fail with "No such file or
+  directory", and `node_modules` is absent from the repo root. The deletion is
+  committed (`0e41de3`, `git log --diff-filter=D --name-only` confirms both paths),
+  not merely staged or left as an uncommitted working-tree change.
+
+**Full suite re-run (real, independent execution, not trusted from the remediation
+batch's own report):**
+
+```
+py -3.14 -m pytest -q
+243 passed, 1 warning in 36.87s
+```
+
+243 passed matches the expected count exactly (241 original baseline + 2 new tests
+across the `local-postgres-migration` and `telegram-notifications` remediation
+batches; this change contributes 1 of those 2 —
+`test_risk_profile_endpoint_rejects_invalid_scope_type`). The pre-existing joblib
+core-count warning is unrelated and unchanged from the original verify pass.
+
+**Remaining open items (non-blocking, unchanged from original report):** W2 (Task
+Scheduler registration functional confirmation still not independently run) and W3
+(`openspec/config.yaml` stale Supabase narrative) remain open by design — both were
+explicitly out of this remediation batch's scope and are WARNING-level, not CRITICAL.
+Neither blocks archive.
+
+**Updated Final Verdict**: PASS. All three original CRITICAL findings are closed
+with verifiable evidence (not just remediation-batch prose), the full test suite is
+green at the expected count, and no unchecked tasks remain. `state.yaml`
+`progress.verify` flipped from `pending` to `complete`.

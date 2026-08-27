@@ -350,3 +350,101 @@ the remaining +1 of the combined +2 across both changes this batch closed).
 
 `state.yaml`'s `progress.verify` is intentionally left untouched by this apply batch — re-running
 `sdd-verify` is required to confirm these fixes and flip it to `complete`.
+
+
+## Re-verification (post-remediation)
+
+**Re-verified**: 2026-08-26
+**Verdict**: PASS
+
+Re-ran this verify pass after the remediation batch documented in the "Remediation"
+section above. Confirmed each closure independently rather than trusting the remediation
+narrative:
+
+1. **CRITICAL #1 (untested "cooldown expiry re-arms the rule" scenario) — genuinely closed.**
+   Read the new test `test_process_event_cooldown_elapsed_proceeds_to_send` in
+   `tests/test_notification_dispatch.py` (lines 579-627) in full and confirmed it exercises
+   the previously-missing fourth branch, not a duplicate of an existing one:
+   - `rule = _dispatch_rule("model_degradation", cooldown_minutes=60)` — non-zero cooldown,
+     so `if cooldown_minutes:` in `_process_event` (`ops/notification_dispatch.py` line 154)
+     is entered (unlike `test_process_event_zero_cooldown_always_proceeds_past_the_cooldown_check`,
+     which uses `cooldown_minutes=0` and skips this block entirely).
+   - A prior `sent` row is inserted for the same `(rule_type=model_degradation, asset_id=None,
+     scope_key="model-a")` scope, then its `fired_at` is UPDATEd to `now - 2 hours` — so
+     `last_fired_at is not None` is True (unlike the "no prior row" branch), giving a real
+     prior-row read.
+   - `(now - last_fired_at) < timedelta(minutes=60)` evaluates to **False** (2 hours > 60
+     minutes), which is the exact opposite comparison outcome from
+     `test_process_event_cooldown_suppresses_and_is_never_persisted` (same rule type/scope,
+     but the prior row's `fired_at` is left at insert-time "now", well within its 1440-minute
+     cooldown, so the comparison is True and the event is suppressed).
+   - The test asserts `outcome["outcome"] == "sent"` and `len(session.requests) == 1`, which
+     only happens if execution falls through the `if` block to the `send_telegram_message`
+     call at line 166 — i.e., the rule was correctly re-armed after cooldown expiry.
+
+   This is genuinely the fourth, previously-uncovered branch (non-zero cooldown + prior row
+   exists + elapsed time exceeds the window), distinct from all three already-covered
+   branches. Ran it in isolation:
+   `py -3.14 -m pytest tests/test_notification_dispatch.py -k cooldown -v` → **4 passed**
+   (`test_get_last_notification_fired_at_sees_sent_row_within_cooldown`,
+   `test_process_event_zero_cooldown_always_proceeds_past_the_cooldown_check`,
+   `test_process_event_cooldown_elapsed_proceeds_to_send`,
+   `test_process_event_cooldown_suppresses_and_is_never_persisted`), 0 failed.
+
+   The "Per-Rule Cooldown Suppression" requirement's "Cooldown expiry re-arms the rule"
+   scenario is now **PASS** (previously UNTESTED/CRITICAL) in the spec compliance matrix.
+
+2. **WARNING #2 (dependency verify not yet run) — still open, does not block this change's
+   own verify.** `openspec/changes/local-postgres-migration/state.yaml` still shows
+   `progress.verify: pending` (no `verify-report.md` found for that change on disk yet) as
+   of this re-verify pass. Per this task's own instructions this is not treated as blocking —
+   already ruled "functionally satisfied" in the original verify pass, and this session
+   independently re-confirmed the full 243-test suite (which exercises the local Postgres
+   repository, migration runner, and scheduler this change depends on) passes against the
+   real local/test databases. Recommend running `sdd-verify` for `local-postgres-migration`
+   separately; not a gate on this change's own archive.
+
+3. **WARNING #3 (dead `min_confidence: 0.55` seed field) — accepted as closed-by-decision,
+   reasoning confirmed sound.** Independently re-read `ops/notification_rules.py` line 35
+   (`SEEDED_RULE_PARAMS["signal_transition"] = {"min_confidence": 0.55, "actions": ["BUY",
+   "SELL"]}`), `db/migrations/0007_notifications.sql` line 61 (the matching jsonb literal),
+   and `db/migrate.py` lines 104-109 (`checksum_for(migration) != recorded_checksum` raises
+   `migration_checksum_mismatch`). The remediation's reasoning holds: 0007 is already applied
+   against both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` (confirmed earlier in this
+   report's "Additional runtime evidence" section — "No pending migrations" on both DSNs),
+   so editing the already-applied SQL file in place would trip the checksum guard on the next
+   test-session fixture run; and `tests/test_notification_rules.py`'s drift test asserts
+   `SEEDED_RULE_PARAMS` and the migration's jsonb literals stay equal, so removing
+   `min_confidence` from only the Python side would break that guard. Leaving both as-is
+   (an unread but harmless config key, not a spec violation) is the correct call absent a new
+   migration file dedicated solely to dropping it. Accepted as closed, not re-flagged.
+
+4. **WARNING #4 (`.env.example` stale Supabase vars) — genuinely closed.** Confirmed via
+   `git show HEAD:.env.example`: current committed content has `LOCAL_DATABASE_URL`,
+   `TEST_DATABASE_URL`, and the two commented `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` lines,
+   with **no** `SUPABASE_URL`/`SUPABASE_KEY`/`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`
+   lines remaining. `git status --short -- .env.example` shows a clean working tree (no
+   uncommitted drift). Resolved as stated by the shared `local-postgres-migration`
+   remediation.
+
+5. **Full suite re-run, this session, real evidence.**
+   `py -3.14 -m pytest -q` (with `LOCAL_DATABASE_URL`/`TEST_DATABASE_URL` exported) →
+   **243 passed, 0 failed, 1 pre-existing unrelated warning (joblib core-count), 40.03s.**
+   Matches the exact expected count (241 baseline + 1 new cooldown test + 1 from the sibling
+   `local-postgres-migration` remediation batch).
+
+6. **Tasks re-check.** `openspec/changes/telegram-notifications/tasks.md` has zero `[ ]`
+   unchecked items — all 8 phases remain fully marked complete, matching apply-progress.md's
+   final status.
+
+### Updated Final Verdict
+
+**PASS.** The one CRITICAL finding is genuinely closed by a real, correctly-targeted test
+that exercises the previously-missing branch and passes at runtime. All 20 scenarios across
+both delta specs (operational-notifications: 13 requirements/20 scenarios read as
+12 requirements grouped, local-persistence: 2 requirements/5 scenarios) are now PASS. Of the
+4 WARNING items: 2 are genuinely fixed (min_confidence decision documented and sound is not
+a fix but an accepted non-issue; .env.example is fixed), 1 remains open but explicitly
+non-blocking per this task's own framing (sibling verify pending), and 1 is accepted
+closed-by-decision with confirmed-sound reasoning. No new issues found during re-verification.
+Full 243-test suite passes. `state.yaml`'s `progress.verify` is now set to `complete`.
