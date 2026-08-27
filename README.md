@@ -37,11 +37,11 @@ Cuando la API no puede conectarse a la base de datos local, la aplicacion muestr
 ```mermaid
 flowchart LR
   sources["Market data providers"] --> collector["collector"]
-  collector --> supabase["Supabase"]
-  supabase --> brain["brain: features, labels, training"]
+  collector --> postgres[("PostgreSQL local")]
+  postgres --> brain["brain: features, labels, training"]
   brain --> predictions["predictions + feedback"]
   predictions --> api["FastAPI"]
-  supabase --> api
+  postgres --> api
   api --> ui["React dashboard"]
 ```
 
@@ -51,8 +51,8 @@ flowchart LR
 | --- | --- |
 | `api/` | API HTTP con FastAPI. |
 | `brain/` | Features, labeling, entrenamiento, inferencia, feedback y backtesting. |
-| `collector/` | Descarga y carga de historicos hacia Supabase. |
-| `supabase/migrations/` | Esquema SQL para datos, modelos, predicciones y feedback. |
+| `collector/` | Descarga y carga de historicos hacia PostgreSQL local. |
+| `db/migrations/` | Esquema SQL para datos, modelos, predicciones y feedback. |
 | `ui/` | Frontend React + Vite + Tailwind. |
 | `tests/` | Pruebas automatizadas del sistema. |
 | `openspec/` | SDD/OpenSpec para cambios profesionales y requisitos activos. |

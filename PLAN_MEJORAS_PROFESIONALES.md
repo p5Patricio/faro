@@ -49,12 +49,12 @@ Esto evita una trampa comun: entrenar directamente sobre "si el modelo acerto o 
 | --- | --- | --- |
 | Validacion temporal | `TimeSeriesSplit` de scikit-learn esta pensado para datos ordenados temporalmente y evita evaluar con datos futuros. | Mantener walk-forward, agregar embargo/gap mas visible y reporte de leakage. |
 | Drift y monitoreo | Evidently permite evaluar drift de distribucion y monitorear datos/modelos. | Agregar reportes de drift por activo y feature set. |
-| Registro de modelos | MLflow Model Registry maneja modelos versionados, aliases, tags y metadata. | Mantener Supabase como registry operativo o integrar MLflow si crece la complejidad. |
+| Registro de modelos | MLflow Model Registry maneja modelos versionados, aliases, tags y metadata. | Mantener PostgreSQL local como registry operativo o integrar MLflow si crece la complejidad. |
 | Modelos tabulares | LightGBM y XGBoost son fuertes para datos tabulares y boosting eficiente. | Agregarlos como candidatos opcionales, no reemplazar todo. |
 | HPO | Optuna permite optimizacion automatica de hiperparametros con espacios dinamicos. | Agregar HPO acotado por tiempo y presupuesto para candidatos finalistas. |
 | Observabilidad | OpenTelemetry estandariza trazas, metricas y logs. | Instrumentar API/jobs cuando el sistema tenga trafico real. |
 | Seguridad CI/CD | GitHub recomienda hardening de workflows y minimo privilegio. | Agregar CI completo, ambientes protegidos y reglas para secretos. |
-| RLS | Supabase recomienda RLS como defensa en profundidad. | Mantener RLS y auditar politicas con cada nueva tabla. |
+| RLS | RLS es relevante en bases de datos multi-usuario/multi-tenant (recomendacion historica de Supabase, ya removido del stack). | No aplica: operacion local de un solo operador sin RLS. Reevaluar solo si vuelve un modelo multiusuario. |
 | Riesgo IA | NIST AI RMF enfatiza gobernanza, medicion y gestion del riesgo. | Crear politica de promocion, rollback, auditoria y aprobacion humana. |
 | Paper trading externo | Alpaca ofrece paper trading por API para simular actividad y balance. | Integrarlo despues de consolidar paper trading interno. |
 
@@ -85,7 +85,7 @@ Objetivo: que cada push valide backend, frontend, formato y seguridad basica.
 Tareas:
 
 - Crear workflow `ci.yml` para `pytest`, schema-free unit tests, frontend lint/build.
-- Separar CI de jobs operativos para no depender de Supabase en cada PR.
+- Separar CI de jobs operativos para no depender de una base de datos compartida en cada PR.
 - Agregar `pip-audit` o `safety` como job informativo.
 - Agregar `npm audit` con nivel de severidad definido.
 - Agregar Dependabot para Python, npm y GitHub Actions.
@@ -108,7 +108,7 @@ Tareas:
 - Agregar endpoint `/api/data-quality/{ticker}`.
 - Mostrar panel de calidad de datos en frontend.
 - Implementar fallback de proveedor por activo: Binance, yfinance, Stooq, y futuro proveedor premium.
-- Guardar snapshots crudos en formato Parquet o Supabase Storage para auditoria.
+- Guardar snapshots crudos en formato Parquet o en el sistema de archivos local para auditoria.
 
 Criterio de salida:
 
@@ -158,7 +158,7 @@ Tareas:
 
 - Integrar Optuna para candidatos finalistas.
 - Definir presupuesto por activo: numero de trials, tiempo maximo, seed.
-- Guardar trials en Supabase o artifact JSON.
+- Guardar trials en PostgreSQL local o artifact JSON.
 - Evitar HPO en cada corrida diaria.
 - Ejecutar HPO solo en `full_retrain` semanal o manual.
 
@@ -212,7 +212,7 @@ Tareas:
 - Agregar estado: candidate, shadow, promoted, archived, rejected.
 - Agregar razon de promocion/rechazo.
 - Agregar rollback al ultimo modelo promovido sano.
-- Evaluar MLflow si Supabase se queda corto para lifecycle complejo.
+- Evaluar MLflow si PostgreSQL local se queda corto para lifecycle complejo.
 
 Criterio de salida:
 
@@ -262,12 +262,12 @@ Tareas:
 - Agregar request IDs.
 - Instrumentar FastAPI y jobs con OpenTelemetry.
 - Medir latencia de endpoints, errores por proveedor, duracion de jobs.
-- Guardar resumen de workflows en Supabase.
+- Guardar resumen de workflows en PostgreSQL local.
 - Enviar notificaciones reales a Slack, Discord, Teams o endpoint propio.
 
 Criterio de salida:
 
-- Si falla ingesta, inferencia o Supabase, queda claro donde y por que.
+- Si falla ingesta, inferencia o la base de datos, queda claro donde y por que.
 
 ### Bloque 13 - Seguridad y Gobierno
 
@@ -366,8 +366,8 @@ Semana 4:
 | Decision | Recomendacion |
 | --- | --- |
 | Self-learning | Automatizado, pero con promocion controlada, nunca auto-reemplazo sin pruebas. |
-| Base de datos | Mantener Supabase. Ya cubre datos, auth, storage y RLS. |
-| Registry | Seguir con Supabase a corto plazo; evaluar MLflow si crece el lifecycle. |
+| Base de datos | Mantener PostgreSQL local. Cubre datos y almacenamiento de artefactos; sin auth ni RLS (operador unico). |
+| Registry | Seguir con PostgreSQL local a corto plazo; evaluar MLflow si crece el lifecycle. |
 | Modelos | Agregar boosting avanzado, pero conservar baselines. |
 | Broker | No live trading hasta validar 6 a 12 meses o muestra suficiente. |
 | Drift | Implementar antes de aumentar agresividad de modelos. |
