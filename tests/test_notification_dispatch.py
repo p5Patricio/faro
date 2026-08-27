@@ -576,6 +576,57 @@ def test_process_event_zero_cooldown_always_proceeds_past_the_cooldown_check(
     assert outcome["outcome"] == "sent"
 
 
+def test_process_event_cooldown_elapsed_proceeds_to_send(
+    repository: LocalPostgresRepository,
+    db_connection,
+) -> None:
+    """Req: Per-Rule Cooldown Suppression -- 'Cooldown expiry re-arms the
+    rule' scenario. A prior *sent* row exists for this (rule_type, asset_id,
+    scope_key), but its fired_at is older than cooldown_minutes, so the
+    cooldown window has elapsed and the rule must fire again."""
+    now = datetime.now(timezone.utc)
+    session = FakeDispatchSession()
+    rule = _dispatch_rule("model_degradation", cooldown_minutes=60)
+
+    repository.insert_notification(
+        rule_id=None,
+        rule_type="model_degradation",
+        asset_id=None,
+        scope_key="model-a",
+        channel="telegram",
+        dedupe_key="model_degradation|-|model-a|low_accuracy|2020-01-01",
+        severity="warning",
+        title="prev",
+        body="prev body",
+        status="sent",
+    )
+    two_hours_ago = now - timedelta(hours=2)
+    with db_connection.cursor() as cur:
+        cur.execute(
+            "UPDATE notifications SET fired_at = %s WHERE dedupe_key = %s",
+            (two_hours_ago, "model_degradation|-|model-a|low_accuracy|2020-01-01"),
+        )
+
+    new_event = NotificationEvent(
+        rule_type="model_degradation",
+        # A different dedupe_key (different bucket) so only the cooldown
+        # check, not dedupe, is exercised here.
+        dedupe_key=f"model_degradation|-|model-a|low_accuracy|{now.date().isoformat()}",
+        scope_key="model-a",
+        title="Model A degraded again",
+        body="body",
+        severity="warning",
+    )
+
+    outcome = notification_dispatch._process_event(
+        new_event, rule=rule, repository=repository, telegram_config=_telegram_config(),
+        now=now, session=session, sleep=lambda *_args: None,
+    )
+
+    assert outcome["outcome"] == "sent"
+    assert len(session.requests) == 1
+
+
 def test_process_event_cooldown_suppresses_and_is_never_persisted(
     repository: LocalPostgresRepository,
 ) -> None:
