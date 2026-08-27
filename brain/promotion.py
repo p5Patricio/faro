@@ -9,7 +9,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from brain.candidate_matrix import load_candidate_datasets_from_supabase
+from brain.candidate_matrix import load_candidate_datasets
 from brain.datasets import build_feature_frame_from_materialized
 from brain.features import feature_columns_for_set
 from brain.inference import PredictionPolicy, predict_actions
@@ -98,7 +98,7 @@ def promote_candidate_from_report(
     horizon = int(report["horizon"])
     min_confidence = float(candidate.get("min_confidence") or 0.55)
     feature_columns = feature_columns_for_set(feature_set)
-    datasets, skipped_assets = load_candidate_datasets_from_supabase(
+    datasets, skipped_assets = load_candidate_datasets(
         repository,
         feature_set=feature_set,
         label_method=label_method,

@@ -760,3 +760,184 @@ Three commits, one per phase, left local (not pushed) per delivery instructions:
 1. `feat(db): add local Postgres schema and migration runner` (Phase 1)
 2. `feat(collector): add LocalPostgresRepository` (Phase 2)
 3. `test(collector): add LocalPostgresRepository test suite` (Phase 3)
+
+---
+
+## Batch 5 — Phase 10 (this batch, FINAL phase — closes local-postgres-migration)
+
+### Status: Phase 10 (Final Removal) complete and verified against the live local database. This is the last phase of `local-postgres-migration`; the change is now functionally complete (Phase 4 remains explicitly SKIPPED, documented above).
+
+Environment: `LOCAL_DATABASE_URL`/`TEST_DATABASE_URL` exported to `ia_inversiones`/`ia_inversiones_test`
+on `localhost:5432`. Baseline entering this batch, confirmed by running `py -3.14 -m pytest -q`
+with both DSNs exported before touching any file: **265 passed, 0 failed** (matches the count
+Batch 4 ended with).
+
+### 10.1-10.4 — Deletions
+
+`git rm` (not plain `rm`, to stage the deletions directly):
+- `.github/workflows/operational-jobs.yml` — confirmed genuinely orphaned before deleting: its
+  own retirement comment block states it is "kept only until the local replacement lands, then
+  deleted", and the local replacement (`ops/run_local_scheduler.py` + Task Scheduler) landed in
+  Batch 4/Phase 9.
+- `render.yaml` — confirmed genuinely orphaned: a Supabase-coupled Render.com production deploy
+  config (`SUPABASE_URL`/`SUPABASE_KEY` as `sync: false` secrets) with no replacement needed,
+  since this project no longer targets a hosted hosted-Postgres production deploy per the
+  migration's own premise.
+- `collector/supabase_repository.py` — zero remaining callers confirmed via
+  `grep -rn "supabase_repository\|SupabaseRepository\|SupabaseConfig" --include="*.py"` before
+  deletion: only `collector/local_repository.py` (comparative docstrings, since cleaned — see
+  10.6 below) and `tests/test_supabase_repository.py` (deleted in the same commit) referenced it.
+- `supabase/` entirely — `config.toml` + all 6 files under `migrations/`. All six were already
+  ported to `db/migrations/0001-0004*.sql` in Phase 1; per design.md line 106, "All six source
+  files plus `supabase/` are deleted in the final slice."
+
+### 10.5 — Confirmed no-op
+
+`ops/migrate_supabase_to_local.py` and `tests/test_migrate_supabase_to_local.py` do not exist in
+this repository — confirmed via direct `ls`/file-not-found before attempting any delete, not
+assumed. This is expected: Phase 4 (tasks 4.1-4.4) was SKIPPED in an earlier batch because the
+Supabase project had no ML data to migrate, so this script was never created. Task 10.5 is
+therefore a genuine no-op, marked `[x]` with this note rather than silently skipped.
+
+Also deleted `tests/test_supabase_repository.py` (32 tests) as part of this unit — not explicitly
+numbered in tasks.md's Phase 10 list, but confirmed in-scope by both design.md line 267
+("`tests/test_supabase_repository.py` -> `tests/test_local_repository.py`. Delete
+`FakeResponse`/`FakeSession`/`make_repository`...") and the batch handoff's own instruction to
+check design.md/tasks.md's Affected Areas before deleting it. It tests a module deleted in the
+same commit (10.3); its coverage was already fully superseded by
+`tests/test_local_repository.py` back in Phase 3.
+
+### 10.6 — Repo-wide `supabase` grep-and-clean
+
+First pass: `rg -i supabase --glob '*.py' --glob '*.ts' --glob '*.tsx' --glob '*.yml' -l` (before
+excluding `openspec/changes/**`) surfaced, beyond the files already deleted above, 8 live files
+with matches. Investigated each:
+
+- `tests/test_brain_pipeline.py`, `brain/run_retraining_job.py`, `brain/retraining_job.py`,
+  `brain/promotion.py`, `brain/candidate_matrix.py`, `brain/evaluate_candidate_matrix_from_supabase.py` —
+  all centered on one naming leftover that pre-dates this migration's Phase 5 call-site swap:
+  the module `brain/evaluate_candidate_matrix_from_supabase.py` and the function
+  `brain.candidate_matrix.load_candidate_datasets_from_supabase`. Confirmed by reading both
+  files fully that neither actually talks to Supabase/PostgREST anymore — the module already
+  imports `collector.local_repository.{LocalPostgresConfig,LocalPostgresRepository}` (landed in
+  an earlier Phase 5 batch), so this was a pure stale name, not a missed call-site swap. Not
+  listed anywhere in design.md's Affected Areas (it predates the design's own file inventory),
+  but the batch handoff explicitly scoped 10.6 as "fix whatever you find (stray comments,
+  docstrings, variable names, leftover imports)" — a repo-wide grep-and-clean pass, not limited
+  to design.md's named list. Fixed by:
+  - `git mv brain/evaluate_candidate_matrix_from_supabase.py brain/evaluate_candidate_matrix.py`
+  - `brain/candidate_matrix.py`: `load_candidate_datasets_from_supabase` -> `load_candidate_datasets`
+  - Updated every call site: `brain/evaluate_candidate_matrix.py` (2 references: import + the
+    one call inside `main()`), `brain/promotion.py` (`promote_candidate_from_report`),
+    `brain/retraining_job.py` (`run_retraining_job`), `brain/run_retraining_job.py` (the
+    `DEFAULT_CONFIDENCE_THRESHOLDS` import), `tests/test_brain_pipeline.py` (3 identical
+    `monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", ...)`
+    lines, all retargeted to the new name via one `replace_all` edit), and `brain/README.md`
+    (one CLI-example line: `python -m brain.evaluate_candidate_matrix_from_supabase --ticker
+    BTC-USD ...` -> `python -m brain.evaluate_candidate_matrix --ticker BTC-USD ...`).
+  - Confirmed via `grep -rn "evaluate_candidate_matrix_from_supabase"` (excluding
+    `openspec/changes/`) that no reference survived the rename anywhere else in the repo.
+- `brain/datasets.py` — two docstrings said "Build a training dataset from Supabase
+  features_daily and labels_daily rows" and "Expand Supabase feature JSON rows into timestamp +
+  feature columns". Reworded to "materialized"/"materialized feature JSON rows" — accurate
+  either way (both were always describing the *shape* of already-materialized rows passed in as
+  a `pd.DataFrame`, not literally fetching from Supabase inside this function), and removes the
+  vendor name with no behavior change.
+- `collector/local_repository.py` — 3 docstring references to `SupabaseRepository`/PostgREST
+  by name (the `_UUIDStrLoader` docstring, `LocalPostgresError`'s docstring mentioning
+  `RequestException`, and `LocalPostgresRepository`'s own class docstring "preserving
+  `SupabaseRepository`'s public contract"). All three were purely comparative/historical
+  prose describing why a design choice was made relative to a module that, as of 10.3, no
+  longer exists in this repository. Reworded each to describe the current contract on its own
+  terms (e.g., "Every id-returning repository method returns a plain string, matching this
+  module's own public contract regardless of caller") rather than by reference to a deleted
+  module. No functional change — docstring text only.
+
+Final verification, run twice (once mid-pass, once after all fixes):
+`rg -i supabase --glob '*.py' --glob '*.ts' --glob '*.tsx' --glob '*.yml' --glob
+'!openspec/changes/**' --glob '!.git/**' -l` — **exit code 1 (no matches), empty output**. Also
+ran the narrower `--glob '*.{py,ts,tsx,yml}'` grep via the IDE-integrated search tool with the
+same empty result. `openspec/changes/*/` was correctly left untouched (historical SDD planning
+docs describing the pre-migration Supabase-based design remain as history, per this batch's own
+scope instruction) — confirmed those are the only remaining `supabase` hits repo-wide via a
+grep with no exclusions at all.
+
+### 10.7 — Full offline run (all five commands, real output)
+
+All exported: `LOCAL_DATABASE_URL`/`TEST_DATABASE_URL` to the live local Postgres instance.
+
+1. `py -3.14 -m db.migrate` -> stdout: `No pending migrations.` (idempotent, exit 0 — every
+   migration from Phase 1 was already applied in earlier batches; this run applied zero new
+   ones, confirming the runner's own idempotency guarantee still holds after Phase 10's
+   deletions, which touched none of `db/migrations/` or `db/migrate.py`).
+2. `py -3.14 -m ops.run_local_scheduler --job market_data --tickers BTC-USD` -> exit 0. Three
+   steps ran in order: `schema_check` (all 12 `REQUIRED_ML_RELATIONS` `OK`, returncode 0),
+   `market_data` (argv `['...python.exe', '-m', 'collector.run_market_data_job',
+   '--assets-file', 'config/assets.core.json', '--feature-sets', 'technical_v2', '--out',
+   'reports\\market_data_job.json', '--tickers', 'BTC-USD']`, returncode 0, `report_failed: 0`),
+   `notify` (argv includes `--status success --job-mode market_data`, returncode 0, its own JSON
+   output shows `"dispatched": true, "evaluated_rules": 4, "outcomes": []` — the rule engine ran
+   for real against the live database with zero threshold crossings on this quiet run, and both
+   transports correctly reported `missing_webhook_url`/`missing_telegram_config` since neither
+   is configured in this shell session). This is the exact same command Batch 4 verified
+   Phase 9 with — re-run here to prove Phase 10's deletions (including the
+   `brain.candidate_matrix`/`brain.evaluate_candidate_matrix` rename, which the scheduler's
+   `market_data` job does not import, but the shared `collector.local_repository` module it does
+   import was directly edited in 10.6) introduced no import-time regression anywhere in the
+   scheduler's own call graph.
+3. `py -3.14 -m collector.schema_check` -> stdout: all 12 relations `OK`, exit 0.
+4. `cd ui && npm run build` -> `tsc -b && vite build` succeeded: 1799 modules transformed, 6
+   output chunks, "built in 9.34s", exit 0. (The frontend has no Supabase coupling left since
+   Phase 7; this run is an unmodified re-verification, not a new fix.)
+5. `py -3.14 -m pytest -q` (full suite) -> **241 passed, 1 warning (pre-existing joblib core-count
+   warning, unrelated), 0 failed**, in 43.14s.
+
+**241 vs the 265-passed baseline this batch started from — explained, not a regression.**
+`241 = 265 - 32 (tests/test_supabase_repository.py deleted in 10.5) + 8`. The `+8` is **not**
+this batch's work: a concurrent `telegram-notifications` sibling session (flagged as active in
+this batch's own handoff prompt) landed uncommitted edits to `ops/notification_dispatch.py`,
+`ops/notify_operational_job.py`, `ops/run_local_scheduler.py`, `tests/test_notification_dispatch.py`,
+`tests/test_operational_notifications.py`, and `tests/test_run_local_scheduler.py` in this same
+working tree while this batch was running (confirmed via `git status`/`git stash` +
+`pytest --collect-only tests/test_supabase_repository.py` = 32, cross-checked against the actual
+241 pass count). This batch never opened any of those six files with a write tool and does not
+commit them (see Commits below — explicit file paths only, matching the established pattern from
+every prior batch in this file). Verified the arithmetic is exactly accounted for by temporarily
+`git stash`-ing this batch's own changes, confirming `tests/test_supabase_repository.py` collects
+exactly 32 items pre-deletion, then `git stash pop` to restore this batch's work unchanged.
+
+### `rg supabase` — final proof (task 10.6's own success criterion, run as the literal command)
+
+```
+$ rg -i supabase --glob '*.py' --glob '*.ts' --glob '*.tsx' --glob '*.yml' --glob '!openspec/changes/**' --glob '!.git/**' -l
+(no output, exit code 1)
+```
+
+### Commits (this batch)
+
+9. `feat(cleanup): remove Supabase-coupled files and rename residual Supabase-named symbols`
+   (Phase 10 — closes `local-postgres-migration`) — deletes
+   `.github/workflows/operational-jobs.yml`, `render.yaml`, `collector/supabase_repository.py`,
+   `supabase/config.toml`, all 6 files under `supabase/migrations/`,
+   `tests/test_supabase_repository.py`; renames `brain/evaluate_candidate_matrix_from_supabase.py`
+   -> `brain/evaluate_candidate_matrix.py`; modifies `brain/candidate_matrix.py`,
+   `brain/promotion.py`, `brain/retraining_job.py`, `brain/run_retraining_job.py`,
+   `brain/datasets.py`, `brain/README.md`, `collector/local_repository.py`,
+   `tests/test_brain_pipeline.py`,
+   `openspec/changes/local-postgres-migration/tasks.md`,
+   `openspec/changes/local-postgres-migration/apply-progress.md`,
+   `openspec/changes/local-postgres-migration/state.yaml`. Explicit file paths only (no
+   `git add -A`), to avoid capturing the concurrent `telegram-notifications` session's
+   uncommitted edits to `ops/notification_dispatch.py`, `ops/notify_operational_job.py`,
+   `ops/run_local_scheduler.py`, `tests/test_notification_dispatch.py`,
+   `tests/test_operational_notifications.py`, `tests/test_run_local_scheduler.py`, and other
+   untracked concurrent-session paths (`.agents/`, `.claude/`, `.atl/skill-registry.md`,
+   `.atl/.skill-registry.cache.json`, `skills-lock.json`,
+   `openspec/changes/telegram-notifications/*`, `openspec/changes/financial-intelligence-expansion/`).
+
+### `local-postgres-migration` — implementation complete
+
+All 10 phases are now `[x]` in `tasks.md` (Phase 4 marked `SKIPPED` with a documented reason,
+not a gap). `state.yaml`'s `progress.apply` set to `complete`; `progress.verify` remains
+`pending` for the next phase (`sdd-verify`). No file outside this change's own SDD paper trail
+under `openspec/changes/local-postgres-migration/` was left referencing Supabase.

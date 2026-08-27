@@ -41,5 +41,5 @@ progress:
   specs: complete
   design: complete
   tasks: complete
-  apply: pending
+  apply: complete
   verify: pending

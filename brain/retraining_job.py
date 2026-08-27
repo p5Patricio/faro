@@ -7,7 +7,7 @@ from typing import Any
 
 from brain.artifacts import store_model_artifact
 from brain.backtesting import BacktestConfig
-from brain.candidate_matrix import load_candidate_datasets_from_supabase, run_candidate_matrix
+from brain.candidate_matrix import load_candidate_datasets, run_candidate_matrix
 from brain.features import feature_columns_for_set
 from brain.inference_job import is_promoted_model_run, target_ticker_for_model_run
 from brain.models import available_model_names
@@ -71,7 +71,7 @@ def run_retraining_job(
         max_drawdown_floor=job_config.max_drawdown_floor,
         min_active_trades=job_config.min_active_trades,
     )
-    datasets, skipped_assets = load_candidate_datasets_from_supabase(
+    datasets, skipped_assets = load_candidate_datasets(
         repository,
         feature_set=job_config.feature_set,
         label_method=job_config.label_method,

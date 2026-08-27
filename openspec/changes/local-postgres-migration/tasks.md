@@ -117,10 +117,10 @@ earlier units (low re-review cost despite high line count).
 
 ## Phase 10: Final Removal (Req: Local Scheduled Operations Replace Hosted Automation)
 
-- [ ] 10.1 Delete `.github/workflows/operational-jobs.yml`.
-- [ ] 10.2 Delete `render.yaml`.
-- [ ] 10.3 Delete `collector/supabase_repository.py`.
-- [ ] 10.4 Delete `supabase/` (migrations + `config.toml`).
-- [ ] 10.5 Delete `ops/migrate_supabase_to_local.py` and its test.
-- [ ] 10.6 `rg supabase` across `.py`/`.ts`/`.tsx`/`.yml` returns nothing (proposal success criterion).
-- [ ] 10.7 Full offline run: `py -3.14 -m db.migrate`, `py -3.14 -m ops.run_local_scheduler --job full`, `py -3.14 -m collector.schema_check`, `cd ui && npm run build`, `py -3.14 -m pytest`.
+- [x] 10.1 Delete `.github/workflows/operational-jobs.yml`.
+- [x] 10.2 Delete `render.yaml`.
+- [x] 10.3 Delete `collector/supabase_repository.py`.
+- [x] 10.4 Delete `supabase/` (migrations + `config.toml`).
+- [x] 10.5 SKIPPED (no-op) -- `ops/migrate_supabase_to_local.py` and its test were never created (Phase 4 was skipped per 4.1-4.4; confirmed genuinely absent via directory listing, not assumed). Also deleted `tests/test_supabase_repository.py` as part of this unit (design.md line 267: superseded by `tests/test_local_repository.py`; dead weight once `collector/supabase_repository.py` is gone).
+- [x] 10.6 `rg -i supabase` across `.py`/`.ts`/`.tsx`/`.yml` (excluding `openspec/changes/**`) returns nothing (proposal success criterion). Beyond the 10.1-10.5 deletions, this required renaming `brain/evaluate_candidate_matrix_from_supabase.py` -> `brain/evaluate_candidate_matrix.py` and `brain/candidate_matrix.load_candidate_datasets_from_supabase` -> `load_candidate_datasets` (pure naming leftovers pre-dating the Phase 5 call-site swap; the functions/module already used `LocalPostgresRepository` with zero Supabase/PostgREST calls), updating all call sites (`brain/promotion.py`, `brain/retraining_job.py`, `brain/run_retraining_job.py`, `tests/test_brain_pipeline.py`, `brain/README.md`), and rewording two docstrings in `collector/local_repository.py` that referenced `SupabaseRepository` by name.
+- [x] 10.7 Full offline run: `py -3.14 -m db.migrate`, `py -3.14 -m ops.run_local_scheduler --job market_data --tickers BTC-USD`, `py -3.14 -m collector.schema_check`, `cd ui && npm run build`, `py -3.14 -m pytest` -- all five passed for real; see apply-progress.md Batch 5 for full output.

@@ -7,7 +7,7 @@ from pathlib import Path
 import psycopg
 
 from brain.backtesting import BacktestConfig
-from brain.candidate_matrix import load_candidate_datasets_from_supabase, run_candidate_matrix
+from brain.candidate_matrix import load_candidate_datasets, run_candidate_matrix
 from brain.features import feature_columns_for_set
 from brain.models import available_model_names
 from brain.scoped_evaluation import SCOPES
@@ -61,7 +61,7 @@ def main() -> None:
     scopes = parse_scopes(args.scopes)
     with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
         repository = LocalPostgresRepository(connection=connection)
-        datasets, skipped_assets = load_candidate_datasets_from_supabase(
+        datasets, skipped_assets = load_candidate_datasets(
             repository,
             feature_set=args.feature_set,
             label_method=args.label_method,

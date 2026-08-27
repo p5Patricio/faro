@@ -6,7 +6,7 @@ from pathlib import Path
 
 import psycopg
 
-from brain.evaluate_candidate_matrix_from_supabase import DEFAULT_CONFIDENCE_THRESHOLDS
+from brain.evaluate_candidate_matrix import DEFAULT_CONFIDENCE_THRESHOLDS
 from brain.models import available_model_names
 from brain.retraining_job import RetrainingJobConfig, run_retraining_job
 from brain.scoped_evaluation import SCOPES

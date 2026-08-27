@@ -774,7 +774,7 @@ def test_run_retraining_job_promotes_and_uploads_candidate(monkeypatch, tmp_path
     }
     artifact_path = tmp_path / "model.joblib"
 
-    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
     monkeypatch.setattr(
         "brain.retraining_job.run_candidate_matrix",
         lambda *args, **kwargs: {"results": [], "ranking": [candidate], "errors": []},
@@ -847,7 +847,7 @@ def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monk
         "metrics": {"promotion": {"candidate": {"candidate_id": "old", "objective_score": 0.50}}},
     }
 
-    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
     monkeypatch.setattr(
         "brain.retraining_job.run_candidate_matrix",
         lambda *args, **kwargs: {"results": [], "ranking": [candidate], "errors": []},
@@ -900,7 +900,7 @@ def test_run_retraining_job_skips_when_no_candidate_passes(monkeypatch) -> None:
         dataset=pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")}),
     )
 
-    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
     monkeypatch.setattr(
         "brain.retraining_job.run_candidate_matrix",
         lambda *args, **kwargs: {

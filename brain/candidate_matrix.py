@@ -15,7 +15,7 @@ from brain.selection import PromotionCriteria, rank_candidate_summaries
 from collector.local_repository import LocalPostgresRepository
 
 
-def load_candidate_datasets_from_supabase(
+def load_candidate_datasets(
     repository: LocalPostgresRepository,
     feature_set: str,
     label_method: str,

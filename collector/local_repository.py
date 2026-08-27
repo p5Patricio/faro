@@ -21,8 +21,8 @@ from psycopg_pool import ConnectionPool
 class _UUIDStrLoader(Loader):
     """Load ``uuid`` columns as ``str`` instead of psycopg3's default ``uuid.UUID``.
 
-    Mirrors PostgREST's JSON contract, where every id is a plain string, so
-    callers migrating from ``SupabaseRepository`` see no type change.
+    Every id-returning repository method returns a plain string, matching
+    this module's own public contract regardless of caller.
     """
 
     def load(self, data: bytes | memoryview) -> str:
@@ -57,15 +57,14 @@ class LocalPostgresConfig:
 class LocalPostgresError(RuntimeError):
     """Raised when a local Postgres operation fails.
 
-    Subclasses ``RuntimeError`` so the ~15 existing
-    ``except (RuntimeError, RequestException)`` call sites in ``api/main.py``
-    keep working unchanged after the Supabase-to-local swap.
+    Subclasses ``RuntimeError`` so existing ``except RuntimeError`` call
+    sites in ``api/main.py`` keep working unchanged.
     """
 
 
 @dataclass
 class LocalPostgresRepository:
-    """Thin psycopg3 repository preserving ``SupabaseRepository``'s public contract.
+    """Thin psycopg3 repository for the local Postgres database.
 
     Accepts either a ``pool`` (production/collector/brain usage) or an
     injected ``connection`` (test usage: the caller manages
