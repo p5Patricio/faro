@@ -1,19 +1,27 @@
 # Plan de Despliegue
 
+> **Nota (post-migracion a Postgres local):** el proyecto paso de una arquitectura
+> hospedada (Supabase + GitHub Actions + hosting cloud) a una operacion local de una
+> sola maquina (PostgreSQL local + Programador de Tareas de Windows). El despliegue
+> hospedado descrito historicamente aqui esta fuera de alcance mientras dure ese
+> pivote; el README ("Configuracion", "Scheduler Local") es la fuente de verdad para
+> la operacion actual. Este documento se mantiene actualizado en lo que sigue siendo
+> aplicable (flujo del modelo, reentrenamiento, criterios antes de dinero real).
+
 Este plan describe como llevar IA Inversiones desde el estado actual a una operacion continua con datos reales, predicciones versionadas, paper trading y reentrenamiento controlado.
 
 ## 1. Arquitectura Objetivo
 
 | Capa | Servicio recomendado |
 | --- | --- |
-| Base de datos | Supabase Postgres |
-| Storage de modelos | Supabase Storage, bucket `model-artifacts` |
-| Backend API | Servicio Python persistente para FastAPI |
-| Frontend | Hosting estatico para Vite/React |
-| Jobs operativos | GitHub Actions programado |
-| Secretos | GitHub Secrets y variables del proveedor de hosting |
-| Monitoreo inicial | `/api/health`, `/api/alerts/{ticker}` y artifacts JSON de GitHub Actions |
-| Seguridad de datos | RLS en Supabase, backend con clave server-side y frontend solo con anon key |
+| Base de datos | PostgreSQL local (`LOCAL_DATABASE_URL`) |
+| Storage de modelos | Sistema de archivos local, directorio `models/` (gitignorado) |
+| Backend API | Proceso local persistente para FastAPI (`uvicorn api.main:app`) |
+| Frontend | Build estatico local de Vite/React |
+| Jobs operativos | Programador de Tareas de Windows (`ops/run_local_scheduler.py`) |
+| Secretos | Variables de entorno locales (`.env`, nunca en el repositorio) |
+| Monitoreo inicial | `/api/health`, `/api/alerts/{ticker}` y `logs/local_scheduler_*.log` |
+| Seguridad de datos | Postgres solo en `localhost`, sin exposicion de red; sin RLS (proceso unico local) |
 
 ## 2. Fuentes de Datos
 
@@ -29,10 +37,10 @@ El universo operativo inicial vive en `config/assets.core.json`.
 
 ## 3. Flujo Continuo
 
-1. GitHub Actions ejecuta el ciclo diario `full`: datos, inferencia y paper trading.
-2. El job descarga precios, actualiza Supabase y materializa features/labels.
+1. El scheduler local (`ops.run_local_scheduler --job full`) ejecuta el ciclo diario: datos, inferencia y paper trading.
+2. El job descarga precios, actualiza PostgreSQL local y materializa features/labels.
 3. El job de inferencia ejecuta `brain.run_inference_job` con los modelos promovidos.
-4. Las predicciones se guardan en Supabase.
+4. Las predicciones se guardan en PostgreSQL local.
 5. Cuando pasa el horizonte de prediccion, el feedback compara prediccion contra resultado observado.
 6. El job de paper trading simula la estrategia con predicciones reales guardadas.
 7. Las alertas operativas detectan datos atrasados, falta de prediccion, poco feedback o degradacion.
@@ -48,78 +56,77 @@ El modelo no debe "auto-modificarse" sin control. La version profesional es un c
 4. Evaluar retorno neto, drawdown, accuracy, profit factor, cobertura y estabilidad.
 5. Rechazar modelos con poca muestra, exceso de drawdown o mejora estadisticamente debil.
 6. Promover el nuevo modelo creando un `model_run` versionado.
-7. Subir el artefacto `.joblib` a Supabase Storage.
+7. Normalizar el artefacto `.joblib` bajo `models/` (`store_model_artifact`).
 8. Usar la nueva version solo en inferencia posterior.
 
 Las predicciones pasadas sirven como feedback operativo y como criterio de promocion. La etiqueta de entrenamiento debe venir del mercado observado, no de "si el modelo dijo bien o mal" por si sola.
 
-## 5. GitHub Actions
+## 5. Scheduler Local
 
-El workflow actual `.github/workflows/operational-jobs.yml` ya cubre:
+`ops/run_local_scheduler.py` cubre los mismos modos que el workflow retirado, corridos como procesos locales en vez de un runner hospedado:
 
 - `market_data`
 - `inference`
 - `paper_trading`
+- `retraining`
 - `full`
-- `full_retrain` semanal
+- `full_retrain`
 
-Secretos necesarios:
+Variables de entorno necesarias (nunca hardcodeadas en un script versionado):
 
 ```text
-SUPABASE_URL
-SUPABASE_KEY
-OPERATIONAL_WEBHOOK_URL  # opcional
+LOCAL_DATABASE_URL
+OPERATIONAL_WEBHOOK_URL   # opcional
+TELEGRAM_BOT_TOKEN        # opcional
+TELEGRAM_CHAT_ID          # opcional
 ```
 
-El workflow ya soporta reentrenamiento controlado con:
+El scheduler soporta reentrenamiento controlado con:
 
-- `retraining`: evalua candidatos, promueve solo aprobados que mejoran al modelo vigente y sube artefactos.
+- `retraining`: evalua candidatos, promueve solo aprobados que mejoran al modelo vigente y normaliza artefactos en `models/`.
 - `full_retrain`: actualiza datos, reentrena, ejecuta inferencia y guarda paper trading.
-- Reportes JSON como artifacts.
-- Notificacion opcional a webhook externo con resumen de errores, skips y resultados.
-- Fallo del workflow solo cuando hay errores tecnicos; si no hay candidato suficientemente bueno, el activo queda como `skipped`.
+- Reportes JSON en `reports/*.json` (no versionados).
+- Notificacion al final de cada corrida por webhook y/o Telegram con resumen de errores, skips y resultados.
+- Codigo de salida distinto de cero cuando hay errores tecnicos; si no hay candidato suficientemente bueno, el activo queda como `skipped` (no cuenta como fallo).
 
-Bloque pendiente recomendado:
+Registro de las tareas programadas (diaria 06:20 `--job full`, semanal domingo 06:40 `--job full_retrain`): `ops/register_local_jobs.ps1`. Ver README, seccion "Scheduler Local".
 
-- Conectar `OPERATIONAL_WEBHOOK_URL` a Slack, Discord, Teams o un endpoint propio.
+## 6. Seguridad Local
 
-## 6. Seguridad Supabase
+Postgres corre en `localhost` sin exponerse a la red, por lo que no aplica RLS (row-level security): el unico proceso que se conecta es el propio backend/pipeline local, ejecutado por el mismo usuario del sistema operativo. Protege `LOCAL_DATABASE_URL` (nunca en commits ni en scripts versionados) y, si usas Telegram, `TELEGRAM_BOT_TOKEN`.
 
-La migracion `supabase/migrations/20260708000100_public_market_rls.sql` activa RLS para las tablas publicas de mercado, entrenamiento, predicciones, backtests y paper trading. Los clientes `anon` y `authenticated` solo reciben politicas de lectura; las escrituras operativas quedan reservadas para procesos server-side con `SUPABASE_KEY`.
+Ejecutar `python -m collector.schema_check` despues de cada `py -3.14 -m db.migrate` para validar el esquema.
 
-Despues de aplicarla, validar en Supabase que no queden avisos criticos de tablas publicas sin RLS y ejecutar `python -m collector.schema_check`.
-
-## 7. Variables de Produccion
+## 7. Variables de Entorno Local
 
 Backend:
 
 ```text
-APP_ENV=production
-ALLOW_DEMO_FALLBACK=false
-API_CORS_ORIGINS=https://frontend-produccion
-SUPABASE_URL=...
-SUPABASE_KEY=...
+APP_ENV=development
+ALLOW_DEMO_FALLBACK=true
+API_CORS_ORIGINS=*
+LOCAL_DATABASE_URL=postgresql://postgres:tu-password@localhost:5432/ia_inversiones
 ```
 
 Frontend:
 
 ```text
-VITE_API_BASE_URL=https://api-produccion/api
+VITE_API_BASE_URL=http://localhost:8000/api
 ```
 
-## 8. Pasos de Despliegue
+## 8. Pasos de Puesta en Marcha
 
-1. Confirmar migraciones aplicadas en Supabase.
-2. Crear bucket `model-artifacts` en Supabase Storage.
-3. Configurar GitHub Secrets.
-4. Configurar hosting de backend con variables privadas.
-5. Configurar hosting de frontend con variables `VITE_*`.
-6. Ejecutar `python -m collector.schema_check` en produccion.
-7. Ejecutar workflow `market_data`.
-8. Entrenar/promover primer modelo productivo.
-9. Ejecutar workflow `inference`.
-10. Ejecutar workflow `paper_trading`.
-11. Validar `/api/health`, `/api/alerts/BTC-USD` y dashboard.
+1. Confirmar migraciones aplicadas: `py -3.14 -m db.migrate`.
+2. Confirmar el directorio `models/` disponible (se crea solo al primer artefacto).
+3. Configurar `.env` local con `LOCAL_DATABASE_URL` y, si aplica, `OPERATIONAL_WEBHOOK_URL`/`TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`.
+4. Levantar el backend (`uvicorn api.main:app`) y el frontend (`npm run dev` o `npm run build`).
+5. Ejecutar `python -m collector.schema_check`.
+6. Ejecutar `py -3.14 -m ops.run_local_scheduler --job market_data`.
+7. Entrenar/promover primer modelo (`--job retraining` o `--job full_retrain`).
+8. Ejecutar `py -3.14 -m ops.run_local_scheduler --job inference`.
+9. Ejecutar `py -3.14 -m ops.run_local_scheduler --job paper_trading`.
+10. Validar `/api/health`, `/api/alerts/BTC-USD` y el dashboard.
+11. Registrar las tareas programadas con `ops/register_local_jobs.ps1`.
 
 ## 9. Criterios Antes de Dinero Real
 

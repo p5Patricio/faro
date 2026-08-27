@@ -109,11 +109,11 @@ earlier units (low re-review cost despite high line count).
 
 ## Phase 9: Local Scheduler + CI (Req: Local Scheduled Operations Replace Hosted Automation; Pull Request Quality Gates)
 
-- [ ] 9.1 **RED**: write failing test — ticker/model args containing `&`, `"`, spaces, trailing `\` pass through the scheduler's argv builder as single, unsplit elements (threat matrix: subprocess composition).
-- [ ] 9.2 `ops/run_local_scheduler.py`: `--job` branching mirroring the removed workflow's `JOB_MODE`, fixed `[sys.executable, "-m", module, *args]` per step (D13), fail on non-zero exit or `failed > 0` in report JSON, tee to `logs/local_scheduler_{job}_{date}.log`.
-- [ ] 9.3 `ops/register_local_jobs.ps1` + README section with the two `schtasks /Create` commands (daily 06:20, weekly Sun 06:40).
-- [ ] 9.4 Add `postgres:16` service container to `.github/workflows/ci.yml`, set `TEST_DATABASE_URL`, run `db.migrate` before `pytest` — closes the gap between design's deferred Open Question and the `professional-operations` spec's MUST-provision-Postgres-in-CI requirement (flagged as a conflict; see Risks).
-- [ ] 9.5 Update README/PLAN_DESPLIEGUE/PLAN_MEJORAS_PROFESIONALES: local setup, Task Scheduler registration, remove `SUPABASE_URL`/`SUPABASE_KEY` references.
+- [x] 9.1 **RED**: write failing test — ticker/model args containing `&`, `"`, spaces, trailing `\` pass through the scheduler's argv builder as single, unsplit elements (threat matrix: subprocess composition).
+- [x] 9.2 `ops/run_local_scheduler.py`: `--job` branching mirroring the removed workflow's `JOB_MODE`, fixed `[sys.executable, "-m", module, *args]` per step (D13), fail on non-zero exit or `failed > 0` in report JSON, tee to `logs/local_scheduler_{job}_{date}.log`.
+- [x] 9.3 `ops/register_local_jobs.ps1` + README section with the two `schtasks /Create` commands (daily 06:20, weekly Sun 06:40).
+- [x] 9.4 Add `postgres:16` service container to `.github/workflows/ci.yml`, set `TEST_DATABASE_URL`, run `db.migrate` before `pytest` — closes the gap between design's deferred Open Question and the `professional-operations` spec's MUST-provision-Postgres-in-CI requirement (flagged as a conflict; see Risks).
+- [x] 9.5 Update README/PLAN_DESPLIEGUE/PLAN_MEJORAS_PROFESIONALES: local setup, Task Scheduler registration, remove `SUPABASE_URL`/`SUPABASE_KEY` references.
 
 ## Phase 10: Final Removal (Req: Local Scheduled Operations Replace Hosted Automation)
 

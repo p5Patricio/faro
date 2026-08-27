@@ -1,5 +1,247 @@
 # Apply Progress: local-postgres-migration
 
+## Batch 4 — Phase 9 (this batch)
+
+### Status: Phase 9 (Local Scheduler + CI) complete and verified against the live local database.
+
+Environment: `LOCAL_DATABASE_URL`/`TEST_DATABASE_URL` exported to `ia_inversiones`/`ia_inversiones_test`
+on `localhost:5432`. Baseline entering this batch: **242 passed, 0 failed** (confirmed by
+running `py -3.14 -m pytest -q` with both DSNs exported before touching any file).
+
+### 9.1 — RED test (`tests/test_run_local_scheduler.py`)
+
+Wrote the full test suite before `ops/run_local_scheduler.py` existed; the file's first
+collection attempt failed with `ModuleNotFoundError: No module named 'ops.run_local_scheduler'`
+(confirmed RED). The threat-matrix test uses a genuinely hostile fixture value, not a
+placeholder: `'AAPL & echo pwned > pwned.txt; "$(id)" \\'` (shell metacharacter, a quote,
+embedded spaces, and a trailing backslash). Proof shape: `build_step_argv`/the per-job argv
+builders (`build_market_data_argv`, `build_retraining_argv`, `build_inference_argv`,
+`build_paper_trading_argv`) return the hostile string as exactly one unsplit list element,
+and `run_step` is asserted (via an injected fake runner) to never pass `shell=True` to
+`subprocess.run`. 23 tests total in the file (6 pure RED/threat-matrix tests, the rest
+covering 9.2's `--job` branching, fail-on-nonzero/fail-on-report-`failed`, fail-fast +
+always-notify orchestration, the `inference_job.json` filename seam, notify's `--status`/
+`--job-mode` argv, `--no-notify`, and the tee log file).
+
+### 9.2 — `ops/run_local_scheduler.py`
+
+Implemented exactly the `StepResult`/`build_step_argv`/`run_step`/`run`/`main` shape the RED
+tests describe. Key decisions:
+
+- **Fixed argv, D13.** `build_step_argv(module, args) -> [sys.executable, "-m", module, *args]`.
+  Every one of the four job-mode argv builders assembles a plain Python list from parsed
+  `argparse` values — no f-string/`.format()`/`%`-formatting of a shell command anywhere in
+  the module. `run_step`'s `runner` parameter defaults to `subprocess.run` and is never
+  called with `shell=True` (not even omitted-then-defaulted-true — the kwarg is simply never
+  passed).
+- **`--job` branching (`steps_for_job`)** mirrors the retired workflow's `JOB_MODE` `if:`
+  conditions and literal step order exactly: `market_data` step for
+  `{market_data, full, full_retrain}`, `retraining` for `{retraining, full_retrain}`,
+  `inference` for `{inference, full, full_retrain}`, `paper_trading` for
+  `{paper_trading, full, full_retrain}` — in that order (market_data, retraining, inference,
+  paper_trading), matching the YAML's step order.
+- **Fail predicate**: `StepResult.ok` is `returncode == 0 and report_failed == 0`, replicating
+  the retired workflow's inline `python -c "...sys.exit(1 if report.get('failed', 0) else 0)"`
+  per job step. `_report_path_from_args` finds the `--out` value in a step's own argv list and
+  `_read_report_failed` reads that JSON's `failed` key (defensively: a missing/corrupt report
+  reads as `0`, since a non-zero `returncode` already fails the step through the other half of
+  the predicate).
+- **Fail-fast + always-notify**, a deliberate elaboration beyond design.md's one-line
+  replacement snippet: `run()` only proceeds to job-mode steps when the `schema_check` step
+  succeeds, mirroring the retired workflow's actual GitHub Actions execution semantics (no
+  `continue-on-error` on early steps means a failure skips subsequent steps by default), but
+  the final `ops.notify_operational_job` step always runs regardless (mirroring the workflow's
+  `if: always()` on both its upload-artifact and notify steps). Not spelled out verbatim in
+  design.md's CLI synopsis, but necessary to faithfully reproduce "what actually happens when
+  a step fails" rather than just "what the happy path looks like."
+- **Inference report filename — the critical seam.** The retired workflow wrote
+  `reports/inference_job_latest.json`. This batch writes `reports/inference_job.json`
+  instead (`INFERENCE_JOB_REPORT_NAME` constant in the new module), because
+  `ops.notification_dispatch.INFERENCE_JOB_REPORT_NAME = "inference_job.json"` (landed by the
+  concurrent `telegram-notifications` session) is what the P0 signal-transition trigger reads
+  via `load_reports`. Mirroring the retired workflow's stale filename literally would have
+  silently starved that trigger of its only input. Confirmed via
+  `openspec/changes/telegram-notifications/design.md` section 7-B, which states this
+  requirement explicitly. This is a deliberate, documented deviation from a literal 1:1
+  reading of the retired workflow, not an oversight.
+- **Notify step gets explicit `--status`/`--job-mode`.** design.md's replacement CLI snippet
+  shows only `ops.notify_operational_job --reports-dir reports` for the final step, but
+  `ops.notify_operational_job.parse_args()`'s `--status`/`--job-mode` default to
+  `GITHUB_JOB_STATUS`/`JOB_MODE` environment variables that do not exist outside GitHub
+  Actions. Without passing them explicitly, every local run would report `status: "unknown"`
+  and `job_mode: null` regardless of what actually happened. `run()` computes
+  `status = "success" if primary_ok else "failure"` from the primary steps' own `ok` results
+  (before the notify step runs, so the notify payload reflects reality) and passes
+  `--job-mode {ns.job}`. Verified end-to-end (see below): a successful `market_data` run's
+  notify payload shows `"status": "success"`.
+- **One-argv-element seam left open for `telegram-notifications` Phase 7.** Per
+  `openspec/changes/telegram-notifications/design.md` section 7-A, that change's job-failure
+  trigger needs to append one optional argv element,
+  `--failed-steps <module>`, to this scheduler's fixed final-step argv list, for the case
+  where a step crashes *before* writing any report at all. This batch does not add that flag
+  (out of this batch's scope; telegram-notifications is now unblocked to add it as a one-line
+  change to `notify_args` in `run()`). The seam is deliberately a plain Python list
+  (`notify_args = [...]`) that a follow-up can `.append(...)` to without restructuring
+  anything else in this module.
+- **Tee logging** (`write_log`): writes `logs/local_scheduler_{job}_{YYYYMMDD}.log` with each
+  step's argv, return code, `report_failed` count, and captured stdout/stderr, and also prints
+  the same content to stdout (a pragmatic interpretation of "tee" — output is captured via
+  `subprocess.run(capture_output=True)` rather than streamed live, then both written to disk
+  and printed, since Task Scheduler's own per-run stdout capture is unreliable/opt-in on
+  Windows and the log file is the durable artifact that matters).
+
+### 9.3 — `ops/register_local_jobs.ps1` + README section
+
+`ops/register_local_jobs.ps1`: two `schtasks /Create` calls exactly as design.md specifies
+(`/SC DAILY /ST 06:20` for `IAInversiones\DailyOperationalCycle` → `--job full`;
+`/SC WEEKLY /D SUN /ST 06:40` for `IAInversiones\WeeklyRetrainingCycle` → `--job full_retrain`;
+both `/RL LIMITED /F`, `/TR "cmd /c cd /d <repo root> && py -3.14 -m ops.run_local_scheduler ..."`).
+Repo root is resolved at runtime via `Split-Path -Parent $PSScriptRoot` rather than hardcoded,
+so the script is portable across clones/machines. No credential of any kind appears in the
+script; a comment block explicitly warns against ever hardcoding one, since
+`schtasks /Query ... /V` and the Task Scheduler GUI both display the full registered command
+line in plain text. Validated with PowerShell's tokenizer
+(`[System.Management.Automation.PSParser]::Tokenize`) — zero syntax errors. **Not executed**
+against the real Task Scheduler in this batch, per the batch's explicit "Do NOT actually
+register the Windows Task" instruction.
+
+README.md gained a `### Scheduler Local` section (replacing `### Scheduler Externo`) with the
+full local CLI synopsis, the `schtasks` verify/run/delete one-liners, and the required-vs-optional
+env var list (`LOCAL_DATABASE_URL` required; `OPERATIONAL_WEBHOOK_URL`/`TELEGRAM_BOT_TOKEN`/
+`TELEGRAM_CHAT_ID` optional) replacing the old GitHub Secrets block.
+
+### 9.4 — CI Postgres service container
+
+`.github/workflows/ci.yml`'s `backend-tests` job gained a `postgres:16` service container
+(standard health-checked pattern), `LOCAL_DATABASE_URL`/`TEST_DATABASE_URL` both set to
+`postgresql://postgres:postgres@localhost:5432/postgres` (same ephemeral DB for both — CI's
+Postgres container is freshly created per job run, so there is no need for the two-database
+split that exists in local dev), and a new "Apply local Postgres migrations" step running
+`python -m db.migrate` (reads `LOCAL_DATABASE_URL` per `db/migrate.py`'s
+`resolve_dsn`/`load_dotenv()` contract) before the `pytest` step. This is intentionally
+redundant with `tests/conftest.py`'s own `apply_migrations(dsn)` call inside the
+`test_database_url` session fixture (idempotent either way) — the explicit CI step exists so
+a migration failure surfaces as its own clearly-labeled red step instead of being buried
+inside the first DB test's fixture setup. Validated the resulting YAML is syntactically valid
+by parsing it with `PyYAML` (`yaml.safe_load`), not just eyeballing it — parsed cleanly (the
+one `"true"` key PyYAML reports for the `on:` mapping is a pre-existing YAML 1.1 boolean-key
+quirk already present before this batch's edit, not something introduced here). **Not run
+against GitHub's actual runners** in this batch (no push/PR per the batch's "Do NOT push"
+instruction); local verification used the equivalent recipe (both DSNs exported, full suite
+green) as the closest available proxy.
+
+### 9.5 — Documentation
+
+Grepped for `SUPABASE_URL`/`SUPABASE_KEY` across the whole repo first, per the batch
+instruction, before editing. Both are now absent from `README.md` and `PLAN_DESPLIEGUE.md`
+(had literal occurrences; removed) and were already absent from `PLAN_MEJORAS_PROFESIONALES.md`
+(zero hits before this batch). Remaining repo-wide hits after this batch's edits are all
+correctly out of scope: `openspec/changes/local-postgres-migration/*` (this change's own SDD
+history, describing the migration itself), `.github/workflows/operational-jobs.yml` and
+`render.yaml` (both explicitly Phase 10 deletions, out of this batch's scope), and
+`collector/supabase_repository.py`/`collector/README.md` (the module itself and its own
+module-level doc, both still alive per ADR D1 until Phase 10 — not in this task's named file
+list of README.md/PLAN_DESPLIEGUE.md/PLAN_MEJORAS_PROFESIONALES.md).
+
+Beyond the literal env-var-name removal, did a full pass over all three docs' *operational
+instructions* (not just the two named variables), because several commands and claims were
+already factually broken today (not just "pending Phase 10 staleness") given Phases 5-8
+already swapped every call site to local Postgres:
+
+- **README.md**: `.env` example block (`SUPABASE_URL`/`SUPABASE_KEY` → `LOCAL_DATABASE_URL`,
+  plus a new `TEST_DATABASE_URL` row in the variables table); the "Conexion con Supabase"
+  verification command (was literally broken — `collector.supabase_repository` is legacy dead
+  code with zero remaining callers) → rewritten against `LocalPostgresConfig`/
+  `LocalPostgresRepository`; "Esquema ML en Supabase" → points at `db.migrate`; every
+  "guarda ... en Supabase" narrative line in the Jobs Operativos section → "PostgreSQL local";
+  the inference example's `--out` path updated from `reports/inference_job_latest.json` to
+  `reports/inference_job.json` (so a developer copy-pasting the README gets a report the
+  notification dispatcher can actually read); the `brain.upload_model_artifact` example block
+  **removed outright** (that module was deleted in Phase 8 — the command no longer exists) and
+  replaced with one sentence matching `brain/README.md`'s already-updated Phase 8 language;
+  `### Scheduler Externo` replaced by `### Scheduler Local` (full CLI synopsis, schtasks
+  one-liners, env var list); and the entire `## Perfiles de Riesgo` section rewritten to drop
+  every `Authorization: Bearer` example and "Supabase Auth" claim — Phase 6 removed auth
+  entirely, so those curl examples were already actively misleading (a reader following them
+  would send a header the API silently ignores). Verified the new curl examples against
+  `api/main.py`'s actual `GET`/`PUT /api/risk-profile` signatures (`scope_type`/`scope_value`
+  query params and body fields, no auth dependency) by reading the endpoint code directly, not
+  assumed.
+- **PLAN_DESPLIEGUE.md**: added a note at the top flagging that the hosted-deploy premise
+  (Supabase + GitHub Actions + cloud hosting) is out of scope post-pivot and pointing at the
+  README as the current source of truth, since rewriting this file's entire premise into a
+  from-scratch "local operations plan" document was judged out of proportion for a Phase 9
+  doc-cleanup task — but every section that gave a *concrete, followable instruction*
+  referencing Supabase/GitHub Actions was still updated for accuracy (architecture table,
+  continuous-flow narrative, retraining artifact-upload step, the GitHub Actions section
+  replaced with a "Scheduler Local" section, the Supabase-RLS security section replaced with a
+  short local-security note, production env vars, and the deployment steps list).
+- **PLAN_MEJORAS_PROFESIONALES.md**: light touch, since this file had zero literal
+  `SUPABASE_URL`/`SUPABASE_KEY` hits to begin with and is a dated roadmap document, not a
+  living setup guide. Updated only the executive summary's tech-stack sentence and the
+  "Estado Actual" comparison table's `Datos`/`Paper trading`/`Seguridad`/`Despliegue` rows,
+  which made forward-looking factual claims (Supabase, RLS, GitHub Secrets, "Vercel, Render,
+  Supabase, GitHub Actions") that are now simply wrong. Did not touch the rest of the
+  document's improvement roadmap (unrelated to this migration) or its external reference
+  links section (Supabase RLS docs remain a legitimate reading reference regardless of this
+  project's current architecture).
+
+### Verification
+
+- `py -3.14 -m pytest tests/test_run_local_scheduler.py -v` (before writing the
+  implementation): **collection error, `ModuleNotFoundError`** — confirmed RED (9.1).
+- `py -3.14 -m pytest tests/test_run_local_scheduler.py -v` (after 9.2): **23 passed, 0
+  failed.**
+- `py -3.14 -m pytest -q` with both DSNs exported: **265 passed, 0 failed** (up from the
+  242-passed baseline this batch started from; +23 is exactly this batch's new test file, zero
+  regressions elsewhere).
+- **Real, unmocked run against the live local database**:
+  `py -3.14 -m ops.run_local_scheduler --job market_data --tickers BTC-USD`, exit code **0**.
+  The tee log (`logs/local_scheduler_market_data_20260825.log`) shows: `schema_check` step —
+  all 12 `REQUIRED_ML_RELATIONS` `OK`, returncode 0; `market_data` step — argv
+  `['...python.exe', '-m', 'collector.run_market_data_job', '--assets-file',
+  'config/assets.core.json', '--feature-sets', 'technical_v2', '--out',
+  'reports\\market_data_job.json', '--tickers', 'BTC-USD']` (the hostile-input threat-matrix
+  property holding in production: `--tickers` and its value are two clean, separate argv
+  elements, never concatenated), returncode 0, `report_failed: 0`; `notify` step — argv
+  includes `--status success --job-mode market_data` (computed, not defaulted from a
+  nonexistent `GITHUB_JOB_STATUS` env var), returncode 0, and its own JSON output shows the
+  rule engine ran for real against the live database (`"dispatched": true,
+  "evaluated_rules": 4, "outcomes": []` — zero outcomes because nothing crossed a threshold on
+  this quiet run, not because the engine didn't run) and both transports correctly reported
+  `missing_webhook_url`/`missing_telegram_config` (neither is configured in this shell
+  session, and the notifier degrades gracefully rather than crashing).
+- `.github/workflows/ci.yml` parsed with `python -c "import yaml; yaml.safe_load(open(...))"`:
+  parsed without error.
+- `ops/register_local_jobs.ps1` validated with
+  `[System.Management.Automation.PSParser]::Tokenize`: zero syntax errors.
+
+### Commits (this batch)
+
+8. `feat(ops): add local scheduler, CI Postgres service, and Phase 9 docs` — `ops/run_local_scheduler.py`,
+   `ops/register_local_jobs.ps1`, `tests/test_run_local_scheduler.py`,
+   `.github/workflows/ci.yml`, `README.md`, `PLAN_DESPLIEGUE.md`,
+   `PLAN_MEJORAS_PROFESIONALES.md`, `openspec/changes/local-postgres-migration/tasks.md`,
+   `openspec/changes/local-postgres-migration/apply-progress.md`. Explicit file paths only
+   (no `git add -A`), to avoid capturing unrelated concurrent-session files present in this
+   working tree (`.agents/`, `.claude/`, `.atl/skill-registry.md`,
+   `.atl/.skill-registry.cache.json`, `skills-lock.json`,
+   `openspec/changes/telegram-notifications/*`, `openspec/changes/financial-intelligence-expansion/`).
+
+### Remaining work (not this batch's scope)
+
+Phase 10 (final Supabase/`operational-jobs.yml`/`render.yaml`/`supabase/`/
+`collector/supabase_repository.py`/`ops/migrate_supabase_to_local.py` deletion) is still `[ ]`
+in `tasks.md`, per this batch's explicit "Do NOT implement Phase 10" instruction — separate
+batch, after this one is verified. Phase 4 (one-time Supabase data migration) remains
+`SKIPPED` from an earlier batch (no Supabase ML data existed); `ops/migrate_supabase_to_local.py`
+accordingly does not exist in this repository — confirmed by directory listing, not assumed.
+`telegram-notifications` Phase 7 (the P0 job-failure trigger's `--failed-steps` argv element)
+is now unblockable: `ops/run_local_scheduler.py` exists with a plain-list `notify_args` seam
+ready for a one-line `.append(...)` addition.
+
+---
+
 ## Batch 3 — Phase 8 (this batch)
 
 ### Status: Phase 8 (Local Artifact Storage) complete and verified.

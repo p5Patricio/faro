@@ -6,7 +6,7 @@ Este plan convierte el estado actual de IA Inversiones en una hoja de ruta profe
 
 ## Resumen Ejecutivo
 
-El proyecto ya tiene una base fuerte: Supabase, FastAPI, React, ingesta de mercado, features, labels, backtesting, paper trading, reentrenamiento controlado, RLS y GitHub Actions. La siguiente etapa debe enfocarse en cuatro cosas:
+El proyecto ya tiene una base fuerte: PostgreSQL local, FastAPI, React, ingesta de mercado, features, labels, backtesting, paper trading, reentrenamiento controlado y un scheduler local (Programador de Tareas de Windows). La siguiente etapa debe enfocarse en cuatro cosas:
 
 1. Calidad de datos y trazabilidad.
 2. Evaluacion y promocion de modelos con guardrails mas estrictos.
@@ -17,16 +17,16 @@ El proyecto ya tiene una base fuerte: Supabase, FastAPI, React, ingesta de merca
 
 | Area | Estado actual | Nivel |
 | --- | --- | --- |
-| Datos | Binance, yfinance, Stooq, normalizacion OHLCV, Supabase. | Bueno para MVP |
+| Datos | Binance, yfinance, Stooq, normalizacion OHLCV, PostgreSQL local. | Bueno para MVP |
 | Features y labels | `technical_v2`, triple barrier/fixed horizon, materializacion diaria. | Bueno |
 | Modelos | Logistic Regression, Random Forest, Extra Trees, HistGradientBoosting. | Solido, mejorable |
 | Evaluacion | Walk-forward, backtesting, baselines, costos, slippage. | Solido |
 | Promocion | Candidatos aprobados y comparacion contra incumbent. | Muy buen inicio |
-| Paper trading | Persistido en Supabase con eventos y equity. | Bueno |
-| Monitoreo | Health, alerts, feedback, webhook opcional. | Basico |
-| Seguridad | RLS aplicado, secretos fuera del repo, GitHub Secrets. | Bueno |
+| Paper trading | Persistido en PostgreSQL local con eventos y equity. | Bueno |
+| Monitoreo | Health, alerts, feedback, webhook y Telegram opcionales. | Basico |
+| Seguridad | Secretos fuera del repo (`.env` local); Postgres solo en `localhost`, sin RLS necesario. | Bueno |
 | Frontend | Dashboard operativo con riesgo, feedback, paper trading y sistema. | Bueno |
-| Despliegue | Vercel, Render, Supabase, GitHub Actions. | Funcional |
+| Despliegue | Local (PostgreSQL + Programador de Tareas de Windows); ver `PLAN_DESPLIEGUE.md`. | Funcional |
 
 ## Principio de Aprendizaje Continuo
 
