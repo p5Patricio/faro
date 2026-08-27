@@ -937,6 +937,16 @@ def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     }
 
 
+def test_risk_profile_endpoint_rejects_invalid_scope_type() -> None:
+    app.dependency_overrides[get_repository] = lambda: None
+    client = TestClient(app)
+
+    response = client.get("/api/risk-profile?scope_type=bogus")
+
+    clear_overrides()
+    assert response.status_code == 422
+
+
 def test_risk_profile_update_persists_authenticated_profile() -> None:
     repository = FakeRepository()
     override_repository(repository)

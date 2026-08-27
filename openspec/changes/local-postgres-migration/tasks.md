@@ -41,7 +41,7 @@ earlier units (low re-review cost despite high line count).
 ## Phase 0: Environment Confirmation (blocking prerequisite)
 
 - [x] 0.1 Confirmed with user 2026-08-25: host localhost, port 5432, database `ia_inversiones` (+ `ia_inversiones_test`), role `postgres`.
-- [ ] 0.2 PARTIAL: recorded in state.yaml. `.env.example` still needs LOCAL_DATABASE_URL/TEST_DATABASE_URL added by hand -- harness denies agent tool access to that exact path.
+- [x] 0.2 `.env.example` rewritten by the orchestrator directly (outside this agent's `.env*` tool-access denial): removed `SUPABASE_URL`/`SUPABASE_KEY`/`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY`, added `LOCAL_DATABASE_URL`/`TEST_DATABASE_URL` placeholders alongside the existing `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` lines. Confirmed via `git diff -- .env.example`.
 - [x] 0.3 Tagged `pre-local-postgres` on 8d77fc9 (last commit before migration work).
 
 ## Phase 1: Schema + Migration Runner (Req: Local Schema and Idempotent Migration Runner; Dead-Table Exclusion)

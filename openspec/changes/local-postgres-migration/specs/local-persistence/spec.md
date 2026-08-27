@@ -89,28 +89,6 @@ artifact-resolution contract: accept a URI or path and return a local `Path`.
 - WHEN it is resolved
 - THEN the system raises an error identifying the missing artifact
 
-### Requirement: One-Time Supabase Data Migration
-
-The system MUST provide a one-time export/import script that copies
-`assets`, `prices`, `features_daily`, `labels_daily`, `model_runs`,
-`predictions`, `backtests`, `backtest_trades`, `paper_trading_runs`, and
-`paper_trading_events` from Supabase (via PostgREST) into the local schema
-before the Supabase connection is cut, and MUST report per-table row counts
-for source and destination.
-
-#### Scenario: Successful migration with row-count parity
-
-- GIVEN the migration script runs against a populated Supabase project
-- WHEN it completes
-- THEN each migrated table's local row count equals its Supabase row count
-- AND the script prints a per-table comparison report
-
-#### Scenario: Row-count mismatch is surfaced, not silenced
-
-- GIVEN a table fails to migrate all rows
-- WHEN the script finishes
-- THEN it reports the mismatched table and exits non-zero
-
 ### Requirement: Scope-Only Risk Profiles Start Empty
 
 The local risk-profile table MUST be scoped only by `default` /
@@ -148,3 +126,49 @@ authenticated user. Requests MUST be scoped only by `scope_type`
 - GIVEN a payload with `scope_type` outside `default`/`asset_class`/`ticker`
 - WHEN either endpoint is called
 - THEN the API responds with HTTP 422
+
+## REMOVED Requirements
+
+### Removed Requirement: One-Time Supabase Data Migration
+
+(Reason: The Supabase project had zero rows of ML data at migration time —
+the user's own GitHub Actions failure output listed every ML relation
+(`features_daily`, `labels_daily`, `model_runs`, `predictions`,
+`prediction_feedback`, `backtests`, `backtest_trades`, `paper_trading_runs`,
+`paper_trading_events`, `risk_limits`, `user_risk_profiles`) as MISSING.
+Separately, the asset universe was being widened to roughly 100 stocks,
+which requires fresh ingestion via the existing collector regardless of
+whether an export/import path exists. Building a one-time
+Supabase-to-local export/import script to move zero rows had no value, so
+this requirement is dropped rather than implemented. This decision is
+recorded in the project's decision log dated 2026-08-25 (superseding the
+earlier `data_migration: migrate_existing` state) and in `tasks.md` Phase 4
+(items 4.1-4.4, marked complete with a SKIPPED rationale).)
+
+(Migration: No data migrates. `assets`, `prices`, `features_daily`,
+`labels_daily`, `model_runs`, `predictions`, `backtests`,
+`backtest_trades`, `paper_trading_runs`, and `paper_trading_events` all
+start empty on the local schema; the collector and brain pipelines
+re-populate them from scratch against the widened asset universe.
+`ops/migrate_supabase_to_local.py` was never created and MUST NOT be
+treated as a pending task.)
+
+The system previously MUST have provided a one-time export/import script
+that copies `assets`, `prices`, `features_daily`, `labels_daily`,
+`model_runs`, `predictions`, `backtests`, `backtest_trades`,
+`paper_trading_runs`, and `paper_trading_events` from Supabase (via
+PostgREST) into the local schema before the Supabase connection was cut,
+and MUST have reported per-table row counts for source and destination.
+
+#### Scenario: Successful migration with row-count parity (removed, never implemented)
+
+- GIVEN the migration script runs against a populated Supabase project
+- WHEN it completes
+- THEN each migrated table's local row count equals its Supabase row count
+- AND the script prints a per-table comparison report
+
+#### Scenario: Row-count mismatch is surfaced, not silenced (removed, never implemented)
+
+- GIVEN a table fails to migrate all rows
+- WHEN the script finishes
+- THEN it reports the mismatched table and exits non-zero

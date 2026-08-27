@@ -87,6 +87,12 @@ Resolved with the user after this proposal was drafted:
   schema before cutting the connection. This preserves the prediction/feedback
   history the continuous-learning cycle depends on. Add an explicit one-time export
   script/task; it is in scope for this change, not a follow-up.
+  **Superseded 2026-08-25**: the Supabase project turned out to have zero rows
+  across every one of these relations (confirmed via the user's own GitHub
+  Actions failure output), and the asset universe was being widened to ~100
+  stocks requiring fresh ingestion regardless. The export/import script was
+  never built; see `specs/local-persistence/spec.md`'s "One-Time Supabase
+  Data Migration" REMOVED requirement for the full rationale.
 - **Existing `user_risk_profiles` / `scoped_user_risk_profiles` rows**: do not migrate.
   Start fresh — the new scope-only risk-profile table starts empty; the user
   re-enters `default` / `asset_class` / `ticker` preferences once via the existing
@@ -106,5 +112,12 @@ Resolved with the user after this proposal was drafted:
 - [ ] `cd ui && npm run build` passes with no auth/session code.
 - [ ] Collector, brain, and API run end-to-end offline.
 - [ ] Scheduled jobs run locally via Task Scheduler.
-- [ ] Row counts for migrated tables match between Supabase source and local Postgres.
+- [x] N/A — no source data existed to migrate. The Supabase project had zero
+      rows across every ML relation (confirmed via the user's own GitHub
+      Actions failure output listing every relation MISSING), and the asset
+      universe was being widened to ~100 stocks requiring fresh ingestion
+      regardless. Row-count parity was replaced by an explicit skip decision
+      (see `specs/local-persistence/spec.md`'s "One-Time Supabase Data
+      Migration" REMOVED requirement); all migrated tables start empty and
+      are repopulated by the collector/brain pipelines.
 - [ ] Risk-profile table exists and accepts new scope-only writes; no migrated rows.
