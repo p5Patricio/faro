@@ -1,0 +1,51 @@
+change: telegram-notifications
+status: active
+mode: openspec
+created_at: 2026-08-25
+depends_on:
+  - local-postgres-migration
+preflight:
+  pace: auto
+  artifact_store: openspec
+  delivery_strategy: ask-on-risk
+  review_budget_lines: 400
+  chain_strategy: stacked-to-main
+artifacts:
+  design: openspec/changes/telegram-notifications/design.md
+  proposal: openspec/changes/telegram-notifications/proposal.md
+  specs:
+    - openspec/changes/telegram-notifications/specs/operational-notifications/spec.md
+    - openspec/changes/telegram-notifications/specs/local-persistence/spec.md
+decisions:
+  transport: long-polling-family-outbound-only-sendmessage
+  transport_rationale: >-
+    Webhooks require a publicly reachable HTTPS endpoint on port 443/80/88/8443.
+    On a NAT'd Windows home machine that means a tunneling service (external cloud
+    dependency, violates local-only) or port-forwarding plus a certificate (inbound
+    attack surface on a machine holding personal finance data). Long polling and
+    webhooks are mutually exclusive. Outbound-only needs no polling at all.
+  library: thin-requests-client-not-python-telegram-bot
+  library_rationale: >-
+    python-telegram-bot is asyncio-only since v20; every entrypoint in this codebase
+    is a synchronous `python -m` job.
+  parse_mode: html-not-markdownv2
+  parse_mode_rationale: >-
+    MarkdownV2 requires escaping 18 characters including `.`, `-`, `(`, `)` which
+    appear constantly in tickers and prices. HTML needs only `&`, `<`, `>`.
+  notifier_shape: generalize-existing-notifier-as-transport
+  inbound_commands: deferred-to-a-separate-later-work-unit
+  migration_number: 0007_notifications
+  migration_number_rationale: >-
+    0001-0004 exist on disk; 0005_shared_ingestion.sql is reserved by
+    financial-intelligence-expansion. This change ships first, so 0005/0006 will not
+    yet exist. db/migrate.py applies pending files lexicographically, so the gap is
+    tolerated and later-arriving 0005/0006 still apply.
+  secrets: env-only-never-database-never-report-redacted-in-logs
+  trigger_cut: p0-job-failure-and-signal-crossing-p1-degradation-and-staleness
+progress:
+  proposal: complete
+  specs: complete
+  design: complete
+  tasks: complete
+  apply: complete
+  verify: pending

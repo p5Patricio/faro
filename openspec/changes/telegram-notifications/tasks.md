@@ -104,15 +104,15 @@ detection until that lands.
 
 ## Phase 7: Scheduler Integration — BLOCKED (Req: P0 Alerts Deliver Immediately)
 
-- [ ] 7.1 **Prerequisite check**: confirm `ops/run_local_scheduler.py` exists (`local-postgres-migration` task 9) and inspect its final-step argv before starting this phase.
-- [ ] 7.2 If unavailable, skip this phase — `job_failure` already fires from report-derived `failed > 0` (Phase 6a/6b), matching design's degrade-gracefully fallback. Do not block PR 1-6b/8 on this phase.
-- [ ] 7.3 If available, append `--failed-steps <comma-joined step names>` to the scheduler's existing fixed `ops.notify_operational_job` argv only when a step exits non-zero before writing its own report JSON.
-- [ ] 7.4 Extend `tests/test_run_local_scheduler.py` to assert the flag is appended only on a pre-report failure and is a single unsplit argv element.
+- [x] 7.1 **Prerequisite check**: confirm `ops/run_local_scheduler.py` exists (`local-postgres-migration` task 9) and inspect its final-step argv before starting this phase.
+- [x] 7.2 If unavailable, skip this phase — `job_failure` already fires from report-derived `failed > 0` (Phase 6a/6b), matching design's degrade-gracefully fallback. Do not block PR 1-6b/8 on this phase.
+- [x] 7.3 If available, append `--failed-steps <comma-joined step names>` to the scheduler's existing fixed `ops.notify_operational_job` argv only when a step exits non-zero before writing its own report JSON.
+- [x] 7.4 Extend `tests/test_run_local_scheduler.py` to assert the flag is appended only on a pre-report failure and is a single unsplit argv element.
 
 ## Phase 8: Documentation
 
-- [ ] 8.1 `.env.example`: add `TELEGRAM_BOT_TOKEN=` and `TELEGRAM_CHAT_ID=` as optional, commented.
-- [ ] 8.2 `README.md`: BotFather bot creation, chat-id lookup, `/revoke` on suspected compromise, and the "unset both vars to disable" rollback note.
+- [x] 8.1 `.env.example`: add `TELEGRAM_BOT_TOKEN=` and `TELEGRAM_CHAT_ID=` as optional, commented.
+- [x] 8.2 `README.md`: BotFather bot creation, chat-id lookup, `/revoke` on suspected compromise, and the "unset both vars to disable" rollback note.
 
 ## Key Learnings
 

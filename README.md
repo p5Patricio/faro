@@ -94,6 +94,8 @@ Variables de entorno principales:
 | `LOCAL_DATABASE_URL` | DSN de PostgreSQL local usado por la API, el collector, `brain/` y `ops/run_local_scheduler`. |
 | `TEST_DATABASE_URL` | DSN de una base Postgres separada para pruebas (`pytest`); nunca la misma base que `LOCAL_DATABASE_URL`. |
 | `VITE_API_BASE_URL` | URL base que usa el frontend para llamar a la API. |
+| `TELEGRAM_BOT_TOKEN` | Opcional. Token del bot de Telegram que usa `ops/notify_operational_job` para alertas operativas (fallo de job, cambio de senal, degradacion de modelo, datos vencidos). Ver [Notificaciones por Telegram](#notificaciones-por-telegram). |
+| `TELEGRAM_CHAT_ID` | Opcional. ID del chat o canal de Telegram donde se publican esas alertas. Requiere `TELEGRAM_BOT_TOKEN` para tener efecto. |
 
 3. Instala dependencias:
 
@@ -310,6 +312,34 @@ OPERATIONAL_WEBHOOK_URL   # opcional, para notificaciones externas
 TELEGRAM_BOT_TOKEN        # opcional, para notificaciones por Telegram
 TELEGRAM_CHAT_ID          # opcional, para notificaciones por Telegram
 ```
+
+#### Notificaciones por Telegram
+
+`ops/notification_dispatch.py` evalua cuatro alertas (fallo de job, cambio de senal BUY/SELL, degradacion de modelo, datos vencidos) y las envia por Telegram con dedupe y cooldown por regla; sin `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID` el envio es un no-op silencioso (el resto del job sigue igual).
+
+1. **Crear el bot.** En Telegram, hablar con [@BotFather](https://t.me/BotFather), enviar `/newbot` y seguir las instrucciones. BotFather entrega un token con forma `123456789:AA...` — ese es `TELEGRAM_BOT_TOKEN`.
+2. **Obtener el `chat_id`.** Agregar el bot al chat o canal donde quieres recibir las alertas y enviar cualquier mensaje ahi. Luego, con el token del paso anterior:
+
+   ```bash
+   curl "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/getUpdates"
+   ```
+
+   El campo `result[].message.chat.id` (o `channel_post.chat.id` en un canal) es tu `TELEGRAM_CHAT_ID`.
+3. **Configurar `.env`.** Agrega ambas variables a tu `.env` local (nunca las subas al repositorio ni las escribas en un script versionado):
+
+   ```env
+   TELEGRAM_BOT_TOKEN=123456789:AA...
+   TELEGRAM_CHAT_ID=-1009876543210
+   ```
+4. **Verificar que funciona.** Forzar una notificacion de prueba sin depender de un job real:
+
+   ```bash
+   py -3.14 -m ops.notify_operational_job --reports-dir reports --status failure
+   ```
+
+   Con ambas variables definidas deberia llegar un mensaje al chat configurado; la salida JSON en consola tambien muestra `notification.telegram.sent: true`. Si no llega nada, revisa que el bot siga en el chat/canal y que el `chat_id` sea correcto.
+5. **Revocar un token filtrado.** Si el token se expuso (por ejemplo en un log o commit), hablar de nuevo con BotFather y enviar `/revoke` sobre ese bot para invalidarlo, luego actualizar `TELEGRAM_BOT_TOKEN` en tu `.env` con el nuevo valor.
+6. **Desactivar Telegram (rollback).** Quitar ambas variables del entorno/`.env` (o dejarlas vacias): `ops/notify_operational_job` vuelve a ser un no-op para ese transporte, sin tocar el webhook generico ni el resto del scheduler.
 
 Para registrar las dos tareas programadas (diaria 06:20 con `--job full`, semanal domingo 06:40 con `--job full_retrain`), revisa y ejecuta `ops/register_local_jobs.ps1`:
 
