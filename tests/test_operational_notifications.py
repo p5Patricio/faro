@@ -43,7 +43,7 @@ def test_build_notification_payload_summarizes_reports(tmp_path) -> None:
         ref="main",
     )
 
-    assert payload["title"] == "IA Inversiones operational job completed"
+    assert payload["title"] == "Faro operational job completed"
     assert payload["job_mode"] == "full_retrain"
     assert payload["repository"] == "owner/repo"
     assert payload["skipped"] == 1
@@ -59,7 +59,7 @@ def test_build_notification_payload_marks_failed_when_report_has_errors(tmp_path
 
     payload = build_notification_payload(tmp_path, status="success")
 
-    assert payload["title"] == "IA Inversiones operational job failed"
+    assert payload["title"] == "Faro operational job failed"
     assert payload["failed"] == 1
     assert payload["reports"][0]["error_summaries"][0]["reason"] == "timeout"
 

@@ -1,6 +1,6 @@
 # Security Policy
 
-IA Inversiones is an experimental investment research platform. Treat secrets, model artifacts, market data pipelines, and deployment configuration as sensitive.
+Faro is an experimental investment research platform. Treat secrets, model artifacts, market data pipelines, and deployment configuration as sensitive.
 
 ## Supported Scope
 

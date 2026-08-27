@@ -8,7 +8,7 @@
 > la operacion actual. Este documento se mantiene actualizado en lo que sigue siendo
 > aplicable (flujo del modelo, reentrenamiento, criterios antes de dinero real).
 
-Este plan describe como llevar IA Inversiones desde el estado actual a una operacion continua con datos reales, predicciones versionadas, paper trading y reentrenamiento controlado.
+Este plan describe como llevar Faro desde el estado actual a una operacion continua con datos reales, predicciones versionadas, paper trading y reentrenamiento controlado.
 
 ## 1. Arquitectura Objetivo
 

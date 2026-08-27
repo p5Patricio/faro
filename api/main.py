@@ -45,7 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _POOL.close()
 
 
-app = FastAPI(title="Plataforma IA Inversiones API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Faro API", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,7 +79,7 @@ def get_app_config() -> AppConfig:
 
 @app.get("/")
 def read_root():
-    return {"message": "API de Plataforma IA Inversiones funcionando"}
+    return {"message": "API de Faro funcionando"}
 
 
 @app.get("/api/health")

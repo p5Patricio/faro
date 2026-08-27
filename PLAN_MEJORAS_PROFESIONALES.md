@@ -2,7 +2,7 @@
 
 Revision: 2026-07-11.
 
-Este plan convierte el estado actual de IA Inversiones en una hoja de ruta profesional para aumentar calidad, confiabilidad y capacidad de aprendizaje del sistema. La idea central no es que el modelo "aprenda solo" sin control, sino construir un ciclo MLOps donde cada prediccion guardada se evalua contra el mercado real, alimenta monitoreo, dispara reentrenamiento y solo promueve modelos que demuestran mejora contra el vigente.
+Este plan convierte el estado actual de Faro en una hoja de ruta profesional para aumentar calidad, confiabilidad y capacidad de aprendizaje del sistema. La idea central no es que el modelo "aprenda solo" sin control, sino construir un ciclo MLOps donde cada prediccion guardada se evalua contra el mercado real, alimenta monitoreo, dispara reentrenamiento y solo promueve modelos que demuestran mejora contra el vigente.
 
 ## Resumen Ejecutivo
 

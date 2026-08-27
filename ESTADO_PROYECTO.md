@@ -2,7 +2,7 @@
 
 Ultima revision operativa: 2026-07-12.
 
-IA Inversiones ya cuenta con una base funcional para investigar, entrenar, evaluar y monitorear modelos de decision de inversion. El sistema no promete precision perfecta ni debe operar capital real sin una etapa prolongada de validacion; esta construido para maximizar evidencia, trazabilidad y control de riesgo antes de tomar decisiones.
+Faro ya cuenta con una base funcional para investigar, entrenar, evaluar y monitorear modelos de decision de inversion. El sistema no promete precision perfecta ni debe operar capital real sin una etapa prolongada de validacion; esta construido para maximizar evidencia, trazabilidad y control de riesgo antes de tomar decisiones.
 
 ## Capacidades Implementadas
 

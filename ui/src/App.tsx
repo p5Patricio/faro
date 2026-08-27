@@ -484,11 +484,11 @@ function App() {
           <div className="flex items-center gap-3">
             <img
               src="/brand/ia-inversiones-logo.png"
-              alt="IA Inversiones"
+              alt="Faro"
               className="h-12 w-12 rounded-lg border border-amber-200/20 bg-zinc-50 object-cover"
             />
             <div>
-              <h1 className="text-xl font-semibold tracking-normal text-zinc-50">IA Inversiones</h1>
+              <h1 className="text-xl font-semibold tracking-normal text-zinc-50">Faro</h1>
               <p className="text-sm text-zinc-400">Decisiones de mercado con riesgo visible</p>
             </div>
           </div>

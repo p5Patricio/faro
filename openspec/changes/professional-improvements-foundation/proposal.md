@@ -2,7 +2,7 @@
 
 ## Intent
 
-Raise IA Inversiones from a functional deployed MVP to a reviewable professional project foundation. This first slice addresses repository hygiene and CI before deeper model, drift, and broker work.
+Raise Faro from a functional deployed MVP to a reviewable professional project foundation. This first slice addresses repository hygiene and CI before deeper model, drift, and broker work.
 
 ## Scope
 

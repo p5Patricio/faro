@@ -1,4 +1,4 @@
-# Instrucciones del Proyecto: Plataforma IA Inversiones
+# Instrucciones del Proyecto: Faro
 
 Este documento contiene los mandatos y convenciones específicos para el desarrollo de este proyecto.
 

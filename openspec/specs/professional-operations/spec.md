@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This spec covers repository hygiene, continuous integration, dependency maintenance, and operational documentation required to run IA Inversiones as a professional project.
+This spec covers repository hygiene, continuous integration, dependency maintenance, and operational documentation required to run Faro as a professional project.
 
 ## Requirements
 

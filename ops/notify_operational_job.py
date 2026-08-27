@@ -57,7 +57,7 @@ def build_notification_payload(
     skipped = sum(int(report.get("skipped_count") or 0) for report in reports)
     title_status = "failed" if status.lower() != "success" or failures else "completed"
     return {
-        "title": f"IA Inversiones operational job {title_status}",
+        "title": f"Faro operational job {title_status}",
         "status": status,
         "job_mode": job_mode,
         "repository": repository,

@@ -60,7 +60,7 @@ def _config() -> TelegramConfig:
 
 def test_untrusted_ticker_and_reason_values_are_escaped_before_reaching_session_post() -> None:
     payload = {
-        "title": "IA Inversiones operational job failed",
+        "title": "Faro operational job failed",
         "status": "failure",
         "reports": [
             {
