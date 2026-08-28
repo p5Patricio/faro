@@ -483,7 +483,7 @@ function App() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 md:flex-row md:items-center md:justify-between md:px-6">
           <div className="flex items-center gap-3">
             <img
-              src="/brand/ia-inversiones-logo.png"
+              src="/brand/faro-logo.png"
               alt="Faro"
               className="h-12 w-12 rounded-lg border border-amber-200/20 bg-zinc-50 object-cover"
             />

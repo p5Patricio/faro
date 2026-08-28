@@ -1,6 +1,6 @@
 # Faro
 
-![Faro](ui/public/brand/ia-inversiones-logo.png)
+![Faro](ui/public/brand/faro-logo.png)
 
 Plataforma experimental para investigacion, entrenamiento y evaluacion de modelos de decision de inversion. El objetivo es convertir datos historicos de mercado en senales auditables de **comprar**, **vender** o **mantener**, siempre acompanadas por confianza, riesgo, probabilidades y trazabilidad del modelo.
 
