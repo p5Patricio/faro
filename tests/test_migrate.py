@@ -93,6 +93,12 @@ def test_resolve_dsn_uses_local_database_url_env_var(monkeypatch: pytest.MonkeyP
 
 
 def test_resolve_dsn_composes_from_pg_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+    # resolve_dsn() calls load_dotenv(), which searches upward from the
+    # current directory for a real .env file. A developer's actual .env
+    # (which legitimately sets LOCAL_DATABASE_URL) would otherwise refill
+    # the var this test just deleted, defeating the fallback-path test.
+    # Stub load_dotenv() out so this test is isolated from ambient state.
+    monkeypatch.setattr("db.migrate.load_dotenv", lambda *args, **kwargs: False)
     monkeypatch.delenv("LOCAL_DATABASE_URL", raising=False)
     monkeypatch.setenv("PGHOST", "localhost")
     monkeypatch.setenv("PGDATABASE", "ia_inversiones")
@@ -106,6 +112,8 @@ def test_resolve_dsn_composes_from_pg_parts(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_resolve_dsn_raises_without_any_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    # See test_resolve_dsn_composes_from_pg_parts: isolate from a real .env.
+    monkeypatch.setattr("db.migrate.load_dotenv", lambda *args, **kwargs: False)
     for key in ("LOCAL_DATABASE_URL", "PGHOST", "PGDATABASE", "PGUSER", "PGPASSWORD", "PGPORT"):
         monkeypatch.delenv(key, raising=False)
 
