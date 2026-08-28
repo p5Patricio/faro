@@ -259,3 +259,282 @@ None.
 (now unblocked, since both its dependencies — this client and Batch 1's repository methods —
 are in place) or any other pending phase, or `sdd-verify` if PR 4 is being verified as its
 own slice before further phases proceed.
+
+## Batch 3 — Phase 6: Asset-Class Feature-Set Resolution Seam
+
+**Mode**: Standard (`openspec/config.yaml` present with `testing.strict_tdd: false` —
+proceeded in standard workflow: read spec/design, write the additive functions + tests
+together, verify with the focused suite then the full suite).
+
+Ran concurrently with Phase 2/3/5 sibling agents actively editing `brain/retraining_job.py`,
+`brain/run_retraining_job.py`, `brain/scoped_evaluation.py`, `brain/candidate_matrix.py`,
+`collector/main.py` in the same tree. No file overlap with this batch: this batch only
+touches `brain/features.py` (modified, additive-only) and `tests/test_feature_set_resolution.py`
+(new). `tests/test_brain_pipeline.py` was NOT touched — no regression check needed there for
+this seam.
+
+### Completed Tasks
+
+- [x] 6.1 `brain/features.py` — added `FEATURE_SET_OVERLAYS_BY_ASSET_CLASS: dict[str, str] = {}`
+  (empty; siblings register later) and `DEFAULT_BASE_FEATURE_SET = "technical_v2"`; added
+  `feature_set_for_asset_class(asset_class, base_feature_set=DEFAULT_BASE_FEATURE_SET)` —
+  never raises, normalizes via `.strip().lower()`, unmapped/blank/`None` class falls back to
+  `base_feature_set`.
+- [x] 6.2 `brain/features.py` — added keyword-only `asset_class: str | None = None` to
+  `feature_columns_for_set`. When `asset_class is None` (all 14 real existing call sites),
+  `resolved = feature_set` — strictly string-keyed, byte-identical to the pre-change function
+  including the `ValueError` message text for an unknown name. When set, resolves via
+  `feature_set_for_asset_class` first.
+- [x] 6.3 `brain/features.py` — added `compose_feature_set(base_feature_set, overlay_columns)`
+  returning `[*feature_columns_for_set(base_feature_set), *overlay_columns]`, verbatim from
+  design.md. `technical_v2`'s list object itself is never mutated (list is rebuilt via
+  unpacking, not appended to).
+- [x] 6.4 `tests/test_feature_set_resolution.py` — `feature_columns_for_set("technical_v2")`
+  equals `FEATURE_COLUMNS_TECHNICAL_V2` unchanged; parametrized over
+  `asset_class="crypto"/"unknown_class"/None` all return the same list without raising (empty
+  overlay map = universal fallback).
+- [x] 6.5 `tests/test_feature_set_resolution.py` — unknown `feature_set` name raises
+  `ValueError` both with and without an `asset_class` kwarg;
+  `feature_set_for_asset_class` never raises for any input incl. `None`/empty string;
+  `monkeypatch.setitem(FEATURE_SET_OVERLAYS_BY_ASSET_CLASS, "crypto", ...)` proves the
+  registered-overlay resolution path (both `feature_set_for_asset_class` directly and through
+  `feature_columns_for_set(..., asset_class=...)`), plus case/whitespace normalization
+  (`"CRYPTO"`, `"  crypto  "`); `compose_feature_set` appends overlay columns without mutating
+  the `technical_v2` spine.
+- [x] 6.6 Ran `py -3.14 -m pytest` (full suite, both DSNs exported) — 0 regressions; every one
+  of the 14 real `feature_columns_for_set` call sites (grepped explicitly — the "28 callers"
+  figure in design.md/tasks.md counts doc/spec/test mentions, not just production call sites)
+  passes exactly one positional arg, so the new keyword-only param breaks nothing.
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `brain/features.py` | Modified | Added `FEATURE_SET_OVERLAYS_BY_ASSET_CLASS`, `DEFAULT_BASE_FEATURE_SET`, `feature_set_for_asset_class`, `compose_feature_set`; `feature_columns_for_set` gained keyword-only `asset_class=None` (byte-identical when omitted) |
+| `tests/test_feature_set_resolution.py` | Created | 9 tests: byte-identical baseline, fallback (parametrized over crypto/unknown/None), unknown-name `ValueError` regardless of `asset_class`, never-raises policy function, registered-overlay resolution (both layers) with case/whitespace normalization, `compose_feature_set` non-mutation |
+| `openspec/changes/financial-intelligence-expansion/tasks.md` | Modified | Marked Phase 6 tasks 6.1-6.6 `[x]` |
+
+### Deviations from Design
+
+None — implementation matches design.md's verbatim `brain/features.py` diff exactly,
+including the docstrings and the `(asset_class or "").strip().lower()` normalization.
+
+### Issues Found
+
+None in this batch's own scope. One transient observation not caused by this batch: a full
+"`py -3.14 -m pytest`" run mid-session hit 3 failures in `tests/test_brain_pipeline.py`
+(`retraining_job.py:86: TypeError`) while a sibling agent was concurrently mid-editing
+`brain/retraining_job.py` (Phase 3, live in the same working tree). Re-running immediately
+after (and running the failing tests in isolation) showed 0 failures — confirmed as a
+concurrent-edit race on files this batch never touches, not a defect in Phase 6's code.
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `py -3.14 -m pytest tests/test_feature_set_resolution.py brain/ -q` → `9 passed` |
+| Runtime harness command/scenario and exact result | N/A per design.md/tasks.md: stdlib-only pure functions, no I/O — parametrized unit tests are the complete proof (design's own "Testing Strategy" table lists this as Unit-only) |
+| Rollback boundary | Revert the 3 additive functions and the keyword-only `asset_class` param in `brain/features.py` (default `None` preserves every existing call site's behavior); delete `tests/test_feature_set_resolution.py`. No other file changed by this batch. |
+
+### Full Suite Regression
+
+`py -3.14 -m pytest -q` (both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` exported):
+- Baseline measured at the start of this batch: **284 passed** (matches Batch 2's final count
+  — no Phase 6 work had landed yet)
+- After this batch's own change in isolation: `tests/test_feature_set_resolution.py brain/ -q`
+  → **9 passed**, 0 regressions among the 14 real `feature_columns_for_set` callers
+- Full-suite run immediately after landing this batch showed a transient 3-failure race from
+  a concurrently-editing sibling (see "Issues Found" above); re-run cleanly at **307 passed**,
+  then **322 passed** as further sibling batches (Phase 2/3/5) continued landing concurrently
+  in the same session. This batch's own 9 tests are included and green in every one of those
+  runs.
+
+### Remaining Tasks
+
+- [ ] Phase 5: Ingestion Audit Recorder + Identifier Resolution Job (sibling scope, in
+  progress concurrently per git status)
+- [ ] Phase 7: API Endpoint + Rollout Confirmation
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`stacked-to-main`)
+- Current work unit: PR 6 — `brain/features.py` additive functions (independent of PR 1-5)
+- Boundary: this batch starts from `feature_columns_for_set` having no `asset_class`
+  awareness at all and ends with the full resolution seam in place, registry empty, every
+  existing call site byte-identical.
+- Estimated review budget impact: within the ~100-130 estimated line budget for PR 6 (Low
+  risk); actual diff is ~30 lines in `brain/features.py` + ~65 lines of new test file, well
+  under the 400-line threshold and under the PR's own estimate.
+
+### Status
+
+6/6 Phase 6 tasks complete. No blockers. This batch's own focused suite is green and stable;
+full-suite count fluctuates only due to concurrent sibling batches landing in the same
+session, never due to this batch's own code. Ready for `sdd-apply` to continue with Phase 5
+or Phase 7, or `sdd-verify` if PR 6 is being verified as its own slice before further phases
+proceed.
+
+## Batch 3 — Phase 2: S&P 100 Universe Snapshot
+
+**Mode**: Standard (no `strict_tdd` config found; `openspec/config.yaml` not present in this
+checkout — proceeded in standard workflow: read spec/design, write config + loader + main.py
+wiring, write tests, verify with the focused suite, the full suite, and a real runtime
+harness run against `TEST_DATABASE_URL`).
+
+Ran concurrently with sibling batches on Phase 3 (`config/targets.core.json`,
+`brain/retraining_job.py`, `brain/run_retraining_job.py`, `brain/scoped_evaluation.py`),
+Phase 5 (`collector/ingestion_audit.py`, `collector/run_identifier_resolution.py`), and
+Phase 6 (`brain/features.py`). No file overlap: this batch only touches
+`config/universe.sp100.json` (new), `collector/universe.py` (new), `collector/main.py`
+(modified — additive `expand_universe_document` + one `isinstance(raw, dict)` branch), and
+`tests/test_universe_config.py` (new). Staged explicit paths only, never `git add -A`, so
+sibling agents' concurrent uncommitted work in this shared tree was not touched or committed.
+
+Task 2.1 was already verified by the orchestrator before this batch (`HON`, not `HONA`,
+confirmed via SEC EDGAR CIK 0000773840 + independent quote sources) — no re-verification
+performed here.
+
+### Completed Tasks
+
+- [x] 2.2 `config/universe.sp100.json` (new) — built via a small one-off generator script
+  (not checked in; scratchpad-only) from the orchestrator-supplied verified 101-ticker list,
+  to guarantee mechanical, typo-free transcription rather than manual copy-paste. Schema
+  matches design.md exactly: `"index": "S&P 100 (OEX)"`, `"snapshot_date": "2025-09-22"`
+  (the Wikipedia article's own citation date — honestly recorded, not backdated to a later
+  date than the data reflects), `"source": "Wikipedia S&P 100 article, retrieved
+  2026-08-28; membership as of 2025-09-22 per article citation"`, `"membership_bias"` copied
+  verbatim from design.md's example JSON, `"defaults"` block exactly as specified
+  (`yfinance`/`stock`/`1d`/`2020-01-01`), and a compact single-line-per-member `"members"`
+  array (matching design's "~120 lines" compact-schema rationale — a naive
+  `json.dumps(indent=2)` 4-line-per-member expansion would have produced ~420 lines instead;
+  the file is 110 lines).
+- [x] 2.3 Ticker normalization (`.` → `-`) implemented as a transformation step
+  (`normalize_ticker()`) inside the generator script, applied uniformly to every ticker, not
+  a manual one-off edit — confirmed `BRK.B` → `BRK-B` is the only ticker affected in this
+  snapshot; verified programmatically that zero remaining tickers contain `.`.
+- [x] 2.4 `tests/test_universe_config.py` — 4 tests: file parses and has the expected
+  `index`/`members` shape; `BRK-B` present and `BRK.B` absent; no ticker contains `.`;
+  `member_count == 101`.
+- [x] 2.5 `collector/universe.py` (new) — `UniverseDocument` frozen dataclass with the exact
+  6 fields from design.md; `load_universe_document(path)` raises `ValueError` with a message
+  naming the missing field when `snapshot_date` or `membership_bias` is absent or
+  blank/whitespace-only (fails at load time, never at report time); `universe_disclosure(doc)`
+  returns the exact 5-key dict (`index`/`snapshot_date`/`source`/`membership_bias`/
+  `member_count`). Also added `universe_report_block(doc: UniverseDocument | None)` — an
+  additive helper (not in design.md's explicit 3-symbol interface list, but directly required
+  by task 2.7's acceptance test and the spec's "Missing snapshot date blocks
+  disclosure-bearing output" requirement) that wraps `universe_disclosure` under the
+  `"universe"` report key, or emits `{"disclosure_status": "incomplete", "reason":
+  "no_universe_snapshot"}` when no document is available — never omitting the key. This
+  module imports nothing from `collector.main`/`AssetCollectionConfig`, confirmed by
+  inspection (only stdlib `json`/`dataclasses`/`pathlib`/`typing` imports).
+- [x] 2.6 `collector/main.py` — added `expand_universe_document(raw: dict[str, Any]) ->
+  list[AssetCollectionConfig]` building one config per member from the raw parsed dict's
+  `defaults`/`members` keys (not via `load_universe_document`, so this function has no
+  disclosure-validation dependency — it is purely a collection-shape expansion, matching
+  design's exact interface snippet which calls it directly on `json.loads(...)` output).
+  Wired `if isinstance(raw, dict): return expand_universe_document(raw)` into
+  `load_asset_configs`, placed before the existing `isinstance(raw, list)` check. The
+  existing list-form code path (`return [AssetCollectionConfig(**item) for item in raw]`)
+  is byte-identical to before; only the `ValueError` message text changed from `"assets file
+  must contain a JSON array"` to `"assets file must contain a JSON array or a universe
+  document"` — this exact wording is design.md's own verbatim interface snippet, and no
+  existing test asserted the old message text (confirmed via search).
+- [x] 2.7 `tests/test_universe_config.py` — `test_expand_universe_document_applies_defaults_to_every_member`
+  (3-member fixture → 3 `AssetCollectionConfig`, full field-by-field equality including
+  `defaults` propagation and `BRK-B` normalization survives round-trip);
+  `test_load_asset_configs_dispatches_dict_form_to_universe_expansion` (dict-form file
+  through the public `load_asset_configs` entry point); `test_universe_report_block_with_document_embeds_disclosure`
+  and `test_universe_report_block_with_no_document_emits_incomplete_marker` prove the exact
+  `{"universe": {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}}` shape
+  from the task description, and the populated-document case reuses `universe_disclosure`
+  directly (no duplicated field list to drift).
+- [x] 2.8 `tests/test_universe_config.py` — `test_load_universe_document_raises_when_snapshot_date_missing`,
+  `..._membership_bias_missing`, and `..._snapshot_date_blank` (whitespace-only string, not
+  just an absent key) all assert `pytest.raises(ValueError, match=...)`;
+  `test_load_universe_document_round_trips_valid_fixture` is the paired happy-path proof.
+- [x] 2.9 `test_full_universe_expansion_resolves_every_asset_without_configuration_error` —
+  loads the real checked-in `config/universe.sp100.json`, expands all 101 members, and runs
+  them through `run_collection` with a fake `provider_factory`/`FakeRepository` (same pattern
+  as `tests/test_collector_job.py`'s `FakeProvider`/`FakeRepository`) — asserts 101 results,
+  101 `get_or_create_asset` calls, matching ticker sets, and every asset resolved with
+  `asset_class="stock"`. The runtime-harness command (below) separately proves the same
+  `isinstance(raw, dict)` → `expand_universe_document` → `collect_asset` path against real
+  `yfinance` and a real `TEST_DATABASE_URL` round-trip for a 5-ticker subset.
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `config/universe.sp100.json` | Created | 101-member S&P 100 snapshot, `snapshot_date: 2025-09-22`, compact schema (110 lines) |
+| `collector/universe.py` | Created | `UniverseDocument`, `load_universe_document`, `universe_disclosure`, `universe_report_block` |
+| `collector/main.py` | Modified | Added `expand_universe_document` + `isinstance(raw, dict)` branch in `load_asset_configs`; list-form code path unchanged |
+| `tests/test_universe_config.py` | Created | 14 tests covering the snapshot file shape, expansion, disclosure/incomplete-marker, missing-field validation, and full 101-member expansion |
+| `openspec/changes/financial-intelligence-expansion/tasks.md` | Modified | Marked Phase 2 tasks 2.2-2.9 `[x]` |
+
+### Deviations from Design
+
+One addition beyond design.md's explicit 3-symbol `collector/universe.py` interface list:
+`universe_report_block(doc: UniverseDocument | None) -> dict[str, Any]`. Design.md describes
+this exact behavior narratively ("a report generated with no universe document at all emits
+`{"universe": {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}}` rather
+than dropping the key") but does not name a function for it, and task 2.7 requires a test
+proving this behavior in Phase 2's own test file — while the actual call sites
+(`brain/run_retraining_job.py`'s report, `api/main.py`'s endpoint) are Phase 3 and Phase 7
+work, explicitly out of scope for this batch. Adding this small, additive, pure helper to
+`collector/universe.py` (my file) lets Phase 3/7 import and reuse it later without me
+touching their files now. No other deviation — `expand_universe_document`'s signature,
+`UniverseDocument`'s fields, and `load_universe_document`'s fail-fast behavior all match
+design.md exactly.
+
+### Issues Found
+
+None.
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `py -3.14 -m pytest tests/test_universe_config.py -q` → `14 passed in 2.30s` |
+| Runtime harness command/scenario and exact result | `LOCAL_DATABASE_URL=<TEST_DATABASE_URL value> py -3.14 -m collector.main --assets-file <5-ticker subset universe doc: AAPL/MSFT/JNJ/HON/BRK-B> --start 2020-01-01 --end 2020-01-05` against real `yfinance` and real `TEST_DATABASE_URL` → all 5 tickers returned `rows_loaded: 2`; verified by direct SQL query against `TEST_DATABASE_URL`: all 5 rows present in `assets` (`asset_class='stock'`) and 2 price rows each in `prices`, including `HON` and `BRK-B` resolving correctly through real `yfinance` — the strongest possible confirmation that task 2.1's `HON` (not `HONA`) correction is right |
+| Rollback boundary | Delete `config/universe.sp100.json`, `collector/universe.py`, `tests/test_universe_config.py`; revert `collector/main.py`'s `expand_universe_document` function and the `isinstance(raw, dict)` branch (the `isinstance(raw, list)` path and `config/assets.core.json` consumers are completely untouched) |
+
+### Full Suite Regression
+
+`py -3.14 -m pytest -q` (both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` exported via `.env`):
+- Before this batch (measured at batch start, matching Batch 2's end-state): **284 passed**
+- After this batch: **307 passed** — this run captured concurrent sibling-batch landings in
+  the same shared tree (Phase 3/5/6 test files/additions were present at the time this batch
+  ran the full suite), so 307 is not solely this batch's contribution. This batch's own
+  isolated contribution is exactly **14 new tests** (`py -3.14 -m pytest
+  tests/test_universe_config.py -q` → `14 passed`), 0 regressions in that file or in any file
+  this batch touched.
+
+### Remaining Tasks
+
+- [ ] Phase 3: Bounded Retraining-Target Policy + Global-Scope Cap (concurrent sibling scope)
+- [ ] Phase 5: Ingestion Audit Recorder + Identifier Resolution Job (concurrent sibling scope)
+- [ ] Phase 6: Asset-Class Feature-Set Resolution Seam (concurrent sibling scope)
+- [ ] Phase 7: API Endpoint + Rollout Confirmation
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`stacked-to-main`)
+- Current work unit: PR 2 — `config/universe.sp100.json` + `collector/universe.py` +
+  `collector/main.py`'s `expand_universe_document`/`isinstance` branch. Per design's explicit
+  "Slice 2 is the file itself and must not be merged with any other slice" note, this PR
+  stays scoped to exactly these 4 files.
+- Boundary: this batch starts from no universe snapshot/loader existing at all and ends with
+  a fully tested, disclosure-complete 101-member snapshot wired into the collector's existing
+  `load_asset_configs` entry point, proven against both a fake provider (full 101-member
+  expansion) and real `yfinance`/`TEST_DATABASE_URL` (5-ticker subset).
+- Estimated review budget impact: within the ~350-400 estimated line budget for PR 2
+  (Medium-High risk); the snapshot file's compact single-line-per-member layout (110 lines)
+  was a deliberate choice to stay close to design's own ~120-line estimate rather than the
+  ~420 lines a naive `json.dumps(indent=2)` would have produced.
+
+### Status
+
+8/8 Phase 2 tasks complete (2.1 pre-verified by orchestrator; 2.2-2.9 this batch). No
+blockers. Ready for `sdd-apply` to continue with any remaining phase, or `sdd-verify` if PR 2
+is being verified as its own slice before further phases proceed.

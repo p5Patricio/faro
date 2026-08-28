@@ -41,12 +41,30 @@ FEATURE_COLUMNS_BY_SET = {
 }
 FEATURE_COLUMNS = FEATURE_COLUMNS_TECHNICAL_V1
 
+# Asset-class -> feature-set-name overlay registry. Empty here; sibling changes
+# (e.g. asset-class-profile-overlays) register entries such as {"crypto": "crypto_v1"}.
+FEATURE_SET_OVERLAYS_BY_ASSET_CLASS: dict[str, str] = {}
+DEFAULT_BASE_FEATURE_SET = "technical_v2"
 
-def feature_columns_for_set(feature_set: str) -> list[str]:
+
+def feature_set_for_asset_class(asset_class: str, base_feature_set: str = DEFAULT_BASE_FEATURE_SET) -> str:
+    """Policy: which feature-set name an asset SHOULD use. Never raises; unmapped class -> base."""
+    return FEATURE_SET_OVERLAYS_BY_ASSET_CLASS.get((asset_class or "").strip().lower(), base_feature_set)
+
+
+def feature_columns_for_set(feature_set: str, *, asset_class: str | None = None) -> list[str]:
+    # asset_class is None on all existing call sites -> strictly string-keyed,
+    # byte-identical behavior including the ValueError for an unknown name.
+    resolved = feature_set if asset_class is None else feature_set_for_asset_class(asset_class, feature_set)
     try:
-        return FEATURE_COLUMNS_BY_SET[feature_set]
+        return FEATURE_COLUMNS_BY_SET[resolved]
     except KeyError as error:
-        raise ValueError(f"Unknown feature_set: {feature_set}. Available: {sorted(FEATURE_COLUMNS_BY_SET)}") from error
+        raise ValueError(f"Unknown feature_set: {resolved}. Available: {sorted(FEATURE_COLUMNS_BY_SET)}") from error
+
+
+def compose_feature_set(base_feature_set: str, overlay_columns: list[str]) -> list[str]:
+    """Siblings register the result under a NEW name; technical_v2 is never mutated."""
+    return [*feature_columns_for_set(base_feature_set), *overlay_columns]
 
 
 def prepare_price_frame(prices: list[dict] | pd.DataFrame) -> pd.DataFrame:
