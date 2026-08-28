@@ -5,9 +5,9 @@
 
 .DESCRIPTION
     Creates:
-      - "IAInversiones\DailyOperationalCycle"  -- daily at 06:20, `--job full`
+      - "Faro\DailyOperationalCycle"  -- daily at 06:20, `--job full`
         (mirrors the retired workflow's `cron: "20 6 * * *"`)
-      - "IAInversiones\WeeklyRetrainingCycle"  -- weekly Sunday at 06:40,
+      - "Faro\WeeklyRetrainingCycle"  -- weekly Sunday at 06:40,
         `--job full_retrain` (mirrors `cron: "40 6 * * 0"`)
 
     This script only *registers the schtasks*. It does NOT set
@@ -28,11 +28,11 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
-Write-Host "Registering IAInversiones Task Scheduler jobs (repo root: $RepoRoot)"
+Write-Host "Registering Faro Task Scheduler jobs (repo root: $RepoRoot)"
 
 # Daily operational cycle: market data -> inference -> paper trading, 06:20.
 schtasks /Create `
-    /TN "IAInversiones\DailyOperationalCycle" `
+    /TN "Faro\DailyOperationalCycle" `
     /SC DAILY `
     /ST 06:20 `
     /RL LIMITED `
@@ -41,7 +41,7 @@ schtasks /Create `
 
 # Weekly retraining cycle: adds brain.run_retraining_job, Sunday 06:40.
 schtasks /Create `
-    /TN "IAInversiones\WeeklyRetrainingCycle" `
+    /TN "Faro\WeeklyRetrainingCycle" `
     /SC WEEKLY `
     /D SUN `
     /ST 06:40 `
@@ -51,15 +51,15 @@ schtasks /Create `
 
 Write-Host ""
 Write-Host "Registered. Verify with:"
-Write-Host "  schtasks /Query /TN `"IAInversiones\DailyOperationalCycle`" /V /FO LIST"
-Write-Host "  schtasks /Query /TN `"IAInversiones\WeeklyRetrainingCycle`" /V /FO LIST"
+Write-Host "  schtasks /Query /TN `"Faro\DailyOperationalCycle`" /V /FO LIST"
+Write-Host "  schtasks /Query /TN `"Faro\WeeklyRetrainingCycle`" /V /FO LIST"
 Write-Host ""
 Write-Host "Smoke-test a run on demand with:"
-Write-Host "  schtasks /Run /TN `"IAInversiones\DailyOperationalCycle`""
+Write-Host "  schtasks /Run /TN `"Faro\DailyOperationalCycle`""
 Write-Host ""
 Write-Host "Remove either task with:"
-Write-Host "  schtasks /Delete /TN `"IAInversiones\DailyOperationalCycle`" /F"
-Write-Host "  schtasks /Delete /TN `"IAInversiones\WeeklyRetrainingCycle`" /F"
+Write-Host "  schtasks /Delete /TN `"Faro\DailyOperationalCycle`" /F"
+Write-Host "  schtasks /Delete /TN `"Faro\WeeklyRetrainingCycle`" /F"
 Write-Host ""
 Write-Host "Both tasks run as the current user (/RL LIMITED, no elevation)." `
     "If they must run while you are logged off, re-run schtasks /Create with" `

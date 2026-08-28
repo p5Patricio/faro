@@ -350,9 +350,9 @@ Para registrar las dos tareas programadas (diaria 06:20 con `--job full`, semana
 El script solo llama a `schtasks /Create`; no guarda ninguna credencial. Verificar, probar y eliminar las tareas:
 
 ```bat
-schtasks /Query /TN "IAInversiones\DailyOperationalCycle" /V /FO LIST
-schtasks /Run /TN "IAInversiones\DailyOperationalCycle"
-schtasks /Delete /TN "IAInversiones\DailyOperationalCycle" /F
+schtasks /Query /TN "Faro\DailyOperationalCycle" /V /FO LIST
+schtasks /Run /TN "Faro\DailyOperationalCycle"
+schtasks /Delete /TN "Faro\DailyOperationalCycle" /F
 ```
 
 Los reportes JSON quedan en `reports/*.json` (gitignorado) y el log de cada corrida en `logs/*.log` (gitignorado).
