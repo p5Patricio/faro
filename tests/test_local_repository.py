@@ -447,3 +447,132 @@ def test_relation_exists_true_for_known_table(repository: LocalPostgresRepositor
 
 def test_relation_exists_false_for_unknown_table(repository: LocalPostgresRepository) -> None:
     assert repository.relation_exists("not_a_real_table") is False
+
+
+# -- Asset identifiers / ingestion audit --------------------------------------
+
+
+def test_upsert_asset_identifiers_is_idempotent(repository: LocalPostgresRepository) -> None:
+    asset_id = repository.get_or_create_asset("goog", asset_class="stock")
+    row = {
+        "asset_id": asset_id,
+        "id_type": "cik",
+        "id_value": "0001652044",
+        "source": "sec_company_tickers",
+    }
+
+    first = repository.upsert_asset_identifiers([row])
+    second = repository.upsert_asset_identifiers([row])
+
+    assert first == 1
+    assert second == 1
+    matches = [
+        identifier
+        for identifier in repository.get_asset_identifiers(id_type="cik")
+        if identifier["asset_id"] == asset_id
+    ]
+    assert len(matches) == 1
+    assert matches[0]["id_value"] == "0001652044"
+
+
+def test_resolve_asset_by_identifier_round_trips(repository: LocalPostgresRepository) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    repository.upsert_asset_identifiers(
+        [
+            {
+                "asset_id": asset_id,
+                "id_type": "cik",
+                "id_value": "0000320193",
+                "source": "sec_company_tickers",
+            }
+        ]
+    )
+
+    resolved = repository.resolve_asset_by_identifier("cik", "0000320193")
+
+    assert resolved is not None
+    assert resolved["id"] == asset_id
+    assert resolved["ticker"] == "AAPL"
+
+
+def test_resolve_asset_by_identifier_returns_none_when_unmatched(
+    repository: LocalPostgresRepository,
+) -> None:
+    assert repository.resolve_asset_by_identifier("cik", "0000000000") is None
+
+
+def test_insert_ingestion_run_persists_success_row(repository: LocalPostgresRepository) -> None:
+    run = repository.insert_ingestion_run(
+        source="sec_edgar",
+        endpoint="company_tickers",
+        target_key="",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        status="success",
+        http_status=200,
+        rows_written=105,
+        request_count=1,
+        throttle_wait_seconds=0.11,
+    )
+
+    assert run is not None
+    assert run["status"] == "success"
+    assert run["rows_written"] == 105
+    assert run["error"] is None
+
+
+def test_insert_ingestion_run_persists_failure_row_with_error_detail(
+    repository: LocalPostgresRepository,
+) -> None:
+    run = repository.insert_ingestion_run(
+        source="sec_edgar",
+        endpoint="companyfacts",
+        target_key="CIK0000320193",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        status="failure",
+        http_status=429,
+        error="sec_rate_limited",
+        metadata={"failure_kind": "rate_limited"},
+    )
+
+    assert run is not None
+    assert run["status"] == "failure"
+    assert run["error"] == "sec_rate_limited"
+    assert run["metadata"] == {"failure_kind": "rate_limited"}
+
+
+def test_get_recent_ingestion_runs_filters_by_source_and_orders_desc(
+    repository: LocalPostgresRepository,
+) -> None:
+    repository.insert_ingestion_run(
+        source="sec_edgar",
+        endpoint="company_tickers",
+        target_key="",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        status="success",
+    )
+    repository.insert_ingestion_run(
+        source="sec_edgar",
+        endpoint="companyfacts",
+        target_key="CIK0000320193",
+        started_at="2026-01-02T00:00:00Z",
+        finished_at="2026-01-02T00:00:01Z",
+        status="success",
+    )
+    repository.insert_ingestion_run(
+        source="yfinance",
+        endpoint="download",
+        target_key="AAPL",
+        started_at="2026-01-03T00:00:00Z",
+        finished_at="2026-01-03T00:00:01Z",
+        status="success",
+    )
+
+    sec_runs = repository.get_recent_ingestion_runs(source="sec_edgar")
+
+    assert len(sec_runs) == 2
+    assert all(run["source"] == "sec_edgar" for run in sec_runs)
+    assert sec_runs[0]["endpoint"] == "companyfacts"
+    assert sec_runs[1]["endpoint"] == "company_tickers"

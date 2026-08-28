@@ -24,6 +24,8 @@ REQUIRED_ML_RELATIONS = (
     "risk_profiles",
     "notification_rules",
     "notifications",
+    "asset_identifiers",
+    "ingestion_runs",
 )
 
 

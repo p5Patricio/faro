@@ -961,6 +961,115 @@ class LocalPostgresRepository:
             )
             return cur.fetchall()
 
+    # -- Asset identifiers / ingestion audit --------------------------------
+
+    def upsert_asset_identifiers(self, rows: list[dict[str, Any]], batch_size: int = 500) -> int:
+        if not rows:
+            return 0
+
+        prepared = [
+            {
+                "asset_id": row["asset_id"],
+                "id_type": row["id_type"],
+                "id_value": row["id_value"],
+                "source": row["source"],
+                "metadata": Jsonb(_json_safe(row.get("metadata", {}))),
+            }
+            for row in rows
+        ]
+
+        upserted = 0
+        for start in range(0, len(prepared), batch_size):
+            chunk = prepared[start : start + batch_size]
+            upserted += self._upsert_batch("asset_identifiers", chunk, ("asset_id", "id_type"))
+        return upserted
+
+    def get_asset_identifiers(self, id_type: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM asset_identifiers"
+        params: list[Any] = []
+        if id_type:
+            query += " WHERE id_type = %s"
+            params.append(id_type)
+        query += " ORDER BY asset_id ASC, id_type ASC"
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+    def resolve_asset_by_identifier(self, id_type: str, id_value: str) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT a.* FROM assets a
+                JOIN asset_identifiers ai ON ai.asset_id = a.id
+                WHERE ai.id_type = %s AND ai.id_value = %s
+                ORDER BY a.ticker ASC
+                LIMIT 1
+                """,
+                (id_type, id_value),
+            )
+            return cur.fetchone()
+
+    def insert_ingestion_run(
+        self,
+        source: str,
+        endpoint: str,
+        target_key: str,
+        started_at: str | datetime,
+        finished_at: str | datetime | None,
+        status: str,
+        http_status: int | None = None,
+        rows_written: int = 0,
+        request_count: int = 0,
+        throttle_wait_seconds: float = 0.0,
+        max_filed_date: str | datetime | None = None,
+        error: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO ingestion_runs
+                    (source, endpoint, target_key, started_at, finished_at, status,
+                     http_status, rows_written, request_count, throttle_wait_seconds,
+                     max_filed_date, error, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (
+                    source,
+                    endpoint,
+                    target_key,
+                    _timestamp_or_none(started_at),
+                    _timestamp_or_none(finished_at),
+                    status,
+                    http_status,
+                    rows_written,
+                    request_count,
+                    throttle_wait_seconds,
+                    _timestamp_or_none(max_filed_date),
+                    error,
+                    Jsonb(_json_safe(metadata or {})),
+                ),
+            )
+            return cur.fetchone()
+
+    def get_recent_ingestion_runs(
+        self,
+        source: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        conditions: list[str] = []
+        params: list[Any] = []
+        if source:
+            conditions.append("source = %s")
+            params.append(source)
+        where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        query = f"SELECT * FROM ingestion_runs{where_clause} ORDER BY started_at DESC LIMIT %s"
+        params.append(limit)
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
     # -- Schema introspection --------------------------------------------------
 
     def relation_exists(self, name: str) -> bool:
