@@ -260,6 +260,380 @@ None.
 are in place) or any other pending phase, or `sdd-verify` if PR 4 is being verified as its
 own slice before further phases proceed.
 
+## Batch 3 — Phase 5: Ingestion Audit Recorder + Identifier Resolution Job
+
+**Mode**: Standard (no `strict_tdd` config found; `openspec/config.yaml` not present in this
+checkout — proceeded in standard workflow: read spec/design/landed Phase 1 + Phase 4
+interfaces, wrote code + tests together, verified with the focused suite then the full
+suite).
+
+Ran while sibling agents landed Phase 2, Phase 3, and Phase 6 concurrently in the same
+tree. No file overlap: this batch only touches `collector/ingestion_audit.py` (new),
+`collector/run_identifier_resolution.py` (new), and an appended section in
+`tests/test_sec_edgar_client.py` (Phase 4's existing 35 tests/43 collected cases were read in
+full first and left untouched). By the time this batch ran, Phase 2's `collector/universe.py`
+and `config/universe.sp100.json` had already landed, so `run_identifier_resolution.py`'s CLI
+wrapper wires directly to `collector.universe.load_universe_document`.
+
+### Completed Tasks
+
+- [x] 5.1 `collector/ingestion_audit.py` (new) — `RepositoryIngestionRecorder(repository)`
+  (a dataclass with one field, giving the exact positional-constructor shape design.md
+  specifies), implementing `IngestionRunRecorder` via a `record(run)` method that maps every
+  one of `IngestionRun`'s 12 fields 1:1 into `repository.insert_ingestion_run(...)` kwargs.
+  `IngestionRun` carries no `max_filed_date` field, so that repository parameter is left at
+  its own default (`None`) on every call — noted in the module docstring, not silently
+  dropped.
+- [x] 5.2 `collector/run_identifier_resolution.py` (new) — core function
+  `run_identifier_resolution(repository, client, tickers)` fetches `company_tickers.json`
+  **exactly once** regardless of ticker count (proven by
+  `test_fetch_company_tickers_called_exactly_once_regardless_of_ticker_count`), builds a
+  ticker→CIK lookup from the real payload shape (`{"0": {"cik_str": ..., "ticker": ...}}`),
+  and for every match calls `repository.get_or_create_asset(ticker)` (never
+  `get_asset_id`, so a not-yet-tracked ticker never spuriously counts as "unresolved" — only
+  "no company_tickers.json match" does, matching the spec's own scenario wording) then
+  `repository.upsert_asset_identifiers(rows)` in one batched call. Returns
+  `{"resolved": [...], "unresolved": [...]}` (both plain ticker-string lists). Unresolved
+  tickers are (a) printed via `print(...)` and (b) written into a dedicated
+  `ingestion_runs` row (`endpoint="identifier_resolution"`) via
+  `repository.insert_ingestion_run(..., metadata={"unresolved_tickers": unresolved})` — this
+  is a **separate** row from whatever the client's own `recorder` (if attached) writes for
+  the raw `company_tickers` fetch, since the client has no notion of "which tickers were in
+  this job's batch"; that business fact only exists at the job layer. A CIK's
+  `asset_identifiers.id_value` is stored as the 10-digit zero-padded numeric string with no
+  `CIK` prefix (`"0000320193"`), matching the exact convention already established in Batch
+  1's `test_upsert_asset_identifiers_is_idempotent`/`test_resolve_asset_by_identifier_round_trips`
+  fixtures — deliberately distinct from `pad_cik`'s `"CIK0000320193"` URL form used
+  internally by `SecEdgarClient`. The CLI `main()`/`parse_args()` wrapper follows
+  `collector/main.py`'s and `brain/run_retraining_job.py`'s exact conventions: `--tickers`
+  (comma-separated) overrides a `--universe-file` default (`DEFAULT_UNIVERSE_PATH =
+  "config/universe.sp100.json"`, a module constant) read via
+  `collector.universe.load_universe_document`; `psycopg.connect(...,
+  autocommit=True)` + `LocalPostgresRepository(connection=connection)`; JSON printed via
+  `print(json.dumps(result, indent=2))`. `SecEdgarConfigError` from a missing
+  `SEC_USER_AGENT` is deliberately **not** caught inside `run_identifier_resolution` —  it
+  propagates per the two-tier contract ("Missing User-Agent fails loudly"); if a `recorder`
+  is attached to the client, the client's own `finally` block already records that exit path
+  (proven in Batch 2).
+- [x] 5.3 **Non-matrix security requirement — confirmed by grep, both call chains**:
+  - `collector.universe.load_universe_document` has exactly 3 production call sites (plus
+    test fixtures): `brain/run_retraining_job.py:182` (`path` = `DEFAULT_UNIVERSE_FILE =
+    "config/universe.sp100.json"`, a module constant, landed by the Phase 3 sibling),
+    `collector/run_identifier_resolution.py:163` (`path` = `args.universe_file`, a CLI
+    argument defaulting to a module constant — this batch), and indirectly via
+    `collector/main.py`'s `load_asset_configs(args.assets_file)` → `isinstance(raw, dict)` →
+    `expand_universe_document` (`args.assets_file` is a CLI argument, landed by the Phase 2
+    sibling). None derive from an inbound HTTP request.
+  - `brain.run_retraining_job`'s targets-file path: `DEFAULT_TARGETS_FILE =
+    "config/targets.core.json"` (module constant) overridable only via the `--targets-file`
+    CLI flag (`brain/run_retraining_job.py:28-31`, landed by the Phase 3 sibling) — never
+    request-derived.
+  - Confirmed via `rg -n "load_universe_document" --type py` and `rg -n
+    "targets.file|targets_file|default_targets" brain/run_retraining_job.py
+    brain/retraining_job.py`, re-run at the end of this batch after Phase 2/3 had fully
+    landed, to catch call sites that did not exist at the start of this session.
+- [x] 5.4 `test_repository_ingestion_recorder_calls_insert_once_per_record` — constructs one
+  `IngestionRun`, calls `.record(run)` twice against a `FakeIdentifierRepository`, asserts
+  exactly 2 `insert_ingestion_run` calls and that every one of the 12 kwargs on the first
+  call matches the source `IngestionRun`'s corresponding field 1:1.
+- [x] 5.5 `test_unresolved_ticker_appears_in_result_and_ingestion_run_metadata` (a fake
+  `company_tickers` payload with `AAPL`/`MSFT` but not `NOPE` → `NOPE` appears in both
+  `result["unresolved"]` and the `identifier_resolution`-endpoint `ingestion_runs` row's
+  `metadata["unresolved_tickers"]`) plus
+  `test_unresolved_ticker_is_printed_not_silently_dropped` (`capsys` — the ticker string
+  appears in stdout) plus `test_fetch_failure_marks_every_ticker_unresolved_and_never_raises`
+  (a transport failure — 5xx exhausted — marks every requested ticker unresolved, records a
+  `status="failure"` job-level row, and writes zero `asset_identifiers` rows, all without
+  raising).
+- [x] 5.6 `test_resolved_ticker_asset_identifiers_row_returns_cik` (round-trips through
+  `FakeIdentifierRepository.resolve_asset_by_identifier`) plus
+  `test_fetch_company_tickers_called_exactly_once_regardless_of_ticker_count` (bulk-preferring
+  proof) plus `test_resolved_cik_fetch_retains_filed_date_independent_of_period_end` — after
+  resolving `AAPL`'s CIK through this job, a subsequent `client.fetch_company_facts("320193")`
+  (the same nested XBRL fixture Batch 2's `test_success_returns_provider_payload_unmodified`
+  used) still returns `filed="2024-02-01"` distinct from `end="2023-12-31"`, proving the
+  transport-fidelity half of "Ingested fact retains both dates" at this integration point too
+  (full XBRL parsing/persistence is `fundamental-analysis` sibling scope, per design.md).
+- [x] 5.7 `test_run_identifier_resolution_persists_rows_against_real_repository(repository)`
+  — uses the session-scoped `repository`/`db_connection` fixtures from `tests/conftest.py`
+  (real `TEST_DATABASE_URL`, migrations applied once, each test wrapped in a rolled-back
+  transaction) with an injected `SecEdgarClient` wrapping a `FakeSession` (zero live SEC
+  calls). Resolves `AAPL` (matched) and `ZZZZ-NOPE` (unmatched) in one call; asserts
+  `repository.resolve_asset_by_identifier("cik", "0000320193")` round-trips to `AAPL`, and
+  `repository.get_recent_ingestion_runs(source="sec_edgar")` contains exactly one
+  `endpoint="identifier_resolution"` row with `metadata["unresolved_tickers"] ==
+  ["ZZZZ-NOPE"]` and `status == "success"`.
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `collector/ingestion_audit.py` | Created | `RepositoryIngestionRecorder` — `IngestionRunRecorder` Protocol implementation, 1:1 field mapping into `insert_ingestion_run` |
+| `collector/run_identifier_resolution.py` | Created | `run_identifier_resolution(repository, client, tickers)` core job + CLI wrapper (`--tickers`/`--universe-file`) |
+| `tests/test_sec_edgar_client.py` | Modified | Added a `# === Identifier resolution ===` section (8 new test functions) after Phase 4's existing content; added 4 new imports at the top (`Any`, `RepositoryIngestionRecorder`, `LocalPostgresRepository`, `run_identifier_resolution`); zero changes to any of Phase 4's 31 existing test functions |
+| `openspec/changes/financial-intelligence-expansion/tasks.md` | Modified | Marked Phase 5 tasks 5.1-5.7 `[x]` |
+
+### Deviations from Design
+
+None on the public contract (`RepositoryIngestionRecorder(repository)`, the
+`{"resolved": [...], "unresolved": [...]}` return shape, `metadata.unresolved_tickers`).
+Two implementation-detail decisions design.md left open, resolved here and noted for the
+reviewer:
+
+1. **Asset lookup uses `get_or_create_asset`, not `get_asset_id`.** This means "unresolved"
+   strictly means "no match in `company_tickers.json`" (matching the spec scenario's exact
+   wording: "GIVEN a ticker with no matching entry in the SEC company-ticker map"), never
+   "not yet tracked locally" — the latter would conflate two different failure modes and
+   design.md/spec.md never mention a `ValueError`/ticker-not-found path for this job.
+2. **The job writes its own `ingestion_runs` row directly**, separate from whatever the
+   `SecEdgarClient`'s own `recorder` (if attached) writes for the raw fetch. This is the
+   only way to satisfy "Unresolved tickers go into `ingestion_runs.metadata.unresolved_tickers`"
+   literally: the client's transport layer has no concept of "which tickers this business
+   job was resolving," so that row can only be written by `run_identifier_resolution` itself.
+
+### Issues Found
+
+None.
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `py -3.14 -m pytest tests/test_sec_edgar_client.py -q` → `43 passed in 2.54s` (35 Phase 4 + 8 new, 0 regressions). Task table's suggested `-k identifier` filter → `2 passed, 41 deselected` (only 2 of the 8 new test names literally contain the substring "identifier"; the full-file run above is the complete, accurate proof) |
+| Runtime harness command/scenario and exact result | Real `TEST_DATABASE_URL` round-trip (task 5.7): `test_run_identifier_resolution_persists_rows_against_real_repository` — passed as part of the 43; confirmed `asset_identifiers` and `ingestion_runs` rows persist and round-trip correctly against the live test database |
+| Rollback boundary | Delete `collector/ingestion_audit.py` and `collector/run_identifier_resolution.py`; delete the appended identifier-resolution section (8 functions) and the 4 added imports from `tests/test_sec_edgar_client.py`, restoring it to Batch 2's exact state; Phase 4's client stays inert with no caller again |
+
+### Full Suite Regression
+
+`py -3.14 -m pytest -q` (both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` exported):
+- Baseline entering this batch (Batch 1 + Batch 2, before Phase 2/3/6 siblings and this
+  batch landed): **284 passed**
+- After this batch, with Phase 2 and Phase 6 siblings' work also landed concurrently in the
+  same tree (Phase 3's implementation code was present but its own tests/task-marks were
+  still in flight): **320 passed, 2 failed**
+- **The 2 failures are environmental, not caused by this batch or by Phase 5's code.**
+  Reproduced with `py -3.14 -m pytest
+  tests/test_local_repository.py::test_upsert_prices_resolves_conflicts_and_returns_batch_size
+  tests/test_notification_dispatch.py::test_get_latest_price_timestamps_includes_assets_with_zero_prices`
+  run **in complete isolation** (this test file never executed in that process) — both still
+  fail identically. Root-caused by direct query: the shared `TEST_DATABASE_URL` already had a
+  permanently committed `AAPL` asset with 2 real `prices` rows
+  (`select ticker, id from assets where ticker='AAPL'` returned one row;
+  `select count(*) from prices ... where ticker='AAPL'` returned 2) — leftover from a
+  sibling's real runtime-harness command (task 2.9's "`py -3.14 -m collector.main
+  --assets-file config/universe.sp100.json --start 2020-01-01 --end 2020-01-05` against
+  `TEST_DATABASE_URL`", which uses `autocommit=True`, per `collector/main.py`'s `main()` —
+  so that data was never inside a rolled-back transaction). Phase 5's own code and tests
+  never touch the `prices` table and never open a connection outside the
+  `repository`/`db_connection` fixtures' rolled-back-transaction pattern, so this batch
+  cannot be the source. Not remediated here: cleaning up another phase's shared-database
+  state is out of this batch's scope and could interfere with a concurrently-running
+  sibling agent still relying on that data.
+
+### Remaining Tasks
+
+- [ ] Phase 3: Bounded Retraining-Target Policy + Global-Scope Cap (implementation code
+  observed already landed in the tree by its own concurrent sibling agent during this batch;
+  task checkboxes 3.1-3.8 were still `[ ]` in `tasks.md` as of this batch's last read — that
+  sibling's own apply-progress entry is authoritative for its status)
+- [ ] Phase 7: API Endpoint + Rollout Confirmation (depends on Phase 2 + Phase 3 landing,
+  per the review workload table)
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`stacked-to-main`)
+- Current work unit: PR 5 — `collector/ingestion_audit.py` +
+  `collector/run_identifier_resolution.py` (after PR 1, PR 4 — both already landed)
+- Boundary: this batch starts from an inert, uncalled `SecEdgarClient` (Batch 2) and ends
+  with a fully wired, fully tested identifier-resolution job; `RetrainingJobConfig`/
+  `run_retraining_job` and the universe file are untouched by this batch specifically (they
+  were touched concurrently by sibling batches, not this one).
+- Estimated review budget impact: new source is ~55 lines (`ingestion_audit.py`) + ~185
+  lines (`run_identifier_resolution.py`) ≈ 240 lines; the appended test section is ~230
+  lines across 8 functions plus a 4-line import addition — combined ≈ 470-490 raw added
+  lines, somewhat above the ~150-220 estimate in the forecast table (mirrors Batch 2's
+  pattern of test code exceeding the source-code estimate, this time by a smaller margin).
+  Still a single, autonomous, independently revertible unit with no cross-file coupling
+  beyond the already-landed Phase 1/4 interfaces.
+
+### Status
+
+7/7 Phase 5 tasks complete. No blockers introduced by this batch. The 2 full-suite failures
+are pre-existing shared-database pollution from a concurrent sibling's runtime-harness step,
+confirmed unrelated to this batch's code by isolated reproduction. Ready for `sdd-verify` on
+this slice, or for `sdd-apply` to continue with Phase 3 (task-mark completion) and Phase 7.
+
+## Batch 3 — Phase 3: Bounded Retraining-Target Policy + Global-Scope Cap
+
+**Mode**: Standard (`openspec/config.yaml` has `testing.strict_tdd: false` — proceeded in
+standard workflow: read spec/design, write code + tests together, verify with the focused
+suite, the full suite, and a real runtime-harness invocation against `TEST_DATABASE_URL`).
+
+Ran concurrently with (and lands after) sibling batches for Phase 2 (`config/universe.sp100.json`,
+`collector/universe.py`, `collector/main.py`), Phase 5 (`collector/ingestion_audit.py`,
+`collector/run_identifier_resolution.py`), and Phase 6 (`brain/features.py`) — all now visible
+on disk. This batch only touched its assigned files: `config/targets.core.json`,
+`brain/retraining_job.py`, `brain/run_retraining_job.py`, `brain/scoped_evaluation.py`,
+`tests/test_brain_pipeline.py`, plus one file not explicitly listed in tasks.md's per-task
+scope but required by design.md's own interface note (see Deviations below):
+`brain/candidate_matrix.py`.
+
+### Completed Tasks
+
+- [x] 3.1 `config/targets.core.json` — `["BTC-USD", "ETH-USD", "AAPL", "MSFT"]`, identical to
+  today's `config/assets.core.json` tickers.
+- [x] 3.2 `brain/retraining_job.py`'s `resolve_target_tickers` extended with keyword-only
+  `default_targets=None` and `max_auto_targets=None`. Existing 2-positional-arg behavior fully
+  preserved when neither kwarg is passed (`sorted(available)`, uncapped — proven by
+  `test_resolve_target_tickers_uncapped_preserves_two_positional_arg_behavior`). Precedence:
+  explicit `tickers` (truthy) wins outright; else `default_targets` (truthy) intersects with
+  available; else `sorted(available)` is returned, raising `ValueError` naming
+  `--tickers`/`--targets-file`/`--max-auto-targets` only when `max_auto_targets` is set and the
+  available count exceeds it. Never truncates silently.
+- [x] 3.3 `RetrainingJobConfig` gained `default_targets: list[str] | None = None`,
+  `max_auto_targets: int = 8`, `max_global_scope_assets: int = 12`. Also added all three (plus
+  the pre-existing `default_targets`) to `summarize_config`'s output so the JSON report stays
+  reproducible/self-describing, matching the existing pattern for every other tunable.
+- [x] 3.4 `brain/run_retraining_job.py` gained `--targets-file` (default
+  `config/targets.core.json`), `--max-auto-targets` (default 8), `--max-global-scope-assets`
+  (default 12). `--tickers` still wins: when tickers are given, `--targets-file` is not even
+  read (`default_targets=None if tickers else load_default_targets(args.targets_file)`).
+  `payload["universe"]` is now always set via `load_universe_disclosure(DEFAULT_UNIVERSE_FILE)`
+  — defensively written per the orchestrator's instruction (try/except `ImportError` around
+  `from collector.universe import load_universe_document, universe_disclosure`, plus an
+  existence check on the universe file and a `try/except (ValueError, OSError)` around
+  `load_universe_document`), falling back to
+  `{"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}` in every degraded
+  case. In practice Phase 2's sibling batch landed `collector/universe.py` and
+  `config/universe.sp100.json` concurrently, so the real path was exercised end-to-end in the
+  runtime harness (see Work Unit Evidence) — the defensive fallback never fired, but the code
+  still degrades gracefully if run against a checkout without Phase 2.
+- [x] 3.5 `brain/scoped_evaluation.py`'s `select_scope_datasets` gained keyword-only
+  `max_scope_assets: int | None = None`. Over the cap: keeps the target dataset unconditionally,
+  ranks the rest by `(-len(item.dataset), item.ticker)` (row count descending, ticker ascending
+  as the tiebreaker), and returns `[target, *ranked_rest[:max_scope_assets - 1]]`. Below the
+  cap or `max_scope_assets=None`, returns the input selection unchanged (`is` the same list
+  object when uncapped). Threaded through `run_scoped_walk_forward_backtest`'s new
+  keyword-only `max_scope_assets` param; `build_scope_training_frame` needed no change, exactly
+  as design.md predicted, since it only ever sees the already-capped `scope_datasets` list.
+- [x] 3.6 `tests/test_brain_pipeline.py`: 6 new tests for `resolve_target_tickers` — 100 fake
+  datasets + no `tickers`/no `default_targets` + `max_auto_targets=8` raises `ValueError`
+  matching `"max_auto_targets"`; with `default_targets=["TKR001", "TKR050", "MISSING"]` set →
+  exactly `["TKR001", "TKR050"]` (missing ticker silently absent from *available*, not from the
+  policy — this is intersection, not the never-truncate guarantee, which only applies to the
+  auto/no-policy path); explicit `tickers=["tkr002", "missing"]` (lowercase, one invalid) →
+  `["TKR002"]`, proving the override still wins over `default_targets` and still
+  case-normalizes/filters exactly as today; a 4-dataset case within the cap → unchanged
+  `sorted(available)`; the 2-positional-arg backward-compatibility test noted above.
+- [x] 3.7 `tests/test_brain_pipeline.py`: `test_select_scope_datasets_caps_global_scope_deterministically`
+  — 40 fake datasets (1 target + 39 peers with distinct row counts, no ties), `max_scope_assets=12`
+  on `global` scope → exactly 12 selected, target always first, and the selection is identical
+  whether the 40 fake datasets are passed in original order or reversed (proves the cap is not
+  an accident of input ordering) — asserted against an independently computed expected ranking.
+  A companion `test_select_scope_datasets_below_cap_is_unaffected` proves the cap is a no-op
+  when the scope is already under the limit.
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `config/targets.core.json` | Created | `["BTC-USD", "ETH-USD", "AAPL", "MSFT"]` |
+| `brain/retraining_job.py` | Modified | `resolve_target_tickers` kwargs; 3 new `RetrainingJobConfig` fields; `build_candidate_report` passes `max_scope_assets=config.max_global_scope_assets` to `run_candidate_matrix`; `summarize_config` reports the 3 new fields |
+| `brain/run_retraining_job.py` | Modified | 3 new CLI flags; `load_default_targets`/`load_universe_disclosure` helpers; `payload["universe"]` always set |
+| `brain/scoped_evaluation.py` | Modified | `max_scope_assets` cap on `select_scope_datasets`, threaded through `run_scoped_walk_forward_backtest` |
+| `brain/candidate_matrix.py` | Modified (not in tasks.md's literal per-task file list — see Deviations) | `run_candidate_matrix` gained keyword-only `max_scope_assets`, passed through to `run_scoped_walk_forward_backtest` |
+| `tests/test_brain_pipeline.py` | Modified | Added `pytest` import, `resolve_target_tickers`/`select_scope_datasets` imports, `make_fake_dataset` helper, 8 new tests |
+| `openspec/changes/financial-intelligence-expansion/tasks.md` | Modified | Marked Phase 3 tasks 3.1-3.8 `[x]` |
+
+### Deviations from Design
+
+One deliberate scope extension beyond tasks.md's literal per-task file list, but explicitly
+supported by design.md's own Interfaces/Contracts section: task 3.5's text only names
+`run_scoped_walk_forward_backtest` as the thread-through target, but design.md's code comment
+for `select_scope_datasets` says "Threaded through `run_scoped_walk_forward_backtest` **and
+`run_candidate_matrix`**; the chosen set is already reported via `participating_assets`."
+Without touching `brain/candidate_matrix.py`, `RetrainingJobConfig.max_global_scope_assets`
+would have no path to reach `select_scope_datasets` at all from `run_retraining_job`'s actual
+call chain (`build_candidate_report` → `run_candidate_matrix` → `run_scoped_walk_forward_backtest`),
+making the new config field permanently inert. Added a keyword-only `max_scope_assets: int |
+None = None` to `run_candidate_matrix` (default `None` = today's behavior, zero risk to its
+two existing callers `brain/retraining_job.py` and `brain/evaluate_candidate_matrix.py`, both
+of which call it entirely by keyword) and passed it straight through to every
+`run_scoped_walk_forward_backtest` call inside its loop — uniformly across `local`/`asset_class`/
+`global` scopes, not scope-conditionally. This was a deliberate simplicity choice: `local` scope
+is always exactly 1 dataset (the cap is a no-op there), and capping `asset_class` scope too is
+strictly protective for a widened S&P 100 universe where a single asset class (e.g. "stock")
+could itself have ~97 members — the config field's name (`max_global_scope_assets`) describes
+the motivating scenario from the proposal, not a hard restriction to only the `global` scope
+value. Flagging this for the reviewer since it is a real (small) scope addition beyond the
+literal task list, even though it is required for the feature to functionally work end-to-end
+and is explicitly grounded in design.md's own text.
+
+No other deviations — `resolve_target_tickers`, `RetrainingJobConfig`, `run_retraining_job.py`'s
+CLI flags, and `select_scope_datasets`'s cap logic all match design.md's signatures and stated
+behavior exactly.
+
+### Issues Found
+
+None.
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `py -3.14 -m pytest tests/test_brain_pipeline.py tests/test_collector_job.py -k "target or scope" -q` → `10 passed` |
+| Runtime harness command/scenario and exact result | `py -3.14 -m brain.run_retraining_job --targets-file config/targets.core.json --max-auto-targets 8 --max-global-scope-assets 12` against `TEST_DATABASE_URL` (with `LOCAL_DATABASE_URL` explicitly pointed at the same DSN, since `LocalPostgresConfig.from_env()` only reads `LOCAL_DATABASE_URL`) → real JSON report: `"attempted": 0`, `"succeeded": 0`, `"failed": 0`, all 5 test-DB assets (`AAPL`, `BRK-B`, `HON`, `JNJ`, `MSFT`) reported `skipped_assets` with `"reason": "no_materialized_dataset"` (honest, not an error — no feature/label data exists yet in that DB); `config.default_targets == ["BTC-USD","ETH-USD","AAPL","MSFT"]`, `config.max_auto_targets == 8`, `config.max_global_scope_assets == 12`; `"universe"` key present with real `snapshot_date: "2025-09-22"`, `member_count: 101` (Phase 2's sibling batch had already landed `config/universe.sp100.json` + `collector/universe.py` concurrently, so the real disclosure path was exercised, not just the fallback) |
+| Rollback boundary | Revert the keyword-only kwargs on `resolve_target_tickers`/`select_scope_datasets`/`run_scoped_walk_forward_backtest`/`run_candidate_matrix` (all default to `None`/unset, preserving today's behavior byte-for-byte); revert the 3 new `RetrainingJobConfig` fields and their 4 lines in `summarize_config`; revert the 3 new CLI flags and the 2 new helper functions plus the `payload["universe"] = ...` line in `run_retraining_job.py`; delete `config/targets.core.json`; delete the 8 new test functions (plus the `make_fake_dataset` helper and the `pytest` import if nothing else in the file needs them) from `tests/test_brain_pipeline.py` |
+
+### Full Suite Regression
+
+`py -3.14 -m pytest -q` (both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` exported per the
+Environment block):
+- Baseline entering this batch (per orchestrator, reflecting Batch 1 + Batch 2 already landed):
+  **284 passed**
+- After this batch: **322 passed**, 0 regressions, 1 pre-existing unrelated warning
+  (`joblib`/`loky` core-count detection on Windows, not introduced by this batch)
+- This batch's own net-new contribution is **7 test functions** (8 `def test_...` were added;
+  1 of them — `test_select_scope_datasets_below_cap_is_unaffected` — was not separately counted
+  in the tasks.md-mandated set but strengthens 3.7's coverage). The remaining **31-test gap**
+  between 284→322 minus this batch's 7 comes from sibling Phase 2/5/6 batches (`tests/test_universe_config.py`,
+  `tests/test_feature_set_resolution.py`, and additions to `tests/test_sec_edgar_client.py`)
+  landing on disk concurrently during this session — confirmed via `git status`/`git log`,
+  not double-counted from this batch's own diff.
+
+### Remaining Tasks (per most recent read of tasks.md, which sibling batches were also updating concurrently)
+
+- [ ] Phase 2 task 3.8's own operational wall-clock measurement is intentionally left for
+  whoever runs the real backfill (see task 3.8's note above) — everything else in Phase 3 is
+  code-complete.
+- [ ] Phase 7: API Endpoint + Rollout Confirmation (not this batch's scope)
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`stacked-to-main`)
+- Current work unit: PR 3 — `config/targets.core.json` + `brain/retraining_job.py` target-policy
+  kwargs + `brain/run_retraining_job.py` CLI flags + `brain/scoped_evaluation.py` global-scope
+  cap (independent of PR 1/PR 2 per the forecast table)
+- Boundary: this batch starts from `resolve_target_tickers` returning `sorted(available)`
+  unconditionally (the ~25×-targets risk from Key Learning #3) and ends with that risk bounded
+  by an explicit, fail-loud policy, plus a deterministic global-scope-size cap threaded all the
+  way from `RetrainingJobConfig` down to `select_scope_datasets`. No Phase 2/4/5/6/7 files
+  touched except the one explained deviation (`brain/candidate_matrix.py`), which has no
+  overlap with any concurrent sibling's assigned files.
+- Estimated review budget impact: source changes are small (`retraining_job.py` +~35 lines,
+  `run_retraining_job.py` +~55 lines, `scoped_evaluation.py` +~25 lines, `candidate_matrix.py`
+  +~5 lines, `config/targets.core.json` 1 line); `tests/test_brain_pipeline.py` +~90 lines.
+  Roughly ~210 total changed lines — comfortably within the ~300-360 estimate for PR 3 and well
+  under the 400-line budget.
+
+### Status
+
+8/8 Phase 3 tasks complete (3.8's code portion done; its operational wall-clock measurement is
+explicitly deferred per its own text, not blocking). No blockers. Ready for `sdd-apply` to
+continue with any remaining phase (Phase 7 is the only one not yet reported landed as of this
+batch), or `sdd-verify` if PR 3 is being verified as its own slice before further phases
+proceed.
+
 ## Batch 3 — Phase 6: Asset-Class Feature-Set Resolution Seam
 
 **Mode**: Standard (`openspec/config.yaml` present with `testing.strict_tdd: false` —
@@ -489,26 +863,41 @@ design.md exactly.
 
 ### Issues Found
 
-None.
+The runtime harness run (below) writes real rows into `TEST_DATABASE_URL` outside any test
+transaction (unlike the `db_connection` fixture's per-test rollback), and it reused live
+tickers (`AAPL`) that other suites' tests also create via `get_or_create_asset("aapl", ...)`
+and then assume start with zero prices. Immediately after the harness run, the full suite
+showed 2 failures — `test_upsert_prices_resolves_conflicts_and_returns_batch_size` (expected
+3 rows, found 5: 2 leftover real `yfinance` rows + 3 from the test) and
+`test_get_latest_price_timestamps_includes_assets_with_zero_prices` (expected `None`, found
+the leftover real row's timestamp). Fixed by deleting the 5 harness-inserted `assets` rows
+(and their 10 `prices` rows) from `TEST_DATABASE_URL` by ticker
+(`AAPL`/`MSFT`/`JNJ`/`HON`/`BRK-B`) immediately after capturing the harness evidence below;
+re-ran the full suite clean. **Learning for future runtime-harness batches against
+`TEST_DATABASE_URL`**: always delete harness-inserted rows before the final full-suite run,
+especially for tickers (like `AAPL`) that other suites' fixtures also touch.
 
 ## Work Unit Evidence
 
 | Evidence | Value |
 |---|---|
 | Focused test command and exact result | `py -3.14 -m pytest tests/test_universe_config.py -q` → `14 passed in 2.30s` |
-| Runtime harness command/scenario and exact result | `LOCAL_DATABASE_URL=<TEST_DATABASE_URL value> py -3.14 -m collector.main --assets-file <5-ticker subset universe doc: AAPL/MSFT/JNJ/HON/BRK-B> --start 2020-01-01 --end 2020-01-05` against real `yfinance` and real `TEST_DATABASE_URL` → all 5 tickers returned `rows_loaded: 2`; verified by direct SQL query against `TEST_DATABASE_URL`: all 5 rows present in `assets` (`asset_class='stock'`) and 2 price rows each in `prices`, including `HON` and `BRK-B` resolving correctly through real `yfinance` — the strongest possible confirmation that task 2.1's `HON` (not `HONA`) correction is right |
+| Runtime harness command/scenario and exact result | `LOCAL_DATABASE_URL=<TEST_DATABASE_URL value> py -3.14 -m collector.main --assets-file <5-ticker subset universe doc: AAPL/MSFT/JNJ/HON/BRK-B> --start 2020-01-01 --end 2020-01-05` against real `yfinance` and real `TEST_DATABASE_URL` → all 5 tickers returned `rows_loaded: 2`; verified by direct SQL query against `TEST_DATABASE_URL`: all 5 rows present in `assets` (`asset_class='stock'`) and 2 price rows each in `prices`, including `HON` and `BRK-B` resolving correctly through real `yfinance` — the strongest possible confirmation that task 2.1's `HON` (not `HONA`) correction is right. Rows were deleted from `TEST_DATABASE_URL` immediately after (see "Issues Found"). |
 | Rollback boundary | Delete `config/universe.sp100.json`, `collector/universe.py`, `tests/test_universe_config.py`; revert `collector/main.py`'s `expand_universe_document` function and the `isinstance(raw, dict)` branch (the `isinstance(raw, list)` path and `config/assets.core.json` consumers are completely untouched) |
 
 ### Full Suite Regression
 
 `py -3.14 -m pytest -q` (both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` exported via `.env`):
 - Before this batch (measured at batch start, matching Batch 2's end-state): **284 passed**
-- After this batch: **307 passed** — this run captured concurrent sibling-batch landings in
-  the same shared tree (Phase 3/5/6 test files/additions were present at the time this batch
-  ran the full suite), so 307 is not solely this batch's contribution. This batch's own
-  isolated contribution is exactly **14 new tests** (`py -3.14 -m pytest
-  tests/test_universe_config.py -q` → `14 passed`), 0 regressions in that file or in any file
-  this batch touched.
+- Immediately after this batch's code + the runtime harness run (before DB cleanup):
+  **2 failed, 320 passed** — both failures traced to harness-inserted `AAPL`/etc. rows in
+  `TEST_DATABASE_URL` (see "Issues Found"), not to this batch's actual code
+- After deleting the harness-inserted rows: **322 passed, 0 failed** — this run also
+  captured concurrent sibling-batch commits/edits landing in the same shared tree (Phase 4
+  and Phase 6 are now committed on this branch; Phase 3/5 were present as uncommitted working
+  changes), so 322 is not solely this batch's contribution. This batch's own isolated
+  contribution is exactly **14 new tests** (`py -3.14 -m pytest tests/test_universe_config.py
+  -q` → `14 passed`), 0 regressions in any file this batch touched.
 
 ### Remaining Tasks
 
