@@ -6,7 +6,7 @@ import pandas as pd
 from fastapi.testclient import TestClient
 
 from app_config import AppConfig
-from api.main import app, get_app_config, get_operational_alerts, get_repository
+from api.main import app, get_app_config, get_operational_alerts, get_repository, get_universe
 from collector.local_repository import LocalPostgresRepository
 from ops.notification_rules import (
     DEFAULT_MAX_PRICE_AGE_HOURS,
@@ -302,6 +302,41 @@ def test_assets_endpoint_returns_repository_assets() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert response.json()[0]["ticker"] == "AAPL"
+
+
+def test_universe_endpoint_returns_real_snapshot_disclosure() -> None:
+    """Req: Survivorship Bias Disclosure. `GET /api/universe` reads the checked-in
+    `config/universe.sp100.json` snapshot and returns its disclosure block --
+    deliberately not added to `GET /api/assets` (design's explicit decision)."""
+    client = TestClient(app)
+
+    response = client.get("/api/universe")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["snapshot_date"] == "2025-09-22"
+    assert payload["source"]
+    assert payload["membership_bias"]
+    assert payload["member_count"] == 101
+
+
+def test_universe_endpoint_never_accepts_a_request_supplied_path() -> None:
+    """Closes task 5.3's non-matrix security requirement for this call site too:
+    the universe file path is always the `DEFAULT_UNIVERSE_FILE` module constant,
+    never a query parameter or other request-derived value."""
+    assert inspect.signature(get_universe).parameters == {}
+
+
+def test_universe_endpoint_degrades_to_incomplete_marker_when_file_missing(monkeypatch) -> None:
+    monkeypatch.setattr("api.main.DEFAULT_UNIVERSE_FILE", "config/does-not-exist.json")
+    client = TestClient(app)
+
+    response = client.get("/api/universe")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "universe": {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}
+    }
 
 
 def test_health_endpoint_reports_ready_api_without_schema_check() -> None:

@@ -28,8 +28,10 @@ from brain.retraining_job import (
     resolve_target_tickers,
     run_retraining_job,
 )
+from brain.run_retraining_job import DEFAULT_UNIVERSE_FILE, load_universe_disclosure
 from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest, select_scope_datasets
 from brain.selection import PromotionCriteria, evaluate_promotion, rank_candidate_summaries, score_candidate
+from collector.universe import load_universe_document, universe_disclosure
 
 
 def make_prices(rows: int = 120) -> pd.DataFrame:
@@ -500,6 +502,27 @@ def test_resolve_target_tickers_uncapped_preserves_two_positional_arg_behavior()
     resolved = resolve_target_tickers(datasets, None)
 
     assert resolved == sorted(item.ticker for item in datasets)
+
+
+def test_load_universe_disclosure_embeds_universe_disclosure_for_real_snapshot() -> None:
+    """Req: Survivorship Bias Disclosure -- confirms `brain/run_retraining_job.py`'s
+    `main()` (`payload["universe"] = load_universe_disclosure(DEFAULT_UNIVERSE_FILE)`)
+    embeds `universe_disclosure(doc)` verbatim under the JSON report's `"universe"`
+    key for the real checked-in `config/universe.sp100.json` snapshot (spec
+    "Backtest report discloses snapshot bias")."""
+    disclosure = load_universe_disclosure(DEFAULT_UNIVERSE_FILE)
+
+    assert disclosure == universe_disclosure(load_universe_document(DEFAULT_UNIVERSE_FILE))
+    assert disclosure["snapshot_date"] == "2025-09-22"
+    assert disclosure["member_count"] == 101
+
+
+def test_load_universe_disclosure_degrades_to_incomplete_marker_when_missing(tmp_path) -> None:
+    """Spec "Missing snapshot date blocks disclosure-bearing output" -- a missing
+    universe file must never silently omit the `"universe"` key."""
+    disclosure = load_universe_disclosure(str(tmp_path / "does-not-exist.json"))
+
+    assert disclosure == {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}
 
 
 def test_candidate_selection_scores_return_after_risk() -> None:

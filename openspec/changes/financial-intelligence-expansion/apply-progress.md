@@ -927,3 +927,181 @@ especially for tickers (like `AAPL`) that other suites' fixtures also touch.
 8/8 Phase 2 tasks complete (2.1 pre-verified by orchestrator; 2.2-2.9 this batch). No
 blockers. Ready for `sdd-apply` to continue with any remaining phase, or `sdd-verify` if PR 2
 is being verified as its own slice before further phases proceed.
+
+## Batch 4 — Phase 7: API Endpoint + Rollout Confirmation (FINAL phase)
+
+**Mode**: Standard (`openspec/config.yaml` has `testing.strict_tdd: false` — proceeded in
+standard workflow: read spec/design/tasks/apply-progress, wrote the endpoint + tests
+together, verified with the focused suites, the full suite, the UI build, and a real
+`uvicorn`/`curl` round-trip).
+
+Ran after all of Phase 1-6 had already landed on disk (322 passing tests entering this
+batch, confirmed by the orchestrator and re-verified here). This batch only touches
+`api/main.py`, `tests/test_api.py`, `tests/test_brain_pipeline.py`, `README.md`,
+`openspec/changes/financial-intelligence-expansion/tasks.md`, and
+`openspec/changes/financial-intelligence-expansion/state.yaml`. No Phase 1-6 file was
+modified.
+
+### Completed Tasks
+
+- [x] 7.1 `api/main.py` — added `DEFAULT_UNIVERSE_FILE = "config/universe.sp100.json"`
+  (module constant, no request-derived path) and `INCOMPLETE_UNIVERSE_DISCLOSURE` next to the
+  existing `APP_CONFIG`/`_POOL` module-level constants; added `GET /api/universe` between
+  `get_assets` and `get_prices`: `load_universe_document(DEFAULT_UNIVERSE_FILE)` then
+  `universe_disclosure(doc)` on success; `except (OSError, ValueError)` — covering
+  `FileNotFoundError`/`PermissionError`/`json.JSONDecodeError` (all `OSError`/`ValueError`
+  subclasses) and `load_universe_document`'s own explicit `ValueError` for a missing
+  `snapshot_date`/`membership_bias` — returns
+  `{"universe": {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}}`
+  instead, never a 500. `GET /api/assets` was **not** touched — confirmed by diff, it stays
+  the bare `Asset[]` list design.md explicitly decided to keep.
+- [x] 7.2 `tests/test_api.py` — `test_universe_endpoint_returns_real_snapshot_disclosure`
+  (real checked-in `config/universe.sp100.json` → `snapshot_date == "2025-09-22"`,
+  `member_count == 101`, non-empty `source`/`membership_bias`);
+  `test_universe_endpoint_never_accepts_a_request_supplied_path` (closes task 5.3 for this
+  call site: `inspect.signature(get_universe).parameters == {}` — no query/path parameter
+  exists at all, so there is no request-derived override to reason about);
+  `test_universe_endpoint_degrades_to_incomplete_marker_when_file_missing`
+  (`monkeypatch.setattr("api.main.DEFAULT_UNIVERSE_FILE", "config/does-not-exist.json")` →
+  the exact incomplete-marker shape, `200` not `500`).
+- [x] 7.3 `tests/test_brain_pipeline.py` — confirmed (did not need to re-implement) that
+  `brain/run_retraining_job.py`'s `main()` already sets
+  `payload["universe"] = load_universe_disclosure(DEFAULT_UNIVERSE_FILE)` (landed in Batch 3
+  — Phase 3, line 133), where `load_universe_disclosure` wraps `load_universe_document` +
+  `universe_disclosure` with a degrade-to-incomplete fallback. Added
+  `test_load_universe_disclosure_embeds_universe_disclosure_for_real_snapshot` (asserts
+  `load_universe_disclosure(DEFAULT_UNIVERSE_FILE) ==
+  universe_disclosure(load_universe_document(DEFAULT_UNIVERSE_FILE))` for the real checked-in
+  snapshot, plus the concrete `snapshot_date`/`member_count` values) and
+  `test_load_universe_disclosure_degrades_to_incomplete_marker_when_missing` (a `tmp_path`
+  nonexistent path → the exact incomplete shape) — this is the first direct test coverage of
+  `load_universe_disclosure` itself; Batch 3's own runtime-harness evidence had already proven
+  the wiring end-to-end against a real `TEST_DATABASE_URL` run, but had no dedicated unit test
+  for the function.
+- [x] 7.4 Ran `py -3.14 -m pytest` (full suite, both DSNs exported) and
+  `cd ui && npm run build` — both green (see Work Unit Evidence below). The widened universe
+  is wired into the collector, the retraining-target policy, and now this API endpoint, but
+  **not backfilled or retrained** in this change, exactly as design.md requires.
+- [x] 7.5 Updated `README.md` (chosen over `PLAN_MEJORAS_PROFESIONALES.md` — see Deviations
+  below) with a new `## Universo de Activos` section (documenting `GET /api/universe`, the
+  verified ticker source, and the `HON`/`HONA` correction outcome) and an updated `Estado
+  Actual` table row. The wall-clock numbers are honestly written as **Pending**, per this
+  batch's explicit instruction not to fabricate them — see the doc text itself for the exact
+  wording, which names the real backfill command and explains the deferral is by design, not
+  an oversight.
+
+### Files Changed
+
+| File | Action | What Was Done |
+|------|--------|---------------|
+| `api/main.py` | Modified | Added `GET /api/universe`, `DEFAULT_UNIVERSE_FILE`, `INCOMPLETE_UNIVERSE_DISCLOSURE`; `GET /api/assets` untouched |
+| `tests/test_api.py` | Modified | 3 new tests + `get_universe` import |
+| `tests/test_brain_pipeline.py` | Modified | 2 new tests + `load_universe_disclosure`/`DEFAULT_UNIVERSE_FILE`/`load_universe_document`/`universe_disclosure` imports |
+| `README.md` | Modified | New `## Universo de Activos` section; `Estado Actual` table's `Datos` row updated |
+| `openspec/changes/financial-intelligence-expansion/tasks.md` | Modified | Marked Phase 7 tasks 7.1-7.5 `[x]` — this completes ALL of tasks.md |
+| `openspec/changes/financial-intelligence-expansion/state.yaml` | Modified | `progress.apply: pending` → `complete` |
+
+### Deviations from Design
+
+None on the public contract — the endpoint's success/failure shapes match the orchestrator's
+literal task description exactly (success: flat `universe_disclosure(doc)`; failure: nested
+`{"universe": {...}}`), which itself matches design.md's narrative text ("served by a new
+`GET /api/universe` in `api/main.py`"; "a report generated with no universe document at all
+emits `{"universe": {"disclosure_status": "incomplete", ...}}`"). One documentation-placement
+judgment call, explicitly delegated to this batch: task 7.5 offered
+`PLAN_MEJORAS_PROFESIONALES.md`/`README.md` as candidates. `PLAN_MEJORAS_PROFESIONALES.md` is
+structured entirely as forward-looking `Objetivo`/`Tareas`/`Criterio de salida` blocks for
+**not-yet-built** work — there is no existing "already landed, here is what's pending"
+pattern anywhere in that file to extend. `README.md` already has this exact pattern (`##
+Salud Operativa`, `## Alertas Operativas` — a short paragraph plus a `curl` example
+documenting an already-shipped endpoint), so the new `## Universo de Activos` section follows
+that established structure directly. `PLAN_MEJORAS_PROFESIONALES.md` was left untouched.
+
+**Explicitly confirmed, not this batch's job**: "sibling changes 3-7 exist as OpenSpec
+changes with `depends_on` and restated C1-C4" is `proposal.md`'s own success criterion for
+future sibling `sdd-propose` runs — no sibling change scaffolding
+(`fundamental-analysis`/`institutional-consensus`/`personal-finance`/
+`asset-class-profile-overlays`/`gemini-optional-assist`) was created in this batch.
+
+### Issues Found
+
+None.
+
+## Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command and exact result | `py -3.14 -m pytest tests/test_api.py -k universe -q` → `3 passed`; `py -3.14 -m pytest tests/test_brain_pipeline.py -k universe -q` → `2 passed` |
+| Runtime harness command/scenario and exact result | `py -3.14 -m uvicorn api.main:app --host 127.0.0.1 --port 8123` then `curl http://127.0.0.1:8123/api/universe` → real `200` JSON: `{"index":"S&P 100 (OEX)","snapshot_date":"2025-09-22","source":"Wikipedia S&P 100 article, retrieved 2026-08-28; membership as of 2025-09-22 per article citation","membership_bias":"Current membership applied to 2020-2026 history is survivorship / index-inclusion bias: constituents are the survivors and post-inclusion winners.","member_count":101}`; process killed cleanly after capture |
+| Rollback boundary | Revert the `GET /api/universe` route, `DEFAULT_UNIVERSE_FILE`, and `INCOMPLETE_UNIVERSE_DISCLOSURE` in `api/main.py`; delete the 3 new test functions + `get_universe` import from `tests/test_api.py`; delete the 2 new test functions + 4 new imports from `tests/test_brain_pipeline.py`; revert the `## Universo de Activos` section and the `Estado Actual` table row in `README.md`. `GET /api/assets` and every other endpoint are completely untouched. |
+
+### Full Suite Regression
+
+`py -3.14 -m pytest -q` (both `LOCAL_DATABASE_URL` and `TEST_DATABASE_URL` exported):
+- Baseline entering this batch (per orchestrator, matching the end of Batch 3's three
+  concurrent Phase 2/3/6 sub-batches): **322 passed**
+- After this batch: **327 passed**, 0 regressions (322 + 3 `test_api.py` + 2
+  `test_brain_pipeline.py` = 327, exact arithmetic match — no other file changed)
+
+`cd ui && npm run build`: **green** (`tsc -b && vite build` completed, `dist/` emitted, no UI
+source was touched by this batch so this was a pure regression confirmation).
+
+### Remaining Tasks
+
+None. This was the final phase (Phase 7) of the shared-foundation change. All 7 phases across
+tasks.md are now `[x]`.
+
+### Workload / PR Boundary
+
+- Mode: chained PR slice (`stacked-to-main`)
+- Current work unit: PR 7 — `api/main.py`'s `GET /api/universe` + full-suite/build
+  confirmation + wall-time/doc write-up (after PR 2, PR 3 — both already landed)
+- Boundary: this batch starts from a checked-in universe snapshot with no HTTP surface at all
+  and ends with a live, tested `GET /api/universe` endpoint, full-suite green, UI build green,
+  and the doc write-up committed — the last reviewable slice of the shared foundation.
+- Estimated review budget impact: source diff is ~20 lines (`api/main.py`); tests are ~55
+  lines across the two test files; docs are ~10 lines (`README.md`) — roughly ~85-100 total
+  changed lines, comfortably within the ~90-130 estimate for PR 7 and well under the 400-line
+  budget.
+
+### Status
+
+5/5 Phase 7 tasks complete. **All 7 phases of `financial-intelligence-expansion`'s shared
+foundation are now complete: 35/35 tasks across tasks.md marked `[x]`.** `327/327` tests
+passing (full suite, both DSNs exported), UI build green, real endpoint hit and confirmed.
+No blockers. `state.yaml`'s `progress.apply` set to `complete`. Ready for `sdd-verify`.
+
+---
+
+## Final Summary — Shared Foundation Complete (Phases 1-7)
+
+`financial-intelligence-expansion`'s shared-foundation slice (migration + repository methods,
+S&P 100 universe snapshot + loader + disclosure, bounded retraining-target policy + global-scope
+cap, SEC EDGAR client, ingestion audit recorder + identifier-resolution job, asset-class
+feature-set resolution seam, and the `GET /api/universe` API endpoint) is done across all 7
+planned PR-sized work units:
+
+| Phase | PR | Scope | Status |
+|---|---|---|---|
+| 1 | PR 1 | Migration `0005` + 5 repository methods + schema check | Complete (Batch 1) |
+| 2 | PR 2 | `config/universe.sp100.json` + `collector/universe.py` + `collector/main.py` wiring | Complete (Batch 3) |
+| 3 | PR 3 | `config/targets.core.json` + target-policy kwargs + global-scope cap | Complete (Batch 3) |
+| 4 | PR 4 | `collector/providers/sec_edgar_client.py` | Complete (Batch 2) |
+| 5 | PR 5 | `collector/ingestion_audit.py` + `collector/run_identifier_resolution.py` | Complete (Batch 3) |
+| 6 | PR 6 | `brain/features.py` asset-class feature-set resolution seam | Complete (Batch 3) |
+| 7 | PR 7 | `GET /api/universe` + full-suite/build confirmation + doc write-up | Complete (Batch 4) |
+
+**Final verified state**: `py -3.14 -m pytest` → **327 passed**, 0 failed (up from a
+pre-change baseline of 243); `cd ui && npm run build` → green; `GET /api/universe` hit live
+and returns real disclosure JSON.
+
+**Explicitly deferred by design, not this change's scope**:
+- Task 3.8's/7.5's real wall-clock before/after comparison (requires a real backfill of the
+  widened universe, which design.md explicitly says must NOT happen in this same slice).
+- Sibling OpenSpec changes (`fundamental-analysis`, `institutional-consensus`,
+  `personal-finance`, `asset-class-profile-overlays`, `gemini-optional-assist`) — these are
+  `proposal.md`'s own success-criteria items for future `sdd-propose` runs, not implementation
+  work in this tasks.md.
+- Any real market-data backfill or model retraining against the widened universe.
+
+**Ready for `sdd-verify`.**

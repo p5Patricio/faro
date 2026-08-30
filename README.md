@@ -12,7 +12,7 @@ Plataforma experimental para investigacion, entrenamiento y evaluacion de modelo
 | --- | --- |
 | Frontend | Dashboard React con activos, grafico, senal, riesgo, probabilidades, backtests e historial de predicciones. |
 | API | FastAPI con endpoints para activos, precios, analisis, backtests e historial de predicciones. |
-| Datos | PostgreSQL local como unica fuente; modo demo local cuando la base de datos no esta disponible. |
+| Datos | PostgreSQL local como unica fuente; modo demo local cuando la base de datos no esta disponible; universo ampliado a S&P 100 (101 tickers) con snapshot fechado y disclosure de sesgo de supervivencia. |
 | ML | Pipeline base para features, labels, entrenamiento, inferencia, feedback y backtesting. |
 | Calidad | Suite de pruebas para API, collector, repositorio Postgres local y pipeline de modelo. |
 
@@ -227,6 +227,20 @@ curl "http://127.0.0.1:8000/api/alerts/BTC-USD"
 ```
 
 El endpoint acepta umbrales operativos como `max_price_age_hours`, `min_feedback_samples`, `min_accuracy` y `min_mean_outcome_return`. El dashboard muestra estas alertas junto al estado del sistema para separar lecturas saludables, datos demo, precios atrasados, falta de predicciones y degradacion del modelo.
+
+## Universo de Activos
+
+`GET /api/universe` expone el disclosure de sesgo de supervivencia del snapshot S&P 100 usado por el collector y por `run_retraining_job` (deliberadamente separado de `GET /api/assets`, que sigue devolviendo una lista plana):
+
+```bash
+curl "http://127.0.0.1:8000/api/universe"
+```
+
+El snapshot vive en `config/universe.sp100.json` (101 tickers; membresia al 2025-09-22 segun el articulo "S&P 100" de Wikipedia, consultado 2026-08-28). Un ticker del listado fuente (`HONA`) resulto ser un artefacto de scraping: se verifico via SEC EDGAR (CIK 0000773840) y cotizaciones independientes (Nasdaq, Bloomberg, Investing.com) que Honeywell International cotiza como `HON`; el snapshot usa `HON`.
+
+Ampliar el universo de ingesta no amplia automaticamente los targets de reentrenamiento por defecto: `run_retraining_job` sigue acotado por `config/targets.core.json` (4 tickers) mas `--max-auto-targets`/`--max-global-scope-assets`, que fallan explicitamente en vez de truncar en silencio si se supera el limite.
+
+**Pendiente**: requiere un backfill real (`collector.run_market_data_job --assets-file config/universe.sp100.json`) seguido de una comparacion completa de reentrenamiento antes/despues para medir el tiempo de ejecucion real entre el baseline de ~4 activos y el universo ampliado (~101 activos). Se dejo deliberadamente fuera de esta iteracion -- `financial-intelligence-expansion` no reentrena sobre el universo ampliado en la misma tanda en que lo agrega -- como paso operativo separado.
 
 ## Jobs Operativos
 

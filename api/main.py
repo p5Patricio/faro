@@ -18,6 +18,7 @@ from brain.paper_trading import PaperTradingConfig, run_paper_trading
 from brain.risk import RiskPolicy, apply_risk_policy
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.schema_check import check_relations
+from collector.universe import load_universe_document, universe_disclosure
 from ops.notification_rules import (
     DEFAULT_MAX_PRICE_AGE_HOURS,
     DEFAULT_MIN_ACCURACY,
@@ -27,6 +28,11 @@ from ops.notification_rules import (
 
 
 APP_CONFIG = AppConfig.from_env()
+
+DEFAULT_UNIVERSE_FILE = "config/universe.sp100.json"
+INCOMPLETE_UNIVERSE_DISCLOSURE: dict[str, dict[str, str]] = {
+    "universe": {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}
+}
 
 _POOL: ConnectionPool | None = None
 
@@ -130,6 +136,19 @@ def get_assets(
     except RuntimeError:
         require_demo_fallback(config)
         return demo_assets()
+
+
+@app.get("/api/universe")
+def get_universe():
+    """Survivorship-bias disclosure for the S&P 100 universe snapshot. Deliberately
+    separate from `GET /api/assets`, which stays a bare `Asset[]` list consumed by
+    `ui/src/App.tsx` -- turning that endpoint into an object would be a breaking UI
+    change for no benefit (design.md's explicit decision)."""
+    try:
+        doc = load_universe_document(DEFAULT_UNIVERSE_FILE)
+    except (OSError, ValueError):
+        return dict(INCOMPLETE_UNIVERSE_DISCLOSURE)
+    return universe_disclosure(doc)
 
 
 @app.get("/api/prices/{ticker}")
