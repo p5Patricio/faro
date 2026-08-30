@@ -9,10 +9,12 @@ field 1:1 (design.md: "`collector/ingestion_audit.py` (new) holds
 `RepositoryIngestionRecorder(repository)` implementing `IngestionRunRecorder`
 over `insert_ingestion_run`").
 
-`IngestionRun` carries no `max_filed_date` field, so every call site here
-leaves it at the repository method's own default (`None`) -- filed-date
-capture for XBRL facts is a sibling change's responsibility (point-in-time
-features spec).
+`IngestionRun.max_filed_date` (populated only by `fetch_submissions`, from its
+`filings.recent.filingDate` list -- see `sec_edgar_client._max_filed_date`) is
+threaded straight through to `insert_ingestion_run`'s own `max_filed_date`
+column, enabling the point-in-time-features spec's "which filing dates were
+available for this run" query. Full per-fact `filed`/`period_end` capture for
+XBRL facts stays a sibling change's responsibility.
 """
 
 from __future__ import annotations
@@ -45,6 +47,7 @@ class RepositoryIngestionRecorder:
             rows_written=run.rows_written,
             request_count=run.request_count,
             throttle_wait_seconds=run.throttle_wait_seconds,
+            max_filed_date=run.max_filed_date,
             error=run.error,
             metadata=run.metadata,
         )

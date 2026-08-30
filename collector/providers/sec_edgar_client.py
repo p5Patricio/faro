@@ -73,6 +73,12 @@ class IngestionRun:
     throttle_wait_seconds: float
     error: str | None
     metadata: dict[str, Any]
+    # Point-in-time audit (spec: "Ingestion run records enable point-in-time
+    # audit"): the newest `filingDate` found in a successful `fetch_submissions`
+    # response's `filings.recent.filingDate` list -- filing INDEX metadata, not
+    # an XBRL fact, so this stays outside `fetch_company_facts`'s documented
+    # no-fact-parsing boundary. `None` for every other endpoint/outcome.
+    max_filed_date: str | None = None
 
 
 class IngestionRunRecorder(Protocol):
@@ -104,6 +110,28 @@ def _response_detail(response: Any, user_agent: str | None) -> str:
     except Exception:
         detail = str(getattr(response, "text", "") or getattr(response, "url", ""))
     return _redact(detail, user_agent)
+
+
+def _max_filed_date(payload: Any) -> str | None:
+    """Extract the newest filing date from a `fetch_submissions` payload's
+    `filings.recent.filingDate` list -- an ISO `"YYYY-MM-DD"` string list from
+    SEC's filing INDEX, not XBRL fact data, so `max()` over these strings
+    (lexicographic == chronological for zero-padded ISO dates) does not cross
+    the client's "must not flatten or project XBRL facts" boundary (that rule
+    is scoped to `fetch_company_facts`'s payload).
+
+    An audit nicety, not a correctness gate: any missing/malformed shape --
+    SEC's own payload shape can vary -- yields `None` rather than raising."""
+    try:
+        dates = payload["filings"]["recent"]["filingDate"]
+    except (KeyError, TypeError):
+        return None
+    if not isinstance(dates, list):
+        return None
+    valid = [value for value in dates if isinstance(value, str) and value]
+    if not valid:
+        return None
+    return max(valid)
 
 
 def _retry_after_seconds(response: Any, default: float = 1.0) -> float:
@@ -163,6 +191,7 @@ class SecEdgarClient:
         rows_written = 0
         error: str | None = None
         metadata: dict[str, Any] = {}
+        max_filed_date: str | None = None
         user_agent: str | None = self.config.user_agent if self.config is not None else None
 
         try:
@@ -227,6 +256,8 @@ class SecEdgarClient:
 
                 status = "success"
                 rows_written = 1
+                if endpoint == "submissions":
+                    max_filed_date = _max_filed_date(payload)
                 return {"ok": True, "payload": payload, "status_code": http_status}
         finally:
             finished_at = _utcnow()
@@ -245,5 +276,6 @@ class SecEdgarClient:
                         throttle_wait_seconds=throttle_wait_seconds,
                         error=error,
                         metadata=metadata,
+                        max_filed_date=max_filed_date,
                     )
                 )

@@ -447,6 +447,99 @@ def test_no_recorder_attached_does_not_raise() -> None:
     assert result["ok"] is True
 
 
+# -- max_filed_date: point-in-time audit (spec "Ingestion run records enable
+# point-in-time audit") --
+
+
+def test_fetch_submissions_records_max_filed_date_from_filing_index() -> None:
+    """`filings.recent.filingDate` is filing INDEX metadata (not an XBRL
+    fact), so `max()` over it stays outside the client's "no fact-parsing"
+    boundary -- that rule is scoped to `fetch_company_facts`'s payload."""
+    payload = {
+        "cik": 320193,
+        "filings": {
+            "recent": {
+                "filingDate": ["2023-11-02", "2024-02-01", "2023-08-04"],
+                "form": ["10-Q", "10-K", "10-Q"],
+            }
+        },
+    }
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    recorder = FakeRecorder()
+    client = _client(session, recorder=recorder)
+
+    result = client.fetch_submissions("320193")
+
+    assert result["ok"] is True
+    assert len(recorder.runs) == 1
+    assert recorder.runs[0].max_filed_date == "2024-02-01"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"cik": 320193},  # no "filings" key at all
+        {"cik": 320193, "filings": {}},  # no "recent" key
+        {"cik": 320193, "filings": {"recent": {}}},  # no "filingDate" key
+        {"cik": 320193, "filings": {"recent": {"filingDate": []}}},  # empty list
+        {"cik": 320193, "filings": {"recent": {"filingDate": "2024-02-01"}}},  # not a list
+        {"cik": 320193, "filings": {"recent": {"filingDate": [None, ""]}}},  # non-string entries
+        {"cik": 320193, "filings": None},  # malformed nesting
+    ],
+)
+def test_fetch_submissions_max_filed_date_stays_none_for_missing_or_malformed_shape(
+    payload: dict,
+) -> None:
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    recorder = FakeRecorder()
+    client = _client(session, recorder=recorder)
+
+    result = client.fetch_submissions("320193")
+
+    assert result["ok"] is True  # never raises for this audit nicety
+    assert recorder.runs[0].max_filed_date is None
+
+
+def test_fetch_company_tickers_and_facts_never_set_max_filed_date() -> None:
+    """Neither `company_tickers.json` nor `companyfacts` has a natural
+    "newest filing date" in this change's scope -- both stay `None`."""
+    tickers_session = FakeSession([FakeResponse(200, payload={"0": {"cik_str": 1, "ticker": "AAPL"}})])
+    tickers_recorder = FakeRecorder()
+    _client(tickers_session, recorder=tickers_recorder).fetch_company_tickers()
+    assert tickers_recorder.runs[0].max_filed_date is None
+
+    facts_session = FakeSession(
+        [FakeResponse(200, payload={"cik": 320193, "facts": {"us-gaap": {}}})]
+    )
+    facts_recorder = FakeRecorder()
+    _client(facts_session, recorder=facts_recorder).fetch_company_facts("320193")
+    assert facts_recorder.runs[0].max_filed_date is None
+
+
+def test_recorder_gets_one_run_with_max_filed_date_persisted_via_repository_recorder(
+    repository: LocalPostgresRepository,
+) -> None:
+    """Real-DB round-trip: `RepositoryIngestionRecorder` threads
+    `IngestionRun.max_filed_date` through to `insert_ingestion_run`, and the
+    persisted `ingestion_runs.max_filed_date` column reflects it."""
+    payload = {
+        "cik": 320193,
+        "filings": {"recent": {"filingDate": ["2023-11-02", "2024-02-01"]}},
+    }
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    recorder = RepositoryIngestionRecorder(repository)
+    client = _client(session, recorder=recorder)
+
+    client.fetch_submissions("320193")
+
+    runs = repository.get_recent_ingestion_runs(source="sec_edgar")
+    matching = [run for run in runs if run["endpoint"] == "submissions"]
+    assert len(matching) == 1
+    persisted = matching[0]["max_filed_date"]
+    assert persisted is not None
+    assert persisted.date().isoformat() == "2024-02-01"
+
+
 # -- Redaction: SEC_USER_AGENT (operator email) must never leak --
 
 
@@ -598,6 +691,7 @@ def test_repository_ingestion_recorder_calls_insert_once_per_record() -> None:
         throttle_wait_seconds=0.11,
         error=None,
         metadata={},
+        max_filed_date="2024-02-01",
     )
 
     recorder.record(run)
@@ -618,6 +712,7 @@ def test_repository_ingestion_recorder_calls_insert_once_per_record() -> None:
     assert call["throttle_wait_seconds"] == run.throttle_wait_seconds
     assert call["error"] == run.error
     assert call["metadata"] == run.metadata
+    assert call["max_filed_date"] == run.max_filed_date
 
 
 # -- 5.5: unresolved ticker surfacing (spec "Unresolved ticker is logged, not skipped") --
