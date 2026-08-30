@@ -4,7 +4,7 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import psycopg
 
@@ -63,13 +63,39 @@ DEFAULT_ASSETS = [
 ProviderFactory = Callable[[str], PriceProvider]
 
 
+def expand_universe_document(raw: dict[str, Any]) -> list[AssetCollectionConfig]:
+    """Expand a universe snapshot document's ``defaults`` + ``members`` into one
+    `AssetCollectionConfig` per member. Kept in `main.py`, not `collector/universe.py`,
+    so the `universe` <-> `AssetCollectionConfig` dependency stays one-way."""
+    defaults = raw.get("defaults", {})
+    provider = defaults.get("provider", "yfinance")
+    asset_class = defaults.get("asset_class", "stock")
+    interval = defaults.get("interval", "1d")
+    start = defaults.get("start")
+
+    return [
+        AssetCollectionConfig(
+            provider=provider,
+            ticker=member["ticker"],
+            asset_ticker=member["ticker"],
+            name=member["name"],
+            asset_class=asset_class,
+            interval=interval,
+            start=start,
+        )
+        for member in raw.get("members", [])
+    ]
+
+
 def load_asset_configs(path: str | None = None) -> list[AssetCollectionConfig]:
     if not path:
         return DEFAULT_ASSETS
 
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        return expand_universe_document(raw)
     if not isinstance(raw, list):
-        raise ValueError("assets file must contain a JSON array")
+        raise ValueError("assets file must contain a JSON array or a universe document")
 
     return [AssetCollectionConfig(**item) for item in raw]
 
