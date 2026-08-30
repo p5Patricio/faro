@@ -1,17 +1,17 @@
 ```yaml
 schema: gentle-ai.verify-result/v1
-evidence_revision: sha256:f591b3f9765418f4817a986a364fd9bd5b8b3dfec972c1bf7769ce4e45389ee8
-verdict: fail
-blockers: 1
-critical_findings: 1
-requirements: 8/9
-scenarios: 20/21
+evidence_revision: sha256:95352a7decd09f135b2c2319932b3d240625508bcfda3ffc2b50175d08e4762a
+verdict: pass_with_warnings
+blockers: 0
+critical_findings: 0
+requirements: 9/9
+scenarios: 21/21
 test_command: py -3.14 -m pytest
 test_exit_code: 0
-test_output_hash: sha256:55c275f6b063c135955ef9e14bb40f1f498a8352a1f8f58be33421a931accf1e
+test_output_hash: sha256:6f4bfd55c63fcc708d4a4b20ac43110ea07bbf9b8a3911053ddac95feba275f4
 build_command: cd ui && npm run build
 build_exit_code: 0
-build_output_hash: sha256:30f4da2710ef59aa16be28538ac9b7b85bb5afe339c95c97e3db8b88ad882a90
+build_output_hash: sha256:522ddfe30ae2dad12f043c9dbc2d6a6adf25698e82fab4838f31f4313a1fc2fc
 ```
 ## Verification Report
 
@@ -247,3 +247,129 @@ new).
 
 This section records the fix only. `state.yaml`'s `progress.verify` stays `pending` until
 `sdd-verify` re-confirms.
+### Re-verification
+
+Trigger: re-run after the remediation batch documented in the Remediation section above,
+which targeted the single prior CRITICAL: ingestion_runs.max_filed_date was schema-defined
+but never populated by any code path, with zero test coverage.
+
+CRITICAL finding re-checked against source, not re-trusted from the Remediation section text:
+
+1. fetch_submissions genuinely populates max_filed_date now. Read directly in
+   collector/providers/sec_edgar_client.py: _request() computes
+   max_filed_date = _max_filed_date(payload) only if endpoint == "submissions" (line 259-260),
+   after a successful JSON parse, and passes it into the IngestionRun constructed in the
+   finally block (line 279). _max_filed_date() (line 115-134) does max(valid) over
+   payload["filings"]["recent"]["filingDate"], filtered to non-empty string entries, a
+   genuine computation over real filing-index data, not a stub or hardcoded value.
+2. Malformed/missing shapes genuinely degrade to None without raising. Read
+   _max_filed_date(): it catches (KeyError, TypeError) around the three-level dict lookup,
+   checks isinstance(dates, list), and filters non-string/empty entries before calling max()
+   on a possibly-empty list (returning None if empty). This is asserted, not just implemented,
+   by tests/test_sec_edgar_client.py::test_fetch_submissions_max_filed_date_stays_none_for_missing_or_malformed_shape,
+   a 7-case pytest.mark.parametrize sweep (missing filings key, missing recent key,
+   missing filingDate key, empty list, filingDate as a non-list scalar, non-string/empty
+   list entries, filings: None). Each case asserts both result["ok"] is True (never
+   raises) and recorder.runs[0].max_filed_date is None.
+3. The real-DB round-trip test genuinely proves the persisted column, not just that the Python
+   call does not error. Read
+   test_recorder_gets_one_run_with_max_filed_date_persisted_via_repository_recorder: it uses
+   the repository fixture (tests/conftest.py), which is a real LocalPostgresRepository
+   wrapping a live psycopg.connect(test_database_url) connection against the real
+   TEST_DATABASE_URL database inside a rolled-back transaction, not a fake or mock. The test
+   calls client.fetch_submissions(...) through RepositoryIngestionRecorder, then reads the
+   row back via repository.get_recent_ingestion_runs(source="sec_edgar") (a real SELECT star
+   FROM ingestion_runs RETURNING star backed query) and asserts the returned row's
+   max_filed_date column is not None. collector/local_repository.py's
+   insert_ingestion_run() (line 1012-1054) confirms max_filed_date is a real positional
+   parameter threaded into the SQL INSERT column list via _timestamp_or_none(max_filed_date),
+   not silently dropped. This closes the loop end to end: client computation, recorder,
+   repository, real ingestion_runs.max_filed_date timestamptz column
+   (db/migrations/0005_shared_ingestion.sql line 37).
+4. The design boundary was correctly left intact. Read _request()'s single call site of
+   _max_filed_date(): it is gated by if endpoint == "submissions", so fetch_company_facts
+   (endpoint "companyfacts") and fetch_company_tickers (endpoint "company_tickers") never
+   reach that branch and always leave max_filed_date at its dataclass default of None.
+   Directly confirmed by test_fetch_company_tickers_and_facts_never_set_max_filed_date, which
+   drives both methods through real fake-transport calls and asserts max_filed_date is None
+   on both recorded runs. No XBRL-fact-parsing code was added anywhere in this file;
+   fetch_company_facts's body is unchanged from the pre-remediation version.
+5. openspec/changes/financial-intelligence-expansion/design.md's IngestionRun
+   Interfaces/Contracts snippet now includes max_filed_date: str | None = None (line 210-211),
+   resolving the design/spec inconsistency the original Design Coherence table flagged (design's
+   own DDL comment named this column spec-required, but its interface previously omitted the
+   field). Design and implementation are now mutually consistent, and both are consistent with
+   the DDL comment's stated justification.
+
+Verdict on the CRITICAL: CLOSED. Genuinely implemented, genuinely tested (happy path,
+7-case malformed-shape sweep, negative-boundary test, and a real-DB round trip), and the
+documented design boundary (no XBRL fact parsing added to fetch_company_facts) is intact.
+
+Test suite re-run by this verify pass (fresh execution, not trusted from the Remediation
+section's self-reported numbers):
+```text
+$ py -3.14 -m pytest
+(LOCAL_DATABASE_URL and TEST_DATABASE_URL both exported to a real local Postgres)
+337 passed, 1 warning in 38.81s
+exit code: 0
+```
+The 1 warning is the same pre-existing, unrelated joblib/loky Windows core-count detection
+notice as the original pass.
+
+Focused re-run:
+```text
+$ py -3.14 -m pytest tests/test_sec_edgar_client.py -q
+53 passed in 0.91s
+exit code: 0
+```
+53 = 43 pre-existing + 10 new, matching the Remediation section's own claimed count.
+
+Build re-run by this verify pass:
+```text
+$ cd ui && npm run build
+> tsc -b && vite build
+built in 818ms
+exit code: 0
+```
+
+Spec Compliance Matrix update (point-in-time-features, superseding the two rows in the
+original matrix above):
+
+| Requirement | Scenario | Test | Result |
+|---|---|---|---|
+| Filed-Date Capture for Externally-Sourced Facts | Ingested fact retains both dates | tests/test_sec_edgar_client.py::test_success_returns_provider_payload_unmodified plus test_resolved_cik_fetch_retains_filed_date_independent_of_period_end | PARTIAL (unchanged from original pass; transport-fidelity only, see carried-forward WARNING 1 below; still a reasonable, disclosed reading, not a regression) |
+| Filed-Date Capture for Externally-Sourced Facts | Ingestion run records enable point-in-time audit | tests/test_sec_edgar_client.py::test_fetch_submissions_records_max_filed_date_from_filing_index, ::test_fetch_submissions_max_filed_date_stays_none_for_missing_or_malformed_shape (x7), ::test_fetch_company_tickers_and_facts_never_set_max_filed_date, ::test_recorder_gets_one_run_with_max_filed_date_persisted_via_repository_recorder | COMPLIANT (was UNTESTED) |
+
+Updated compliance summary: 21/21 scenarios have covering evidence (20 COMPLIANT, 1
+PARTIAL-with-disclosed-caveat counted as compliant-with-note, matching the original pass's own
+counting convention). 9/9 requirements compliant.
+
+Carried-forward WARNING/SUGGESTION items (informational, non-blocking; none of these were
+the blocking CRITICAL, and none regressed or were touched by this remediation batch):
+
+- WARNING 1: the point-in-time-features spec "Ingested fact retains both dates" scenario's
+  literal wording ("stored") does not match what this change's code does (transport-fidelity
+  only; no fact is persisted anywhere in this change's scope). Disclosed, not silent. Unchanged.
+- WARNING 2: the original launch-prompt task-count mismatch (35 vs. the actual 50) was an
+  orchestrator-summary artifact, not a defect in tasks.md itself. Unchanged, informational only.
+- WARNING 3: run_identifier_resolution.py writes a second, separate ingestion_runs row
+  (endpoint identifier_resolution) distinct from the underlying client's own recorded row.
+  Documented, deliberate design choice per apply-progress.md. Unchanged.
+- SUGGESTION 1: tests/test_schema_check.py still has no test parametrized over the literal
+  asset_identifiers / ingestion_runs table names; that scenario's evidence still rests on
+  this and the original verify pass's own manual db.migrate / schema_check re-runs, not a
+  checked-in pytest assertion. Unchanged, low-priority follow-up.
+- SUGGESTION 2: resolve_asset_by_identifier's one-to-many CIK-sharing case (GOOG/GOOGL) still
+  has no dedicated test. Unchanged, low-priority follow-up.
+
+### Final Verdict (Re-verification)
+
+PASS WITH WARNINGS. The single CRITICAL finding from the original pass, ingestion_runs.
+max_filed_date schema-defined but never populated with zero test coverage, is genuinely
+closed: real computation wired into fetch_submissions only, real graceful-degradation tests
+over 7 malformed shapes, a real TEST_DATABASE_URL round-trip proving the persisted column,
+and the fetch_company_facts/fetch_company_tickers no-XBRL-parsing design boundary
+independently confirmed intact. The full suite passes at 337/337 (up from 327, plus 10 new
+targeted tests), the UI build passes, and every WARNING/SUGGESTION carried forward from the
+original pass remains informational and non-blocking, exactly as that original pass itself
+framed them. state.yaml progress.verify is updated to complete by this pass.
