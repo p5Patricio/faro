@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 import requests
 
+from collector.ingestion_audit import RepositoryIngestionRecorder
+from collector.local_repository import LocalPostgresRepository
 from collector.providers.sec_edgar_client import (
     MAX_RETRIES,
     MIN_REQUEST_INTERVAL_SECONDS,
@@ -14,6 +18,7 @@ from collector.providers.sec_edgar_client import (
     SecEdgarConfigError,
     pad_cik,
 )
+from collector.run_identifier_resolution import run_identifier_resolution
 
 DEFAULT_USER_AGENT = "Faro Ops Team ops@faro.example"
 
@@ -519,3 +524,244 @@ def test_user_agent_never_leaks_across_every_failure_case_and_config_error() -> 
     with pytest.raises(SecEdgarConfigError) as exc_info:
         missing_agent_client.fetch_company_tickers()
     assert DEFAULT_USER_AGENT not in str(exc_info.value)
+
+
+# ===========================================================================
+# Identifier resolution (Phase 5: `RepositoryIngestionRecorder` +
+# `collector.run_identifier_resolution.run_identifier_resolution`)
+# ===========================================================================
+
+
+class FakeIdentifierRepository:
+    """Offline stand-in for `LocalPostgresRepository`'s identifier-resolution
+    surface -- covers exactly the methods `run_identifier_resolution` and
+    `RepositoryIngestionRecorder` call, so tests 5.4-5.6 stay fast and never
+    touch a real database (task 5.7 is the dedicated real-DB round-trip)."""
+
+    def __init__(self) -> None:
+        self._asset_ids: dict[str, str] = {}
+        self.identifier_rows: list[dict[str, Any]] = []
+        self.ingestion_runs: list[dict[str, Any]] = []
+
+    def get_or_create_asset(
+        self, ticker: str, name: str | None = None, asset_class: str | None = None
+    ) -> str:
+        normalized = ticker.upper()
+        return self._asset_ids.setdefault(normalized, f"asset-{normalized}")
+
+    def upsert_asset_identifiers(self, rows: list[dict[str, Any]], batch_size: int = 500) -> int:
+        self.identifier_rows.extend(rows)
+        return len(rows)
+
+    def resolve_asset_by_identifier(self, id_type: str, id_value: str) -> dict[str, Any] | None:
+        for row in self.identifier_rows:
+            if row["id_type"] == id_type and row["id_value"] == id_value:
+                ticker = next(
+                    ticker
+                    for ticker, asset_id in self._asset_ids.items()
+                    if asset_id == row["asset_id"]
+                )
+                return {"id": row["asset_id"], "ticker": ticker}
+        return None
+
+    def insert_ingestion_run(self, **kwargs: Any) -> dict[str, Any]:
+        run = {"id": f"run-{len(self.ingestion_runs) + 1}", **kwargs}
+        self.ingestion_runs.append(run)
+        return run
+
+
+def _company_tickers_payload(entries: dict[str, int]) -> dict[str, Any]:
+    """Builds the real `company_tickers.json` shape: a dict keyed by row
+    index, each value carrying `cik_str`/`ticker`/`title`."""
+    return {
+        str(index): {"cik_str": cik, "ticker": ticker, "title": ticker}
+        for index, (ticker, cik) in enumerate(entries.items())
+    }
+
+
+# -- 5.4: RepositoryIngestionRecorder — one insert_ingestion_run call per record() call --
+
+
+def test_repository_ingestion_recorder_calls_insert_once_per_record() -> None:
+    repository = FakeIdentifierRepository()
+    recorder = RepositoryIngestionRecorder(repository)
+    run = IngestionRun(
+        source="sec_edgar",
+        endpoint="company_tickers",
+        target_key="",
+        started_at="2026-01-01T00:00:00Z",
+        finished_at="2026-01-01T00:00:01Z",
+        status="success",
+        http_status=200,
+        rows_written=105,
+        request_count=1,
+        throttle_wait_seconds=0.11,
+        error=None,
+        metadata={},
+    )
+
+    recorder.record(run)
+    recorder.record(run)
+
+    assert len(repository.ingestion_runs) == 2
+    call = repository.ingestion_runs[0]
+    # 1:1 field mapping from IngestionRun to insert_ingestion_run kwargs.
+    assert call["source"] == run.source
+    assert call["endpoint"] == run.endpoint
+    assert call["target_key"] == run.target_key
+    assert call["started_at"] == run.started_at
+    assert call["finished_at"] == run.finished_at
+    assert call["status"] == run.status
+    assert call["http_status"] == run.http_status
+    assert call["rows_written"] == run.rows_written
+    assert call["request_count"] == run.request_count
+    assert call["throttle_wait_seconds"] == run.throttle_wait_seconds
+    assert call["error"] == run.error
+    assert call["metadata"] == run.metadata
+
+
+# -- 5.5: unresolved ticker surfacing (spec "Unresolved ticker is logged, not skipped") --
+
+
+def test_unresolved_ticker_appears_in_result_and_ingestion_run_metadata() -> None:
+    payload = _company_tickers_payload({"AAPL": 320193, "MSFT": 789019})
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    client = _client(session)
+    repository = FakeIdentifierRepository()
+
+    result = run_identifier_resolution(repository, client, ["AAPL", "MSFT", "NOPE"])
+
+    assert result["resolved"] == ["AAPL", "MSFT"]
+    assert result["unresolved"] == ["NOPE"]
+
+    identifier_runs = [run for run in repository.ingestion_runs if run["endpoint"] == "identifier_resolution"]
+    assert len(identifier_runs) == 1
+    assert identifier_runs[0]["metadata"]["unresolved_tickers"] == ["NOPE"]
+    assert identifier_runs[0]["status"] == "success"
+
+
+def test_unresolved_ticker_is_printed_not_silently_dropped(capsys: pytest.CaptureFixture[str]) -> None:
+    payload = _company_tickers_payload({"AAPL": 320193})
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    client = _client(session)
+    repository = FakeIdentifierRepository()
+
+    run_identifier_resolution(repository, client, ["AAPL", "GHOST"])
+
+    captured = capsys.readouterr()
+    assert "GHOST" in captured.out
+
+
+def test_fetch_failure_marks_every_ticker_unresolved_and_never_raises() -> None:
+    session = FakeSession([FakeResponse(503, text="unavailable") for _ in range(MAX_RETRIES + 1)])
+    client = _client(session)
+    repository = FakeIdentifierRepository()
+
+    result = run_identifier_resolution(repository, client, ["AAPL", "MSFT"])
+
+    assert result["resolved"] == []
+    assert sorted(result["unresolved"]) == ["AAPL", "MSFT"]
+    identifier_runs = [run for run in repository.ingestion_runs if run["endpoint"] == "identifier_resolution"]
+    assert identifier_runs[0]["status"] == "failure"
+    assert sorted(identifier_runs[0]["metadata"]["unresolved_tickers"]) == ["AAPL", "MSFT"]
+    assert repository.identifier_rows == []
+
+
+# -- 5.6: resolved-ticker CIK lookup + payload-fidelity proof --
+
+
+def test_resolved_ticker_asset_identifiers_row_returns_cik() -> None:
+    payload = _company_tickers_payload({"AAPL": 320193})
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    client = _client(session)
+    repository = FakeIdentifierRepository()
+
+    run_identifier_resolution(repository, client, ["AAPL"])
+
+    resolved = repository.resolve_asset_by_identifier("cik", "0000320193")
+    assert resolved is not None
+    assert resolved["ticker"] == "AAPL"
+
+
+def test_fetch_company_tickers_called_exactly_once_regardless_of_ticker_count() -> None:
+    """spec "bulk-preferring": one company_tickers.json fetch resolves the
+    whole batch, never a per-ticker request loop."""
+    payload = _company_tickers_payload({"AAPL": 320193, "MSFT": 789019, "GOOG": 1652044})
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    client = _client(session)
+    repository = FakeIdentifierRepository()
+
+    run_identifier_resolution(repository, client, ["AAPL", "MSFT", "GOOG"])
+
+    assert len(session.requests) == 1
+    assert session.requests[0]["url"] == f"{SEC_WWW_BASE}/files/company_tickers.json"
+
+
+def test_resolved_cik_fetch_retains_filed_date_independent_of_period_end() -> None:
+    """Transport-fidelity proof for the point-in-time-features spec
+    ("Ingested fact retains both dates"): once a ticker resolves to a CIK
+    here, a subsequent `fetch_company_facts` for that CIK returns `filed`
+    unmodified and independently queryable from `period_end`/`end` -- full
+    XBRL parsing is a sibling change's scope, this proves the transport
+    layer never drops or merges the two dates."""
+    tickers_payload = _company_tickers_payload({"AAPL": 320193})
+    facts_payload = {
+        "cik": 320193,
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "units": {
+                        "USD": [
+                            {"end": "2023-12-31", "val": 100, "filed": "2024-02-01", "form": "10-K"},
+                        ]
+                    }
+                }
+            }
+        },
+    }
+    session = FakeSession(
+        [
+            FakeResponse(200, payload=tickers_payload),
+            FakeResponse(200, payload=facts_payload),
+        ]
+    )
+    client = _client(session)
+    repository = FakeIdentifierRepository()
+
+    result = run_identifier_resolution(repository, client, ["AAPL"])
+    assert result["resolved"] == ["AAPL"]
+
+    identifier = repository.resolve_asset_by_identifier("cik", "0000320193")
+    facts_result = client.fetch_company_facts("320193")
+
+    fact = facts_result["payload"]["facts"]["us-gaap"]["Revenues"]["units"]["USD"][0]
+    assert fact["filed"] == "2024-02-01"
+    assert fact["end"] == "2023-12-31"
+    assert fact["filed"] != fact["end"]
+    assert identifier is not None
+
+
+# -- 5.7: real repository round-trip (TEST_DATABASE_URL) --
+
+
+def test_run_identifier_resolution_persists_rows_against_real_repository(
+    repository: LocalPostgresRepository,
+) -> None:
+    payload = _company_tickers_payload({"AAPL": 320193})
+    session = FakeSession([FakeResponse(200, payload=payload)])
+    client = _client(session)
+
+    result = run_identifier_resolution(repository, client, ["AAPL", "ZZZZ-NOPE"])
+
+    assert result["resolved"] == ["AAPL"]
+    assert result["unresolved"] == ["ZZZZ-NOPE"]
+
+    identifier = repository.resolve_asset_by_identifier("cik", "0000320193")
+    assert identifier is not None
+    assert identifier["ticker"] == "AAPL"
+
+    runs = repository.get_recent_ingestion_runs(source="sec_edgar")
+    matching = [run for run in runs if run["endpoint"] == "identifier_resolution"]
+    assert len(matching) == 1
+    assert matching[0]["metadata"]["unresolved_tickers"] == ["ZZZZ-NOPE"]
+    assert matching[0]["status"] == "success"
