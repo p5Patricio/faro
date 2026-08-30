@@ -26,6 +26,9 @@ class RetrainingJobConfig:
     model_names: list[str] = field(default_factory=available_model_names)
     confidence_thresholds: list[float] = field(default_factory=lambda: [0.55, 0.60, 0.65, 0.70])
     scopes: list[str] = field(default_factory=lambda: ["local", "asset_class", "global"])
+    default_targets: list[str] | None = None
+    max_auto_targets: int = 8
+    max_global_scope_assets: int = 12
     splits: int = 5
     test_size: int | None = None
     embargo_rows: int | None = None
@@ -80,7 +83,12 @@ def run_retraining_job(
         limit=job_config.limit,
         min_rows=job_config.min_rows,
     )
-    selected_tickers = resolve_target_tickers(datasets, tickers)
+    selected_tickers = resolve_target_tickers(
+        datasets,
+        tickers,
+        default_targets=job_config.default_targets,
+        max_auto_targets=job_config.max_auto_targets,
+    )
 
     results: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -232,6 +240,7 @@ def build_candidate_report(
         drawdown_penalty=config.drawdown_penalty,
         include_details=False,
         continue_on_error=config.continue_on_error,
+        max_scope_assets=config.max_global_scope_assets,
     )
     return {
         "ticker": ticker.upper(),
@@ -256,12 +265,30 @@ def build_candidate_report(
     }
 
 
-def resolve_target_tickers(datasets, tickers: list[str] | None) -> list[str]:
+def resolve_target_tickers(
+    datasets,
+    tickers: list[str] | None,
+    *,
+    default_targets: list[str] | None = None,
+    max_auto_targets: int | None = None,
+) -> list[str]:
     available = {item.ticker.upper() for item in datasets}
-    if not tickers:
-        return sorted(available)
-    requested = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
-    return [ticker for ticker in requested if ticker in available]
+    if tickers:
+        requested = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
+        return [ticker for ticker in requested if ticker in available]
+    if default_targets:
+        requested = [ticker.strip().upper() for ticker in default_targets if ticker.strip()]
+        return [ticker for ticker in requested if ticker in available]
+
+    resolved = sorted(available)
+    if max_auto_targets is not None and len(resolved) > max_auto_targets:
+        raise ValueError(
+            f"{len(resolved)} assets have a stored dataset, exceeding max_auto_targets="
+            f"{max_auto_targets}. Widening the ingested universe must not silently widen "
+            "the default retraining-target list: pass an explicit --tickers list, provide "
+            "a narrower --targets-file, or raise --max-auto-targets deliberately."
+        )
+    return resolved
 
 
 def build_model_version(ticker: str) -> str:
@@ -352,6 +379,9 @@ def summarize_config(config: RetrainingJobConfig) -> dict[str, Any]:
         "models": config.model_names,
         "confidence_thresholds": config.confidence_thresholds,
         "scopes": config.scopes,
+        "default_targets": config.default_targets,
+        "max_auto_targets": config.max_auto_targets,
+        "max_global_scope_assets": config.max_global_scope_assets,
         "splits": config.splits,
         "min_rows": config.min_rows,
         "min_total_return": config.min_total_return,

@@ -70,6 +70,8 @@ def select_scope_datasets(
     datasets: list[AssetDataset],
     target_ticker: str,
     scope: str,
+    *,
+    max_scope_assets: int | None = None,
 ) -> list[AssetDataset]:
     if scope not in SCOPES:
         raise ValueError(f"Unknown scope: {scope}. Available: {sorted(SCOPES)}")
@@ -77,10 +79,29 @@ def select_scope_datasets(
     normalized_ticker = target_ticker.upper()
     target = find_target_dataset(datasets, normalized_ticker)
     if scope == SCOPE_LOCAL:
-        return [target]
-    if scope == SCOPE_ASSET_CLASS:
-        return [item for item in datasets if item.asset_class == target.asset_class]
-    return datasets
+        selected = [target]
+    elif scope == SCOPE_ASSET_CLASS:
+        selected = [item for item in datasets if item.asset_class == target.asset_class]
+    else:
+        selected = datasets
+
+    return _cap_scope_datasets(selected, target, max_scope_assets)
+
+
+def _cap_scope_datasets(
+    selected: list[AssetDataset],
+    target: AssetDataset,
+    max_scope_assets: int | None,
+) -> list[AssetDataset]:
+    if max_scope_assets is None or len(selected) <= max_scope_assets:
+        return selected
+
+    rest = sorted(
+        (item for item in selected if item.asset_id != target.asset_id),
+        key=lambda item: (-len(item.dataset), item.ticker),
+    )
+    capped_rest = rest[: max(0, max_scope_assets - 1)]
+    return [target, *capped_rest]
 
 
 def find_target_dataset(datasets: list[AssetDataset], target_ticker: str) -> AssetDataset:
@@ -102,11 +123,13 @@ def run_scoped_walk_forward_backtest(
     feature_columns: list[str] | None = None,
     prediction_policy: PredictionPolicy | None = None,
     config: BacktestConfig | None = None,
+    *,
+    max_scope_assets: int | None = None,
 ) -> ScopedBacktestResult:
     columns = feature_columns or FEATURE_COLUMNS
     config = config or BacktestConfig()
     prediction_policy = prediction_policy or PredictionPolicy()
-    scope_datasets = select_scope_datasets(datasets, target_ticker, scope)
+    scope_datasets = select_scope_datasets(datasets, target_ticker, scope, max_scope_assets=max_scope_assets)
     target = find_target_dataset(scope_datasets, target_ticker)
     target_data = target.dataset.sort_values("timestamp").reset_index(drop=True)
 

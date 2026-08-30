@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from brain.backtesting import BacktestConfig, run_prediction_backtest
 from brain.backtesting import run_confidence_threshold_sweep, run_walk_forward_model_backtest
@@ -21,8 +22,13 @@ from brain.labeling import BUY, HOLD, SELL, fixed_horizon_labels, triple_barrier
 from brain.models import available_model_names, create_model, walk_forward_evaluate
 from brain.promotion import build_promoted_training_frame, select_candidate
 from brain.risk import RiskPolicy, apply_risk_policy
-from brain.retraining_job import RetrainingJobConfig, compare_candidate_to_incumbent, run_retraining_job
-from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest
+from brain.retraining_job import (
+    RetrainingJobConfig,
+    compare_candidate_to_incumbent,
+    resolve_target_tickers,
+    run_retraining_job,
+)
+from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest, select_scope_datasets
 from brain.selection import PromotionCriteria, evaluate_promotion, rank_candidate_summaries, score_candidate
 
 
@@ -413,6 +419,87 @@ def test_run_scoped_walk_forward_backtest_compares_training_scopes() -> None:
     assert asset_class.folds[0]["train_rows"] > asset_class.folds[0]["target_train_rows"]
     assert global_result.summary["evaluated_rows"] == local.summary["evaluated_rows"]
     assert set(global_result.predictions["scope"]) == {"global"}
+
+
+def make_fake_dataset(ticker: str, rows: int, asset_class: str = "stock") -> AssetDataset:
+    return AssetDataset(
+        asset_id=f"asset-{ticker.lower()}",
+        ticker=ticker,
+        asset_class=asset_class,
+        dataset=pd.DataFrame({"value": range(rows)}),
+    )
+
+
+def test_select_scope_datasets_caps_global_scope_deterministically() -> None:
+    target = make_fake_dataset("AAA", rows=50)
+    peers = [make_fake_dataset(f"PEER{index:02d}", rows=100 + index) for index in range(39)]
+    datasets = [target, *peers]
+    assert len(datasets) == 40
+
+    first_run = select_scope_datasets(datasets, "AAA", "global", max_scope_assets=12)
+    second_run = select_scope_datasets(list(reversed(datasets)), "AAA", "global", max_scope_assets=12)
+
+    assert len(first_run) == 12
+    assert first_run[0].ticker == "AAA"
+    assert [item.ticker for item in first_run] == [item.ticker for item in second_run]
+
+    expected_rest = sorted(peers, key=lambda item: (-len(item.dataset), item.ticker))[:11]
+    assert [item.ticker for item in first_run[1:]] == [item.ticker for item in expected_rest]
+
+
+def test_select_scope_datasets_below_cap_is_unaffected() -> None:
+    target = make_fake_dataset("AAA", rows=50)
+    peers = [make_fake_dataset(f"PEER{index:02d}", rows=10) for index in range(3)]
+    datasets = [target, *peers]
+
+    selected = select_scope_datasets(datasets, "AAA", "global", max_scope_assets=12)
+
+    assert selected == datasets
+
+
+def test_resolve_target_tickers_raises_over_cap_with_no_tickers_or_default_targets() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    with pytest.raises(ValueError, match="max_auto_targets"):
+        resolve_target_tickers(datasets, None, max_auto_targets=8)
+
+
+def test_resolve_target_tickers_uses_default_targets_when_no_tickers_given() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    resolved = resolve_target_tickers(
+        datasets, None, default_targets=["TKR001", "TKR050", "MISSING"], max_auto_targets=8
+    )
+
+    assert resolved == ["TKR001", "TKR050"]
+
+
+def test_resolve_target_tickers_explicit_tickers_override_policy() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    resolved = resolve_target_tickers(
+        datasets, ["tkr002", "missing"], default_targets=["TKR001"], max_auto_targets=8
+    )
+
+    assert resolved == ["TKR002"]
+
+
+def test_resolve_target_tickers_within_cap_falls_back_to_sorted_available() -> None:
+    datasets = [make_fake_dataset(ticker, rows=1) for ticker in ["MSFT", "AAPL", "BTC-USD", "ETH-USD"]]
+
+    resolved = resolve_target_tickers(datasets, None, max_auto_targets=8)
+
+    assert resolved == ["AAPL", "BTC-USD", "ETH-USD", "MSFT"]
+
+
+def test_resolve_target_tickers_uncapped_preserves_two_positional_arg_behavior() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    # existing 2-positional-arg call sites never pass max_auto_targets/default_targets --
+    # behavior must stay exactly today's `sorted(available)`, no matter the count.
+    resolved = resolve_target_tickers(datasets, None)
+
+    assert resolved == sorted(item.ticker for item in datasets)
 
 
 def test_candidate_selection_scores_return_after_risk() -> None:

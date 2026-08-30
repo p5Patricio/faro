@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import psycopg
 
@@ -12,10 +13,34 @@ from brain.retraining_job import RetrainingJobConfig, run_retraining_job
 from brain.scoped_evaluation import SCOPES
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
+DEFAULT_TARGETS_FILE = "config/targets.core.json"
+DEFAULT_UNIVERSE_FILE = "config/universe.sp100.json"
+INCOMPLETE_UNIVERSE_DISCLOSURE: dict[str, Any] = {
+    "disclosure_status": "incomplete",
+    "reason": "no_universe_snapshot",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate, promote and upload improved model candidates")
     parser.add_argument("--tickers", help="Comma-separated stored tickers, for example BTC-USD,AAPL")
+    parser.add_argument(
+        "--targets-file",
+        default=DEFAULT_TARGETS_FILE,
+        help="JSON array of default retraining targets, used when --tickers is not given",
+    )
+    parser.add_argument(
+        "--max-auto-targets",
+        type=int,
+        default=8,
+        help="Fail loudly instead of auto-training every stored asset past this count",
+    )
+    parser.add_argument(
+        "--max-global-scope-assets",
+        type=int,
+        default=12,
+        help="Cap how many datasets participate in a training scope (deterministic, highest-row-count first)",
+    )
     parser.add_argument("--feature-set", default="technical_v2")
     parser.add_argument("--label-method", choices=["fixed_horizon", "triple_barrier"], default="triple_barrier")
     parser.add_argument("--horizon", type=int, default=5)
@@ -57,11 +82,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    tickers = parse_tickers(args.tickers)
     with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
         repository = LocalPostgresRepository(connection=connection)
         payload = run_retraining_job(
             repository=repository,
-            tickers=parse_tickers(args.tickers),
+            tickers=tickers,
             config=RetrainingJobConfig(
                 feature_set=args.feature_set,
                 label_method=args.label_method,
@@ -69,6 +95,9 @@ def main() -> None:
                 model_names=parse_model_names(args.models),
                 confidence_thresholds=parse_float_list(args.confidence_thresholds, "confidence-thresholds"),
                 scopes=parse_scopes(args.scopes),
+                default_targets=None if tickers else load_default_targets(args.targets_file),
+                max_auto_targets=args.max_auto_targets,
+                max_global_scope_assets=args.max_global_scope_assets,
                 splits=args.splits,
                 test_size=args.test_size,
                 embargo_rows=args.embargo_rows,
@@ -101,6 +130,8 @@ def main() -> None:
             ),
         )
 
+    payload["universe"] = load_universe_disclosure(DEFAULT_UNIVERSE_FILE)
+
     if args.out:
         out = Path(args.out)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -113,6 +144,45 @@ def parse_tickers(value: str | None) -> list[str] | None:
     if not value:
         return None
     return [ticker.strip().upper() for ticker in value.split(",") if ticker.strip()]
+
+
+def load_default_targets(path: str | None) -> list[str] | None:
+    """Load the narrow default retraining-target list from a checked-in JSON array.
+
+    Widening the ingested universe must not silently widen this list, so a missing or
+    unreadable file falls back to `None` (no default targets) rather than raising --
+    `resolve_target_tickers`'s own `max_auto_targets` cap still guards the fallback path.
+    """
+    if not path:
+        return None
+    targets_path = Path(path)
+    if not targets_path.exists():
+        return None
+    raw = json.loads(targets_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, list):
+        raise ValueError(f"{path} must contain a JSON array of tickers")
+    return [str(ticker) for ticker in raw]
+
+
+def load_universe_disclosure(path: str) -> dict[str, Any]:
+    """Embed the survivorship-bias disclosure, degrading gracefully when unavailable.
+
+    `collector.universe` may not exist yet (built concurrently by a sibling change), and
+    the universe snapshot file itself is optional. Per spec, "missing snapshot date blocks
+    disclosure-bearing output" -- so any of these gaps falls back to the explicit
+    `incomplete` shape rather than omitting the `universe` key.
+    """
+    if not Path(path).exists():
+        return dict(INCOMPLETE_UNIVERSE_DISCLOSURE)
+    try:
+        from collector.universe import load_universe_document, universe_disclosure
+    except ImportError:
+        return dict(INCOMPLETE_UNIVERSE_DISCLOSURE)
+    try:
+        doc = load_universe_document(path)
+    except (ValueError, OSError):
+        return dict(INCOMPLETE_UNIVERSE_DISCLOSURE)
+    return universe_disclosure(doc)
 
 
 def parse_model_names(raw: str) -> list[str]:

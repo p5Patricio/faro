@@ -69,6 +69,8 @@ def run_candidate_matrix(
     drawdown_penalty: float = 1.0,
     include_details: bool = False,
     continue_on_error: bool = True,
+    *,
+    max_scope_assets: int | None = None,
 ) -> dict[str, Any]:
     names = model_names or [DEFAULT_MODEL_NAME]
     thresholds = confidence_thresholds or [0.55]
@@ -94,6 +96,7 @@ def run_candidate_matrix(
                         feature_columns=feature_columns,
                         prediction_policy=PredictionPolicy(min_confidence=threshold),
                         config=config,
+                        max_scope_assets=max_scope_assets,
                     )
                 except Exception as error:
                     errors.append(
