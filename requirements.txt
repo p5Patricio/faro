@@ -1,15 +1,22 @@
-fastapi
-uvicorn
-pydantic
-pydantic-settings
-yfinance
-numpy
-pandas
-scikit-learn
-joblib
-python-dotenv
-requests
-psycopg[binary]
-psycopg-pool
-pytest
-httpx
+# Pinned to the exact versions the models and the test suite were built
+# against. A trained model's `.joblib` can fail to load if numpy /
+# scikit-learn / joblib change between training and inference, so these are
+# `==`, not `>=`. Bump deliberately, then retrain and re-run the suite.
+
+# --- runtime ---
+fastapi==0.136.1
+uvicorn==0.46.0
+pydantic==2.13.3
+yfinance==1.5.1
+numpy==2.4.4
+pandas==3.0.2
+scikit-learn==1.8.0
+joblib==1.5.3
+python-dotenv==1.2.2
+requests==2.33.1
+psycopg[binary]==3.3.4
+psycopg-pool==3.3.1
+
+# --- test / dev ---
+pytest==9.0.3
+httpx==0.28.1
