@@ -3,14 +3,29 @@
 @source "./index.html";
 @source "./src/**/*.{js,ts,jsx,tsx}";
 
+/*
+ * Faro palette -- drawn straight from the lighthouse logo:
+ * a deep navy night, cobalt structure, an amber-gold beam, warm cream light.
+ * Signal colors (BUY green / SELL red) deliberately stay on the financial
+ * convention and are not part of this token set.
+ */
+@theme {
+  --color-canvas: #0a0f1e;    /* page background -- the night sky */
+  --color-surface: #111b34;   /* cards, header, panels */
+  --color-inset: #0c1526;     /* insets, table headers, inputs */
+  --color-hairline: #2b3d68;  /* borders and dividers */
+  --color-cobalt: #4472e6;    /* structure, interactive, focus */
+  --color-beam: #f2b33a;      /* the beam -- brand accent */
+  --color-cream: #f3e7c8;     /* warm highlight text */
+}
+
 :root {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
+  color-scheme: dark;
 }
 
 body {
-  background-color: #0f172a;
-  color: #f8fafc;
+  background-color: var(--color-canvas);
+  color: #e6ecf7;
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }

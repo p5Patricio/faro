@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import axios from 'axios';
 import {
   Activity,
@@ -6,20 +6,35 @@ import {
   BarChart3,
   Brain,
   CheckCircle2,
+  ChevronDown,
   CircleDollarSign,
   Clock3,
   Gauge,
   History,
+  Inbox,
   MinusCircle,
+  Pause,
+  Play,
   RefreshCcw,
   Save,
   ShieldCheck,
   SlidersHorizontal,
   TrendingDown,
   TrendingUp,
-  type LucideIcon,
 } from 'lucide-react';
 import type { PricePoint } from './components/FinancialChart';
+import { AssetSwitcher, Watchlist } from './components/AssetSwitcher.tsx';
+import { useAssetMemory } from './hooks/useAssetMemory.ts';
+import { EmptyState } from './components/ui/EmptyState.tsx';
+import { SkeletonLines, SkeletonMetrics, SkeletonTable } from './components/ui/Skeleton.tsx';
+import { SegmentedControl, type SegmentOption } from './components/ui/SegmentedControl.tsx';
+import { Gauge as ConfidenceGauge } from './components/ui/Gauge.tsx';
+import { ProbabilityBar } from './components/ui/ProbabilityBar.tsx';
+import { SignalSparkline } from './components/ui/SignalSparkline.tsx';
+import { Drawer } from './components/ui/Drawer.tsx';
+import { Popover } from './components/ui/Popover.tsx';
+import { DataTable } from './components/ui/DataTable.tsx';
+import { InfoLabel } from './components/ui/Tooltip.tsx';
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api').replace(/\/$/, '');
 const FinancialChart = lazy(() =>
@@ -240,6 +255,31 @@ interface RiskProfileResponse {
   profile: RiskProfile;
 }
 
+type TabKey = 'resumen' | 'precio' | 'riesgo' | 'backtests' | 'paper' | 'auditoria';
+
+const TAB_STORAGE_KEY = 'faro:active-tab';
+const AUTO_REFRESH_KEY = 'faro:auto-refresh';
+const AUTO_REFRESH_MS = 60_000;
+const TAB_KEYS: TabKey[] = ['resumen', 'precio', 'riesgo', 'backtests', 'paper', 'auditoria'];
+
+function readTab(): TabKey {
+  try {
+    const stored = window.localStorage.getItem(TAB_STORAGE_KEY);
+    if (stored && (TAB_KEYS as string[]).includes(stored)) return stored as TabKey;
+  } catch {
+    /* ignore */
+  }
+  return 'resumen';
+}
+
+function readAutoRefresh(): boolean {
+  try {
+    return window.localStorage.getItem(AUTO_REFRESH_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 const DEFAULT_RISK_PROFILE: RiskProfile = {
   name: 'default',
   scope_type: 'default',
@@ -267,6 +307,7 @@ function App() {
   const [paperStatus, setPaperStatus] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [failedSections, setFailedSections] = useState<Set<string>>(() => new Set());
   const [systemHealth, setSystemHealth] = useState<SystemHealthResponse | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
   const [riskProfile, setRiskProfile] = useState<RiskProfileResponse | null>(null);
@@ -274,6 +315,36 @@ function App() {
   const [riskScopeType, setRiskScopeType] = useState<RiskProfileScopeType>('default');
   const [riskStatus, setRiskStatus] = useState<string | null>(null);
   const [riskSaving, setRiskSaving] = useState(false);
+
+  const assetMemory = useAssetMemory();
+  const firstLoad = loading && !analysisResponse;
+
+  const [activeTab, setActiveTab] = useState<TabKey>(readTab);
+  const [riskDrawerOpen, setRiskDrawerOpen] = useState(false);
+  const editRiskButtonRef = useRef<HTMLButtonElement>(null);
+  const [autoRefresh, setAutoRefresh] = useState<boolean>(readAutoRefresh);
+  const [lastFetchAt, setLastFetchAt] = useState<number | null>(null);
+
+  const changeTab = useCallback((tab: TabKey) => {
+    setActiveTab(tab);
+    try {
+      window.localStorage.setItem(TAB_STORAGE_KEY, tab);
+    } catch {
+      /* storage unavailable — tab just won't persist */
+    }
+  }, []);
+
+  const toggleAutoRefresh = useCallback(() => {
+    setAutoRefresh((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(AUTO_REFRESH_KEY, next ? '1' : '0');
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  }, []);
 
   const selectedAsset = useMemo(
     () => assets.find((asset) => asset.ticker === selectedTicker),
@@ -303,51 +374,52 @@ function App() {
   const fetchData = useCallback(async (ticker: string) => {
     setLoading(true);
     setError(null);
+    const failed = new Set<string>();
+    const get = async <T,>(section: string, url: string, fallback: T): Promise<T> => {
+      try {
+        const response = await axios.get<T>(url);
+        return response.data;
+      } catch {
+        failed.add(section);
+        return fallback;
+      }
+    };
     try {
       const [
-        pricesResponse,
-        analysisResponse,
-        historyResponse,
-        feedbackResponse,
-        alertsResponse,
-        backtestsResponse,
-        paperTradingResponse,
-        paperRunsResponse,
+        pricesData,
+        analysisData,
+        historyData,
+        feedbackData,
+        alertsData,
+        backtestsData,
+        paperData,
+        paperRunsData,
       ] = await Promise.all([
-        axios.get<PricePoint[]>(`${API_BASE_URL}/prices/${ticker}?limit=240`),
-        axios.get<AnalysisResponse>(`${API_BASE_URL}/analysis/${ticker}`),
-        axios
-          .get<PredictionAuditRow[]>(`${API_BASE_URL}/predictions/${ticker}?limit=8`)
-          .catch(() => ({ data: [] as PredictionAuditRow[] })),
-        axios
-          .get<FeedbackSummaryResponse>(`${API_BASE_URL}/feedback/${ticker}?limit=250`)
-          .catch(() => ({ data: null as FeedbackSummaryResponse | null })),
-        axios
-          .get<OperationalAlertsResponse>(`${API_BASE_URL}/alerts/${ticker}`)
-          .catch(() => ({ data: null as OperationalAlertsResponse | null })),
-        axios
-          .get<BacktestSummaryRow[]>(`${API_BASE_URL}/backtests/${ticker}?limit=5`)
-          .catch(() => ({ data: [] as BacktestSummaryRow[] })),
-        axios
-          .get<PaperTradingResponse>(`${API_BASE_URL}/paper-trading/${ticker}?limit=250`)
-          .catch(() => ({ data: null as PaperTradingResponse | null })),
-        axios
-          .get<PaperTradingRunRow[]>(`${API_BASE_URL}/paper-trading-runs/${ticker}?limit=8`)
-          .catch(() => ({ data: [] as PaperTradingRunRow[] })),
+        get<PricePoint[]>('prices', `${API_BASE_URL}/prices/${ticker}?limit=240`, []),
+        get<AnalysisResponse | null>('analysis', `${API_BASE_URL}/analysis/${ticker}`, null),
+        get<PredictionAuditRow[]>('history', `${API_BASE_URL}/predictions/${ticker}?limit=8`, []),
+        get<FeedbackSummaryResponse | null>('feedback', `${API_BASE_URL}/feedback/${ticker}?limit=250`, null),
+        get<OperationalAlertsResponse | null>('alerts', `${API_BASE_URL}/alerts/${ticker}`, null),
+        get<BacktestSummaryRow[]>('backtests', `${API_BASE_URL}/backtests/${ticker}?limit=5`, []),
+        get<PaperTradingResponse | null>('paper', `${API_BASE_URL}/paper-trading/${ticker}?limit=250`, null),
+        get<PaperTradingRunRow[]>('paperRuns', `${API_BASE_URL}/paper-trading-runs/${ticker}?limit=8`, []),
       ]);
-      setPrices(pricesResponse.data);
-      setAnalysisResponse(analysisResponse.data);
-      setPredictionHistory(historyResponse.data);
-      setFeedbackSummary(feedbackResponse.data);
-      setOperationalAlerts(alertsResponse.data);
-      setBacktests(backtestsResponse.data);
-      setPaperTrading(paperTradingResponse.data);
-      setPaperTradingRuns(paperRunsResponse.data);
+      setPrices(pricesData);
+      setAnalysisResponse(analysisData);
+      setPredictionHistory(historyData);
+      setFeedbackSummary(feedbackData);
+      setOperationalAlerts(alertsData);
+      setBacktests(backtestsData);
+      setPaperTrading(paperData);
+      setPaperTradingRuns(paperRunsData);
       setPaperStatus(null);
-    } catch {
-      setError('No se pudo actualizar la señal.');
+      setFailedSections(failed);
+      if (failed.has('analysis') && failed.has('prices')) {
+        setError('No se pudo contactar la API.');
+      }
     } finally {
       setLoading(false);
+      setLastFetchAt(Date.now());
     }
   }, []);
 
@@ -450,17 +522,23 @@ function App() {
       return;
     }
 
-    let disposed = false;
-    queueMicrotask(() => {
-      if (!disposed) {
-        void fetchData(selectedTicker);
-      }
-    });
+    // Debounce so arrow-spamming the switcher doesn't fire a request per keystroke.
+    const timer = window.setTimeout(() => {
+      void fetchData(selectedTicker);
+    }, 250);
 
     return () => {
-      disposed = true;
+      window.clearTimeout(timer);
     };
   }, [fetchData, selectedTicker]);
+
+  useEffect(() => {
+    if (!autoRefresh || !selectedTicker) return;
+    const id = window.setInterval(() => {
+      void fetchData(selectedTicker);
+    }, AUTO_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [autoRefresh, selectedTicker, fetchData]);
 
   useEffect(() => {
     let disposed = false;
@@ -476,30 +554,136 @@ function App() {
   }, [fetchRiskProfile, riskScopeType, riskScopeValue]);
 
   const analysis = analysisResponse?.analysis ?? null;
+  const activeMinConfidence =
+    riskProfile?.profile.min_confidence_to_trade ?? DEFAULT_RISK_PROFILE.min_confidence_to_trade;
+  const signalHistory = useMemo(
+    () => [...predictionHistory].reverse().map((row) => row.action),
+    [predictionHistory],
+  );
+  const chartSignals = useMemo(
+    () => predictionHistory.map((row) => ({ timestamp: row.timestamp, action: row.action })),
+    [predictionHistory],
+  );
+
+  const priceChart = (
+    <PricePanel
+      prices={prices}
+      ticker={selectedTicker}
+      signals={chartSignals}
+      failed={failedSections.has('prices')}
+      onRetry={() => selectedTicker && fetchData(selectedTicker)}
+    />
+  );
+
+  const tabOptions: SegmentOption<TabKey>[] = [
+    { value: 'resumen', label: 'Resumen' },
+    { value: 'precio', label: 'Precio' },
+    { value: 'riesgo', label: 'Riesgo' },
+    { value: 'backtests', label: 'Backtests', badge: backtests.length || undefined },
+    { value: 'paper', label: 'Paper trading' },
+    { value: 'auditoria', label: 'Auditoría', badge: predictionHistory.length || undefined },
+  ];
+
+  let tabContent: ReactNode;
+  if (activeTab === 'resumen') {
+    tabContent = (
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.5fr_1fr]">
+        {priceChart}
+        <div className="space-y-5">
+          <ModelPanel analysis={analysis} />
+          <RiskPanel analysis={analysis} onEdit={() => setRiskDrawerOpen(true)} />
+        </div>
+      </div>
+    );
+  } else if (activeTab === 'precio') {
+    tabContent = priceChart;
+  } else if (activeTab === 'riesgo') {
+    tabContent = (
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
+        <RiskPanel analysis={analysis} onEdit={() => setRiskDrawerOpen(true)} />
+        <ModelPanel analysis={analysis} />
+      </div>
+    );
+  } else if (activeTab === 'backtests') {
+    tabContent = <BacktestPanel rows={backtests} failed={failedSections.has('backtests')} />;
+  } else if (activeTab === 'paper') {
+    tabContent = (
+      <PaperTradingPanel
+        onPersist={persistPaperTrading}
+        paper={paperTrading}
+        runs={paperTradingRuns}
+        saving={paperSaving}
+        status={paperStatus}
+        failed={failedSections.has('paper')}
+      />
+    );
+  } else {
+    tabContent = (
+      <div className="space-y-5">
+        <PredictionHistoryPanel rows={predictionHistory} failed={failedSections.has('history')} />
+        <FeedbackQualityPanel report={feedbackSummary} failed={failedSections.has('feedback')} />
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-[#111312] text-zinc-100">
-      <header className="border-b border-white/10 bg-[#171918]">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-5 md:flex-row md:items-center md:justify-between md:px-6">
+    <div className="min-h-screen bg-canvas text-slate-100">
+      <a
+        href="#main"
+        className="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[60] focus:rounded-md focus:border focus:border-cobalt/50 focus:bg-surface focus:px-3 focus:py-2 focus:text-sm focus:text-slate-100"
+      >
+        Saltar al contenido
+      </a>
+      <header className="border-b border-hairline/70 bg-surface">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-4 md:px-6">
           <div className="flex items-center gap-3">
             <img
               src="/brand/faro-logo.png"
               alt="Faro"
-              className="h-12 w-12 rounded-lg border border-amber-200/20 bg-zinc-50 object-cover"
+              className="h-11 w-11 object-contain drop-shadow-[0_0_14px_rgba(242,179,58,0.28)]"
             />
             <div>
-              <h1 className="text-xl font-semibold tracking-normal text-zinc-50">Faro</h1>
-              <p className="text-sm text-zinc-400">Decisiones de mercado con riesgo visible</p>
+              <h1 className="text-lg font-semibold tracking-normal text-slate-50">Faro</h1>
+              <p className="text-xs text-slate-400">Decisiones de mercado con riesgo visible</p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <SystemStatusButton
+              health={systemHealth}
+              alerts={operationalAlerts}
+              loading={healthLoading}
+              onRefresh={fetchSystemHealth}
+            />
             <StatusPill source={analysisResponse?.source} loading={loading} />
+            {lastFetchAt ? (
+              <span className="hidden text-xs text-slate-500 md:inline">
+                <RelativeTime since={lastFetchAt} />
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={toggleAutoRefresh}
+              aria-pressed={autoRefresh}
+              className={`inline-flex h-9 w-9 items-center justify-center rounded-lg border transition focus:outline-none focus:ring-2 focus:ring-cobalt/50 ${
+                autoRefresh
+                  ? 'border-cobalt/50 bg-cobalt/15 text-cobalt'
+                  : 'border-hairline/70 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]'
+              }`}
+              aria-label={autoRefresh ? 'Desactivar auto-actualización' : 'Activar auto-actualización cada 60s'}
+              title={autoRefresh ? 'Auto-actualización activa (60s)' : 'Auto-actualización'}
+            >
+              {autoRefresh ? (
+                <Pause aria-hidden="true" className="h-4 w-4" />
+              ) : (
+                <Play aria-hidden="true" className="h-4 w-4" />
+              )}
+            </button>
             <button
               type="button"
               onClick={() => selectedTicker && fetchData(selectedTicker)}
-              className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-zinc-200 transition hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-emerald-300/50"
-              aria-label="Actualizar datos"
+              className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-hairline/70 bg-white/[0.04] text-slate-200 transition hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-cobalt/50"
+              aria-label="Actualizar datos ahora"
               title="Actualizar"
             >
               <RefreshCcw aria-hidden="true" className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -508,112 +692,166 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-7xl grid-cols-1 gap-5 px-4 py-5 md:px-6 lg:grid-cols-[280px_1fr]">
-        <aside className="space-y-4">
-          <SystemHealthPanel health={systemHealth} loading={healthLoading} onRefresh={fetchSystemHealth} />
-          <OperationalAlertsPanel report={operationalAlerts} />
+      <main id="main" aria-label="Panel de decisión" className="mx-auto max-w-6xl space-y-5 px-4 py-5 md:px-6">
+        <SourceRibbon source={analysisResponse?.source} />
 
-          <section className="rounded-lg border border-white/10 bg-[#181b1a] p-3">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium text-zinc-200">Activos</h2>
-              <span className="text-xs text-zinc-500">{assets.length}</span>
-            </div>
-            <div className="space-y-2">
-              {assets.map((asset) => (
-                <button
-                  key={asset.id}
-                  type="button"
-                  onClick={() => setSelectedTicker(asset.ticker)}
-                  className={`w-full rounded-lg border px-3 py-3 text-left transition focus:outline-none focus:ring-2 focus:ring-emerald-300/40 ${
-                    selectedTicker === asset.ticker
-                      ? 'border-emerald-300/40 bg-emerald-300/10'
-                      : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium text-zinc-50">{asset.ticker}</span>
-                    <span className="rounded-md bg-zinc-900 px-2 py-1 text-[11px] uppercase text-zinc-400">
-                      {asset.asset_class ?? 'asset'}
-                    </span>
-                  </div>
-                  <p className="mt-1 truncate text-sm text-zinc-400">{asset.name ?? 'Sin nombre'}</p>
-                </button>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
-            <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
-              <Clock3 aria-hidden="true" className="h-4 w-4 text-amber-300" />
-              Última lectura
-            </div>
-            <p className="mt-3 text-sm text-zinc-400">
-              {analysisResponse?.timestamp ? formatDateTime(analysisResponse.timestamp) : 'Sin datos'}
-            </p>
-            {error && (
-              <div className="mt-3 rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200">
-                {error}
-              </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="w-full sm:max-w-sm">
+            {assets.length > 0 ? (
+              <AssetSwitcher
+                assets={assets}
+                selectedTicker={selectedTicker}
+                onSelect={setSelectedTicker}
+                memory={assetMemory}
+              />
+            ) : (
+              <p className="rounded-lg border border-hairline/70 bg-inset px-3 py-2.5 text-sm text-slate-500">
+                Cargando activos…
+              </p>
             )}
-          </section>
+          </div>
+          <span className="text-xs text-slate-500">{assets.length} activos</span>
+        </div>
 
-          <RiskProfilePanel
-            asset={selectedAsset}
-            draft={riskDraft}
-            onChange={updateRiskDraft}
-            onSave={saveRiskProfile}
-            onScopeChange={setRiskScopeType}
-            saving={riskSaving}
-            scopeType={riskScopeType}
-            scopeValue={riskScopeValue}
-            source={riskProfile?.source ?? 'default'}
-            status={riskStatus}
-          />
-        </aside>
+        <Watchlist
+          assets={assets}
+          selectedTicker={selectedTicker}
+          onSelect={setSelectedTicker}
+          memory={assetMemory}
+        />
 
-        <section className="space-y-5">
-          <DecisionHeader asset={selectedAsset} analysis={analysis} />
+        {error ? (
+          <div className="rounded-lg border border-red-400/30 bg-red-400/10 px-3 py-2 text-sm text-red-200">
+            {error}
+          </div>
+        ) : null}
 
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.4fr_0.8fr]">
-            <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
-              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-base font-medium text-zinc-100">Precio</h2>
-                  <p className="text-sm text-zinc-400">{selectedTicker || 'Selecciona un activo'}</p>
-                </div>
-                <PriceSnapshot prices={prices} />
-              </div>
-              {prices.length > 0 ? (
-                <Suspense fallback={<ChartLoadingState height={420} />}>
-                  <FinancialChart data={prices} />
-                </Suspense>
-              ) : (
-                <div className="flex h-[420px] items-center justify-center rounded-lg border border-dashed border-white/10 text-sm text-zinc-500">
-                  Sin histórico disponible
-                </div>
-              )}
-            </section>
+        {firstLoad ? (
+          <DashboardSkeleton />
+        ) : (
+          <div className={loading ? 'pointer-events-none space-y-5 opacity-60 transition-opacity' : 'space-y-5'}>
+            <DecisionHero
+              asset={selectedAsset}
+              analysis={analysis}
+              minConfidence={activeMinConfidence}
+              signalHistory={signalHistory}
+              editRiskButtonRef={editRiskButtonRef}
+              onEditRisk={() => setRiskDrawerOpen(true)}
+            />
 
-            <div className="space-y-5">
-              <RiskPanel analysis={analysis} />
-              <ProbabilityPanel probabilities={analysis?.probabilities} />
-              <ModelPanel analysis={analysis} />
+            <SegmentedControl
+              label="Secciones de evidencia"
+              idPrefix="evidencia"
+              value={activeTab}
+              onChange={changeTab}
+              options={tabOptions}
+            />
+
+            <div
+              role="tabpanel"
+              id={`evidencia-panel-${activeTab}`}
+              aria-labelledby={`evidencia-tab-${activeTab}`}
+              tabIndex={0}
+              className="focus:outline-none focus-visible:ring-2 focus-visible:ring-cobalt/40"
+            >
+              {tabContent}
             </div>
           </div>
-
-          <BacktestPanel rows={backtests} />
-          <PaperTradingPanel
-            onPersist={persistPaperTrading}
-            paper={paperTrading}
-            runs={paperTradingRuns}
-            saving={paperSaving}
-            status={paperStatus}
-          />
-          <FeedbackQualityPanel report={feedbackSummary} />
-          <PredictionHistoryPanel rows={predictionHistory} />
-        </section>
+        )}
       </main>
+
+      <Drawer
+        open={riskDrawerOpen}
+        onClose={() => setRiskDrawerOpen(false)}
+        title="Perfil de riesgo"
+        returnFocusRef={editRiskButtonRef}
+      >
+        <RiskProfilePanel
+          asset={selectedAsset}
+          draft={riskDraft}
+          onChange={updateRiskDraft}
+          onSave={saveRiskProfile}
+          onScopeChange={setRiskScopeType}
+          saving={riskSaving}
+          scopeType={riskScopeType}
+          scopeValue={riskScopeValue}
+          source={riskProfile?.source ?? 'default'}
+          status={riskStatus}
+          bare
+        />
+      </Drawer>
     </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-5" aria-busy="true" aria-label="Cargando panel">
+      <section className="rounded-lg border border-hairline/70 bg-surface p-5">
+        <SkeletonLines rows={2} className="max-w-xs" />
+        <div className="mt-4 flex flex-wrap gap-6">
+          <SkeletonLines rows={2} className="w-24" />
+          <SkeletonLines rows={2} className="w-24" />
+          <SkeletonLines rows={2} className="w-24" />
+        </div>
+      </section>
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.4fr_0.8fr]">
+        <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+          <SkeletonLines rows={1} className="mb-4 max-w-[120px]" />
+          <div className="h-[420px] rounded-lg border border-hairline/60 bg-inset" />
+        </section>
+        <div className="space-y-5">
+          <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+            <SkeletonMetrics count={4} />
+          </section>
+          <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+            <SkeletonLines rows={3} />
+          </section>
+        </div>
+      </div>
+      <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+        <SkeletonTable rows={3} />
+      </section>
+    </div>
+  );
+}
+
+function SystemStatusButton({
+  health,
+  alerts,
+  loading,
+  onRefresh,
+}: {
+  health: SystemHealthResponse | null;
+  alerts: OperationalAlertsResponse | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const healthOk = health?.status === 'ok';
+  const alertLevel = alerts?.status;
+  const bad = !health || !healthOk || alertLevel === 'critical' || alertLevel === 'warning';
+  const dot = !health ? 'bg-slate-500' : bad ? 'bg-amber-300' : 'bg-emerald-300';
+  const text = !health ? 'Sin lectura' : bad ? 'Revisar' : 'Sistema OK';
+
+  return (
+    <Popover
+      align="right"
+      trigger={(props) => (
+        <button
+          {...props}
+          type="button"
+          className="inline-flex items-center gap-2 rounded-lg border border-hairline/70 bg-white/[0.04] px-3 py-2 text-sm text-slate-300 transition hover:bg-white/[0.08] focus:outline-none focus:ring-2 focus:ring-cobalt/50"
+        >
+          <span className={`h-2 w-2 rounded-full ${dot}`} />
+          <span className="hidden sm:inline">{text}</span>
+          <ChevronDown aria-hidden="true" className="h-3.5 w-3.5 text-slate-500" />
+        </button>
+      )}
+      panelClassName="w-[min(92vw,22rem)] max-h-[70vh] overflow-y-auto space-y-2 p-2"
+    >
+      <SystemHealthPanel health={health} loading={loading} onRefresh={onRefresh} />
+      <OperationalAlertsPanel report={alerts} />
+    </Popover>
   );
 }
 
@@ -631,7 +869,7 @@ function SystemHealthPanel({
   const missing = health?.checks.schema?.missing ?? [];
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           {isOk ? (
@@ -639,12 +877,12 @@ function SystemHealthPanel({
           ) : (
             <AlertTriangle aria-hidden="true" className="h-4 w-4 text-amber-300" />
           )}
-          <h2 className="text-sm font-medium text-zinc-100">Sistema</h2>
+          <h2 className="text-sm font-medium text-slate-100">Sistema</h2>
         </div>
         <button
           type="button"
           onClick={onRefresh}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-zinc-300 transition hover:bg-white/5"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-hairline/70 text-slate-300 transition hover:bg-white/5"
           aria-label="Revisar sistema"
           title="Revisar"
         >
@@ -677,15 +915,15 @@ function OperationalAlertsPanel({ report }: { report: OperationalAlertsResponse 
           ) : (
             <AlertTriangle aria-hidden="true" className={`h-4 w-4 ${tone.icon}`} />
           )}
-          <h2 className="text-sm font-medium text-zinc-100">Alertas</h2>
+          <h2 className="text-sm font-medium text-slate-100">Alertas</h2>
         </div>
-        <span className={`rounded-md px-2 py-1 text-[11px] uppercase ${tone.badge}`}>{statusLabel(status)}</span>
+        <span className={`rounded-md px-2 py-1 text-xs uppercase ${tone.badge}`}>{statusLabel(status)}</span>
       </div>
 
       {!report ? (
-        <p className="text-sm text-zinc-500">Sin lectura operativa.</p>
+        <p className="text-sm text-slate-500">Sin lectura operativa.</p>
       ) : alerts.length === 0 ? (
-        <p className="text-sm text-zinc-400">Sin alertas activas para {report.ticker}.</p>
+        <p className="text-sm text-slate-400">Sin alertas activas para {report.ticker}.</p>
       ) : (
         <div className="space-y-2">
           {alerts.map((alert) => {
@@ -693,12 +931,12 @@ function OperationalAlertsPanel({ report }: { report: OperationalAlertsResponse 
             return (
               <div key={`${alert.code}-${alert.message}`} className={`rounded-lg border px-3 py-2 ${itemTone.item}`}>
                 <div className="flex items-start justify-between gap-3">
-                  <p className="text-sm text-zinc-100">{alert.message}</p>
-                  <span className={`shrink-0 rounded-md px-2 py-1 text-[10px] uppercase ${itemTone.badge}`}>
+                  <p className="text-sm text-slate-100">{alert.message}</p>
+                  <span className={`shrink-0 rounded-md px-2 py-1 text-xs uppercase ${itemTone.badge}`}>
                     {statusLabel(alert.severity)}
                   </span>
                 </div>
-                <p className="mt-1 text-xs text-zinc-500">{alert.code}</p>
+                <p className="mt-1 text-xs text-slate-500">{alert.code}</p>
               </div>
             );
           })}
@@ -727,10 +965,10 @@ function alertTone(status: string) {
   }
   if (status === 'info') {
     return {
-      surface: 'border-sky-300/20 bg-sky-300/10',
-      item: 'border-sky-300/15 bg-sky-300/10',
-      icon: 'text-sky-300',
-      badge: 'bg-sky-300/15 text-sky-100',
+      surface: 'border-cobalt/20 bg-cobalt/10',
+      item: 'border-cobalt/15 bg-cobalt/10',
+      icon: 'text-cobalt',
+      badge: 'bg-cobalt/15 text-cobalt',
     };
   }
   if (status === 'ok') {
@@ -742,10 +980,10 @@ function alertTone(status: string) {
     };
   }
   return {
-    surface: 'border-white/10 bg-[#181b1a]',
-    item: 'border-white/10 bg-black/20',
-    icon: 'text-zinc-400',
-    badge: 'bg-white/10 text-zinc-300',
+    surface: 'border-hairline/70 bg-surface',
+    item: 'border-hairline/70 bg-inset',
+    icon: 'text-slate-400',
+    badge: 'bg-hairline/40 text-slate-300',
   };
 }
 
@@ -768,6 +1006,7 @@ function RiskProfilePanel({
   scopeValue,
   source,
   status,
+  bare = false,
 }: {
   asset?: Asset;
   draft: RiskProfile;
@@ -779,24 +1018,28 @@ function RiskProfilePanel({
   scopeValue: string;
   source: string;
   status: string | null;
+  bare?: boolean;
 }) {
   const canUseAssetClass = Boolean(asset?.asset_class);
   const canUseTicker = Boolean(asset?.ticker);
+  const Wrapper = bare ? 'div' : 'section';
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <Wrapper className={bare ? '' : 'rounded-lg border border-hairline/70 bg-surface p-4'}>
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <SlidersHorizontal aria-hidden="true" className="h-4 w-4 text-sky-300" />
-          <h2 className="text-sm font-medium text-zinc-100">Perfil</h2>
+          {bare ? null : <SlidersHorizontal aria-hidden="true" className="h-4 w-4 text-cobalt" />}
+          <h2 className={bare ? 'text-xs uppercase tracking-wide text-slate-500' : 'text-sm font-medium text-slate-100'}>
+            {bare ? 'Alcance y límites' : 'Perfil'}
+          </h2>
         </div>
-        <span className="rounded-md bg-black/20 px-2 py-1 text-[11px] uppercase text-zinc-500">{source}</span>
+        <span className="rounded-md bg-inset px-2 py-1 text-xs uppercase text-slate-500">{source}</span>
       </div>
 
       <div className="space-y-3">
         <div>
-          <p className="mb-2 text-xs text-zinc-500">Alcance</p>
-          <div className="grid grid-cols-3 gap-1 rounded-lg bg-black/20 p-1">
+          <p className="mb-2 text-xs text-slate-500">Alcance</p>
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-inset p-1">
             <ScopeButton active={scopeType === 'default'} label="Default" onClick={() => onScopeChange('default')} />
             <ScopeButton
               active={scopeType === 'asset_class'}
@@ -811,16 +1054,16 @@ function RiskProfilePanel({
               onClick={() => onScopeChange('ticker')}
             />
           </div>
-          <p className="mt-2 truncate text-xs text-zinc-500">{scopeLabel(scopeType, scopeValue)}</p>
+          <p className="mt-2 truncate text-xs text-slate-500">{scopeLabel(scopeType, scopeValue)}</p>
         </div>
 
-        <label className="block text-xs text-zinc-500">
+        <label className="block text-xs text-slate-500">
           Nombre
           <input
             type="text"
             value={draft.name}
             onChange={(event) => onChange('name', event.target.value)}
-            className="mt-1 h-9 w-full rounded-lg border border-white/10 bg-black/20 px-3 text-sm text-zinc-100 outline-none transition focus:border-sky-300/40"
+            className="mt-1 h-9 w-full rounded-lg border border-hairline/70 bg-inset px-3 text-sm text-slate-100 outline-none transition focus:border-cobalt/40"
           />
         </label>
 
@@ -830,13 +1073,13 @@ function RiskProfilePanel({
         <PercentField label="Stop" value={draft.stop_loss} onChange={(value) => onChange('stop_loss', value)} />
         <PercentField label="Objetivo" value={draft.take_profit} onChange={(value) => onChange('take_profit', value)} />
 
-        <label className="flex items-center justify-between gap-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-zinc-300">
+        <label className="flex items-center justify-between gap-3 rounded-lg border border-hairline/70 bg-inset px-3 py-2 text-sm text-slate-300">
           Permitir short
           <input
             type="checkbox"
             checked={draft.allow_short}
             onChange={(event) => onChange('allow_short', event.target.checked)}
-            className="h-4 w-4 accent-emerald-300"
+            className="h-4 w-4 accent-cobalt"
           />
         </label>
 
@@ -844,15 +1087,15 @@ function RiskProfilePanel({
           type="button"
           onClick={onSave}
           disabled={saving}
-          className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-sky-300/30 bg-sky-300/10 px-3 text-sm font-medium text-sky-100 transition hover:bg-sky-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-lg border border-cobalt/30 bg-cobalt/10 px-3 text-sm font-medium text-cobalt transition hover:bg-cobalt/15 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Save aria-hidden="true" className="h-4 w-4" />
           {saving ? 'Guardando' : 'Guardar perfil'}
         </button>
       </div>
 
-      {status && <p className="mt-3 text-sm text-zinc-400">{status}</p>}
-    </section>
+      {status && <p className="mt-3 text-sm text-slate-400">{status}</p>}
+    </Wrapper>
   );
 }
 
@@ -873,7 +1116,7 @@ function ScopeButton({
       onClick={onClick}
       disabled={disabled}
       className={`h-8 min-w-0 truncate rounded-md px-2 text-xs transition ${
-        active ? 'bg-sky-300/15 text-sky-100' : 'text-zinc-400 hover:text-zinc-100'
+        active ? 'bg-cobalt/15 text-cobalt' : 'text-slate-400 hover:text-slate-100'
       } disabled:cursor-not-allowed disabled:opacity-40`}
       title={label}
     >
@@ -890,7 +1133,7 @@ function scopeLabel(scopeType: RiskProfileScopeType, scopeValue: string) {
 
 function PercentField({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
   return (
-    <label className="grid grid-cols-[1fr_84px] items-center gap-3 text-xs text-zinc-500">
+    <label className="grid grid-cols-[1fr_84px] items-center gap-3 text-xs text-slate-500">
       <span>{label}</span>
       <span className="relative">
         <input
@@ -900,45 +1143,95 @@ function PercentField({ label, value, onChange }: { label: string; value: number
           step="1"
           value={percentInputValue(value)}
           onChange={(event) => onChange(Number(event.target.value || 0) / 100)}
-          className="h-9 w-full rounded-lg border border-white/10 bg-black/20 pl-3 pr-7 text-right text-sm text-zinc-100 outline-none transition focus:border-sky-300/40"
+          className="h-9 w-full rounded-lg border border-hairline/70 bg-inset pl-3 pr-7 text-right text-sm text-slate-100 outline-none transition focus:border-cobalt/40"
         />
-        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-500">%</span>
+        <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500">%</span>
       </span>
     </label>
   );
 }
 
-function DecisionHeader({ asset, analysis }: { asset?: Asset; analysis: Analysis | null }) {
+function DecisionHero({
+  asset,
+  analysis,
+  minConfidence,
+  signalHistory,
+  editRiskButtonRef,
+  onEditRisk,
+}: {
+  asset?: Asset;
+  analysis: Analysis | null;
+  minConfidence: number;
+  signalHistory: Signal[];
+  editRiskButtonRef: React.RefObject<HTMLButtonElement | null>;
+  onEditRisk: () => void;
+}) {
   const signal = analysis?.signal ?? 'HOLD';
   const tone = signalTone(signal);
   const reasons = analysis?.reasons ?? (analysis?.reason ? [analysis.reason] : []);
   const baseSignal = analysis?.risk?.pre_risk_action;
   const isUserProfile = analysis?.risk?.profile_source === 'user';
   const wasAdjusted = Boolean(baseSignal && baseSignal !== signal);
+  const gaugeTone = signal === 'BUY' ? 'emerald' : signal === 'SELL' ? 'red' : 'slate';
 
   return (
     <section className={`rounded-lg border p-5 ${tone.surface}`}>
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_220px]">
-        <div>
-          <div className="mb-4 flex items-center gap-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_260px]">
+        <div className="space-y-4">
+          <div className="flex items-center gap-3">
             <div className={`flex h-12 w-12 items-center justify-center rounded-lg ${tone.iconBg}`}>
               <SignalIcon signal={signal} className={`h-6 w-6 ${tone.icon}`} />
             </div>
-            <div>
-              <p className="text-sm text-zinc-400">{asset?.name ?? 'Activo seleccionado'}</p>
-              <h2 className="text-2xl font-semibold tracking-normal text-zinc-50">{asset?.ticker ?? '...'}</h2>
+            <div className="min-w-0">
+              <p className="truncate text-sm text-slate-400">{asset?.name ?? 'Activo seleccionado'}</p>
+              <h2 className="font-mono text-2xl font-semibold tracking-normal text-slate-50">
+                {asset?.ticker ?? '...'}
+              </h2>
             </div>
           </div>
 
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <p className="text-sm text-zinc-400">Decisión</p>
-              <p className={`text-4xl font-semibold tracking-normal ${tone.text}`}>{signal}</p>
+          {analysis?.prediction_timestamp ? (
+            <p className="flex items-center gap-1.5 text-xs text-slate-500">
+              <Clock3 aria-hidden="true" className="h-3.5 w-3.5" />
+              Predicción del {formatDateTime(analysis.prediction_timestamp)}
+            </p>
+          ) : null}
+
+          <div className="flex flex-wrap items-end gap-x-6 gap-y-3">
+            <div aria-live="polite">
+              <p className="text-sm text-slate-400">Decisión</p>
+              <p className={`text-4xl font-semibold tracking-normal ${tone.text}`}>
+                {signal}
+                <span className="sr-only">
+                  {' '}
+                  para {asset?.ticker ?? 'el activo seleccionado'}, confianza{' '}
+                  {formatPercent(analysis?.confidence)}
+                </span>
+              </p>
             </div>
-            {baseSignal && <MetricInline label="Modelo base" value={baseSignal} />}
-            <MetricInline label="Confianza" value={formatPercent(analysis?.confidence)} />
-            <MetricInline label="Horizonte" value={analysis?.model?.horizon ? `${analysis.model.horizon}d` : 'N/D'} />
+            {baseSignal && baseSignal !== signal ? (
+              <MetricInline label="Modelo base" value={baseSignal} />
+            ) : null}
+            <MetricInline
+              label="Horizonte"
+              value={analysis?.model?.horizon ? `${analysis.model.horizon}d` : 'N/D'}
+            />
           </div>
+
+          <ConfidenceGauge
+            label="Confianza"
+            value={analysis?.confidence ?? null}
+            threshold={minConfidence}
+            tone={gaugeTone}
+            className="max-w-md"
+          />
+
+          <div className="max-w-md">
+            <p className="mb-1.5 text-xs text-slate-500">Distribución del modelo</p>
+            <ProbabilityBar probabilities={analysis?.probabilities} />
+          </div>
+
+          {signalHistory.length > 0 ? <SignalSparkline signals={signalHistory} /> : null}
 
           {(wasAdjusted || isUserProfile) && (
             <RiskAdjustmentNotice
@@ -951,9 +1244,12 @@ function DecisionHeader({ asset, analysis }: { asset?: Asset; analysis: Analysis
           )}
 
           {reasons.length > 0 && (
-            <div className="mt-4 flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-2">
               {reasons.map((reason) => (
-                <span key={reason} className="rounded-md border border-white/10 bg-black/20 px-2 py-1 text-xs text-zinc-300">
+                <span
+                  key={reason}
+                  className="rounded-md border border-hairline/70 bg-inset px-2 py-1 text-xs text-slate-300"
+                >
                   {reason}
                 </span>
               ))}
@@ -961,9 +1257,26 @@ function DecisionHeader({ asset, analysis }: { asset?: Asset; analysis: Analysis
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-1">
-          <MetricBox icon={ShieldCheck} label="Posición" value={formatPercent(analysis?.risk?.position_size)} />
-          <MetricBox icon={Gauge} label="Riesgo esperado" value={formatPercent(analysis?.expected_risk ?? null)} />
+        <div className="space-y-3">
+          <MetricBox
+            icon={<ShieldCheck aria-hidden="true" className="h-4 w-4" />}
+            label="Posición"
+            value={formatPercent(analysis?.risk?.position_size)}
+          />
+          <MetricBox
+            icon={<Gauge aria-hidden="true" className="h-4 w-4" />}
+            label="Riesgo esperado"
+            value={formatPercent(analysis?.expected_risk ?? null)}
+          />
+          <button
+            ref={editRiskButtonRef}
+            type="button"
+            onClick={onEditRisk}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-hairline/70 bg-inset px-3 py-2 text-sm text-slate-200 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-cobalt/50"
+          >
+            <SlidersHorizontal aria-hidden="true" className="h-4 w-4 text-cobalt" />
+            Ajustar perfil de riesgo
+          </button>
         </div>
       </div>
     </section>
@@ -990,13 +1303,13 @@ function RiskAdjustmentNotice({
     : 'La recomendacion usa los limites del perfil configurado para tamano, stop, objetivo y bloqueos.';
 
   return (
-    <div className="mt-4 rounded-lg border border-sky-300/20 bg-sky-300/10 p-3">
+    <div className="mt-4 rounded-lg border border-cobalt/20 bg-cobalt/10 p-3">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <p className="text-sm font-medium text-sky-100">{title}</p>
-          <p className="mt-1 text-sm text-sky-100/70">{detail}</p>
+          <p className="text-sm font-medium text-cobalt">{title}</p>
+          <p className="mt-1 text-sm text-cobalt/70">{detail}</p>
         </div>
-        <span className="shrink-0 rounded-md bg-black/20 px-2 py-1 text-xs text-sky-100">
+        <span className="shrink-0 rounded-md bg-inset px-2 py-1 text-xs text-cobalt">
           {userProfile ? `Perfil ${profileName ?? 'usuario'}` : 'Politica global'}
         </span>
       </div>
@@ -1004,7 +1317,7 @@ function RiskAdjustmentNotice({
       {reasons.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {reasons.map((reason) => (
-            <span key={reason} className="rounded-md border border-sky-200/15 bg-black/20 px-2 py-1 text-xs text-sky-100/80">
+            <span key={reason} className="rounded-md border border-cobalt/15 bg-inset px-2 py-1 text-xs text-cobalt/80">
               {humanizeReason(reason)}
             </span>
           ))}
@@ -1014,23 +1327,34 @@ function RiskAdjustmentNotice({
   );
 }
 
-function RiskPanel({ analysis }: { analysis: Analysis | null }) {
+function RiskPanel({ analysis, onEdit }: { analysis: Analysis | null; onEdit?: () => void }) {
   const risk = analysis?.risk;
   const blocked = risk?.blocked_reasons ?? [];
   const profileLabel = risk?.profile_source === 'user' ? risk.profile_name || 'usuario' : 'global';
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
-      <div className="mb-4 flex items-center justify-between">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+      <div className="mb-4 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <ShieldCheck aria-hidden="true" className="h-4 w-4 text-emerald-300" />
-          <h2 className="text-sm font-medium text-zinc-100">Riesgo</h2>
+          <h2 className="text-sm font-medium text-slate-100">Riesgo</h2>
         </div>
-        {blocked.length > 0 ? (
-          <span className="rounded-md bg-amber-300/10 px-2 py-1 text-xs text-amber-200">Bloqueada</span>
-        ) : (
-          <span className="rounded-md bg-emerald-300/10 px-2 py-1 text-xs text-emerald-200">Activa</span>
-        )}
+        <div className="flex items-center gap-2">
+          {blocked.length > 0 ? (
+            <span className="rounded-md bg-amber-300/10 px-2 py-1 text-xs text-amber-200">Bloqueada</span>
+          ) : (
+            <span className="rounded-md bg-emerald-300/10 px-2 py-1 text-xs text-emerald-200">Activa</span>
+          )}
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="rounded-md border border-hairline/70 px-2 py-1 text-xs text-slate-300 transition hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-cobalt/50"
+            >
+              Ajustar
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
@@ -1058,41 +1382,15 @@ function RiskPanel({ analysis }: { analysis: Analysis | null }) {
   );
 }
 
-function ProbabilityPanel({ probabilities }: { probabilities?: Record<string, number> }) {
-  const entries = Object.entries(probabilities ?? { BUY: 0, HOLD: 0, SELL: 0 });
-
-  return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
-      <div className="mb-4 flex items-center gap-2">
-        <BarChart3 aria-hidden="true" className="h-4 w-4 text-sky-300" />
-        <h2 className="text-sm font-medium text-zinc-100">Probabilidades</h2>
-      </div>
-      <div className="space-y-3">
-        {entries.map(([label, value]) => (
-          <div key={label}>
-            <div className="mb-1 flex items-center justify-between text-sm">
-              <span className="text-zinc-300">{label}</span>
-              <span className="font-medium text-zinc-100">{formatPercent(value)}</span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-              <div className={`h-full ${probabilityColor(label)}`} style={{ width: `${Math.max(0, Math.min(100, value * 100))}%` }} />
-            </div>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
 function ModelPanel({ analysis }: { analysis: Analysis | null }) {
   const model = analysis?.model;
   const feedback = analysis?.feedback;
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
       <div className="mb-4 flex items-center gap-2">
-        <Brain aria-hidden="true" className="h-4 w-4 text-violet-300" />
-        <h2 className="text-sm font-medium text-zinc-100">Modelo</h2>
+        <Brain aria-hidden="true" className="h-4 w-4 text-cobalt" />
+        <h2 className="text-sm font-medium text-slate-100">Modelo</h2>
       </div>
       <div className="space-y-3 text-sm">
         <InfoRow label="Nombre" value={model?.name ?? 'Indicadores'} />
@@ -1105,57 +1403,61 @@ function ModelPanel({ analysis }: { analysis: Analysis | null }) {
   );
 }
 
-function BacktestPanel({ rows }: { rows: BacktestSummaryRow[] }) {
+function BacktestPanel({ rows, failed }: { rows: BacktestSummaryRow[]; failed?: boolean }) {
   const latest = rows[0];
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <BarChart3 aria-hidden="true" className="h-4 w-4 text-sky-300" />
-          <h2 className="text-sm font-medium text-zinc-100">Backtests</h2>
+          <BarChart3 aria-hidden="true" className="h-4 w-4 text-cobalt" />
+          <h2 className="text-sm font-medium text-slate-100">Backtests</h2>
         </div>
-        <span className="text-xs text-zinc-500">{rows.length}</span>
+        <span className="text-xs text-slate-500">{rows.length}</span>
       </div>
 
-      {!latest ? (
-        <div className="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-zinc-500">
-          Sin backtests persistidos
-        </div>
+      {failed ? (
+        <EmptyState
+          variant="error"
+          icon={<AlertTriangle aria-hidden="true" className="h-6 w-6" />}
+          title="No se pudieron cargar los backtests"
+        />
+      ) : !latest ? (
+        <EmptyState
+          icon={<BarChart3 aria-hidden="true" className="h-6 w-6" />}
+          title="Sin backtests persistidos"
+          hint="Se generan al promover un modelo con el job de reentrenamiento."
+          command="py -3.14 -m brain.run_retraining_job --tickers <TICKER>"
+        />
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <SmallMetric label="Retorno" value={formatPercent(latest.metrics?.total_return)} />
             <SmallMetric label="Drawdown" value={formatPercent(latest.metrics?.max_drawdown)} />
-            <SmallMetric label="Profit factor" value={formatNumber(latest.metrics?.profit_factor)} />
+            <SmallMetric label={<InfoLabel label="Profit factor" hint="Ganancia bruta ÷ pérdida bruta. > 1 = estrategia rentable." />} value={formatNumber(latest.metrics?.profit_factor)} />
             <SmallMetric label="Trades" value={formatCount(latest.metrics?.active_trade_count)} />
           </div>
 
-          <div className="overflow-hidden rounded-lg border border-white/10">
-            <div className="grid grid-cols-[1fr_88px_88px_72px] gap-3 border-b border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-500 md:grid-cols-[1fr_100px_100px_92px_96px]">
-              <span>Modelo</span>
-              <span>Retorno</span>
-              <span>Drawdown</span>
-              <span>PF</span>
-              <span className="hidden md:block">Fecha</span>
-            </div>
-            <div className="divide-y divide-white/10">
-              {rows.map((row) => (
-                <div
-                  key={row.id ?? row.name}
-                  className="grid grid-cols-[1fr_88px_88px_72px] gap-3 px-3 py-3 text-sm md:grid-cols-[1fr_100px_100px_92px_96px]"
-                >
-                  <span className="min-w-0 truncate text-zinc-200">
+          <DataTable
+            ariaLabel="Backtests persistidos"
+            rows={rows}
+            getRowKey={(row, i) => row.id ?? row.name ?? String(i)}
+            columns={[
+              {
+                key: 'modelo',
+                header: 'Modelo',
+                render: (row) => (
+                  <span className="block max-w-[220px] truncate text-slate-200">
                     {row.model?.name ?? 'Modelo'}:{row.model?.version ?? row.name ?? 'N/D'}
                   </span>
-                  <span className={metricTone(row.metrics?.total_return)}>{formatPercent(row.metrics?.total_return)}</span>
-                  <span className="text-zinc-300">{formatPercent(row.metrics?.max_drawdown)}</span>
-                  <span className="text-zinc-300">{formatNumber(row.metrics?.profit_factor)}</span>
-                  <span className="hidden text-zinc-400 md:block">{row.created_at ? formatShortDate(row.created_at) : 'N/D'}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+                ),
+              },
+              { key: 'retorno', header: 'Retorno', numeric: true, render: (row) => <span className={metricTone(row.metrics?.total_return)}>{formatPercent(row.metrics?.total_return)}</span> },
+              { key: 'dd', header: 'Drawdown', numeric: true, render: (row) => formatPercent(row.metrics?.max_drawdown) },
+              { key: 'pf', header: 'PF', numeric: true, render: (row) => formatNumber(row.metrics?.profit_factor) },
+              { key: 'fecha', header: 'Fecha', numeric: true, priority: 'secondary', render: (row) => (row.created_at ? formatShortDate(row.created_at) : 'N/D') },
+            ]}
+          />
         </div>
       )}
     </section>
@@ -1168,12 +1470,14 @@ function PaperTradingPanel({
   runs,
   saving,
   status,
+  failed,
 }: {
   onPersist: () => void;
   paper: PaperTradingResponse | null;
   runs: PaperTradingRunRow[];
   saving: boolean;
   status: string | null;
+  failed?: boolean;
 }) {
   const metrics = paper?.metrics;
   const recentSignals = (paper?.timeline ?? []).slice(-5).reverse();
@@ -1183,11 +1487,11 @@ function PaperTradingPanel({
     .reverse();
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Activity aria-hidden="true" className="h-4 w-4 text-emerald-300" />
-          <h2 className="text-sm font-medium text-zinc-100">Paper trading</h2>
+          <h2 className="text-sm font-medium text-slate-100">Paper trading</h2>
         </div>
         <div className="flex items-center gap-2">
           <span className={`rounded-md px-2 py-1 text-xs ${paperPositionTone(metrics?.open_position)}`}>
@@ -1197,19 +1501,28 @@ function PaperTradingPanel({
             type="button"
             onClick={onPersist}
             disabled={!paper || saving}
-            className="inline-flex h-8 items-center gap-2 rounded-md border border-white/10 px-3 text-xs text-zinc-200 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 items-center gap-2 rounded-md border border-hairline/70 px-3 text-xs text-slate-200 transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Save aria-hidden="true" className="h-3.5 w-3.5" />
             {saving ? 'Guardando' : 'Guardar'}
           </button>
         </div>
       </div>
-      {status ? <p className="mb-4 text-xs text-zinc-400">{status}</p> : null}
+      {status ? <p className="mb-4 text-xs text-slate-400">{status}</p> : null}
 
-      {!paper ? (
-        <div className="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-zinc-500">
-          Sin simulacion disponible
-        </div>
+      {failed ? (
+        <EmptyState
+          variant="error"
+          icon={<AlertTriangle aria-hidden="true" className="h-6 w-6" />}
+          title="No se pudo cargar la simulación"
+        />
+      ) : !paper ? (
+        <EmptyState
+          icon={<Activity aria-hidden="true" className="h-6 w-6" />}
+          title="Sin simulación disponible"
+          hint="Necesita predicciones guardadas para este activo."
+          command="py -3.14 -m brain.run_inference_job"
+        />
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -1220,15 +1533,15 @@ function PaperTradingPanel({
             <SmallMetric label="Exposicion" value={formatPercent(metrics?.average_abs_exposure)} />
           </div>
 
-          <div className="rounded-lg border border-white/10 p-3">
+          <div className="rounded-lg border border-hairline/70 p-3">
             <div className="mb-3 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <h3 className="text-sm font-medium text-zinc-100">Curva de equity</h3>
-                <p className="text-xs text-zinc-500">
+                <h3 className="text-sm font-medium text-slate-100">Curva de equity</h3>
+                <p className="text-xs text-slate-500">
                   {formatCount(metrics?.signal_count)} senales, {formatCount(metrics?.active_signal_count)} activas
                 </p>
               </div>
-              <span className="text-xs text-zinc-500">Costo {formatNumber((metrics?.fee_bps ?? 0) + (metrics?.slippage_bps ?? 0))} bps</span>
+              <span className="text-xs text-slate-500">Costo {formatNumber((metrics?.fee_bps ?? 0) + (metrics?.slippage_bps ?? 0))} bps</span>
             </div>
             <Suspense fallback={<ChartLoadingState height={260} />}>
               <EquityCurveChart data={paper.timeline} />
@@ -1236,64 +1549,43 @@ function PaperTradingPanel({
           </div>
 
           {recentTrades.length > 0 ? (
-            <div className="overflow-hidden rounded-lg border border-white/10">
-              <div className="grid grid-cols-[78px_64px_1fr_78px] gap-3 border-b border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-500 md:grid-cols-[100px_80px_92px_92px_1fr]">
-                <span>Fecha</span>
-                <span>Accion</span>
-                <span className="hidden md:block">Delta</span>
-                <span>Costo</span>
-                <span>Equity</span>
-              </div>
-              <div className="divide-y divide-white/10">
-                {recentTrades.map((row, index) => {
-                  const action = row.action ?? 'HOLD';
-                  return (
-                    <div
-                      key={`trade-${row.timestamp ?? index}-${action}`}
-                      className="grid grid-cols-[78px_64px_1fr_78px] gap-3 px-3 py-3 text-sm md:grid-cols-[100px_80px_92px_92px_1fr]"
-                    >
-                      <span className="text-zinc-400">{row.timestamp ? formatShortDate(row.timestamp) : 'N/D'}</span>
-                      <span className={`font-medium ${signalTone(action).text}`}>{action}</span>
-                      <span className="hidden text-zinc-300 md:block">{formatPercent(row.exposure_delta)}</span>
-                      <span className="text-zinc-300">{formatBasisPoints(row.cost)}</span>
-                      <span className="text-zinc-200">{formatCurrencyOrNA(row.equity)}</span>
-                    </div>
-                  );
-                })}
-              </div>
+            <div>
+              <h3 className="mb-2 text-sm font-medium text-slate-200">Operaciones recientes</h3>
+              <DataTable
+                ariaLabel="Operaciones recientes de paper trading"
+                rows={recentTrades}
+                getRowKey={(row, i) => `trade-${row.timestamp ?? i}`}
+                columns={[
+                  { key: 'fecha', header: 'Fecha', render: (row) => (row.timestamp ? formatShortDate(row.timestamp) : 'N/D') },
+                  { key: 'accion', header: 'Acción', render: (row) => <span className={`font-medium ${signalTone(row.action ?? 'HOLD').text}`}>{row.action ?? 'HOLD'}</span> },
+                  { key: 'delta', header: 'Delta', numeric: true, priority: 'secondary', render: (row) => formatPercent(row.exposure_delta) },
+                  { key: 'costo', header: 'Costo', numeric: true, render: (row) => formatBasisPoints(row.cost) },
+                  { key: 'equity', header: 'Equity', numeric: true, render: (row) => formatCurrencyOrNA(row.equity) },
+                ]}
+              />
             </div>
           ) : null}
 
           {recentSignals.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-zinc-500">
-              Sin senales simuladas
-            </div>
+            <EmptyState
+              icon={<Activity aria-hidden="true" className="h-6 w-6" />}
+              title="Sin señales simuladas"
+            />
           ) : (
-            <div className="overflow-hidden rounded-lg border border-white/10">
-              <div className="grid grid-cols-[78px_64px_1fr_78px] gap-3 border-b border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-500 md:grid-cols-[100px_80px_92px_1fr_96px]">
-                <span>Fecha</span>
-                <span>Accion</span>
-                <span className="hidden md:block">Precio</span>
-                <span>Posicion</span>
-                <span>Equity</span>
-              </div>
-              <div className="divide-y divide-white/10">
-                {recentSignals.map((row, index) => {
-                  const action = row.action ?? 'HOLD';
-                  return (
-                    <div
-                      key={`signal-${row.timestamp ?? index}-${action}`}
-                      className="grid grid-cols-[78px_64px_1fr_78px] gap-3 px-3 py-3 text-sm md:grid-cols-[100px_80px_92px_1fr_96px]"
-                    >
-                      <span className="text-zinc-400">{row.timestamp ? formatShortDate(row.timestamp) : 'N/D'}</span>
-                      <span className={`font-medium ${signalTone(action).text}`}>{action}</span>
-                      <span className="hidden text-zinc-300 md:block">{formatCurrencyOrNA(row.price)}</span>
-                      <span className="min-w-0 truncate text-zinc-300">{row.position_state ?? 'FLAT'}</span>
-                      <span className="text-zinc-200">{formatCurrencyOrNA(row.equity)}</span>
-                    </div>
-                  );
-                })}
-              </div>
+            <div>
+              <h3 className="mb-2 text-sm font-medium text-slate-200">Señales recientes</h3>
+              <DataTable
+                ariaLabel="Señales recientes de paper trading"
+                rows={recentSignals}
+                getRowKey={(row, i) => `signal-${row.timestamp ?? i}`}
+                columns={[
+                  { key: 'fecha', header: 'Fecha', render: (row) => (row.timestamp ? formatShortDate(row.timestamp) : 'N/D') },
+                  { key: 'accion', header: 'Acción', render: (row) => <span className={`font-medium ${signalTone(row.action ?? 'HOLD').text}`}>{row.action ?? 'HOLD'}</span> },
+                  { key: 'precio', header: 'Precio', numeric: true, priority: 'secondary', render: (row) => formatCurrencyOrNA(row.price) },
+                  { key: 'posicion', header: 'Posición', render: (row) => row.position_state ?? 'FLAT' },
+                  { key: 'equity', header: 'Equity', numeric: true, render: (row) => formatCurrencyOrNA(row.equity) },
+                ]}
+              />
             </div>
           )}
 
@@ -1308,73 +1600,83 @@ function PaperTradingRunsPanel({ rows }: { rows: PaperTradingRunRow[] }) {
   const best = [...rows].sort((a, b) => (b.metrics?.total_return ?? -Infinity) - (a.metrics?.total_return ?? -Infinity))[0];
 
   return (
-    <div className="rounded-lg border border-white/10 p-3">
+    <div className="rounded-lg border border-hairline/70 p-3">
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <h3 className="text-sm font-medium text-zinc-100">Corridas guardadas</h3>
-          <p className="text-xs text-zinc-500">
+          <h3 className="text-sm font-medium text-slate-100">Corridas guardadas</h3>
+          <p className="text-xs text-slate-500">
             {rows.length > 0 && best ? `Mejor retorno: ${formatPercent(best.metrics?.total_return)}` : 'Sin historial persistido'}
           </p>
         </div>
-        <span className="text-xs text-zinc-500">{rows.length}</span>
+        <span className="text-xs text-slate-500">{rows.length}</span>
       </div>
 
       {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-zinc-500">
-          Guarda una corrida para comparar resultados.
-        </div>
+        <EmptyState
+          icon={<Save aria-hidden="true" className="h-6 w-6" />}
+          title="Sin corridas guardadas"
+          hint="Guardá una simulación para compararla después."
+        />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-white/10">
-          <div className="grid grid-cols-[1fr_76px_76px_64px] gap-3 border-b border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-500 md:grid-cols-[1fr_92px_92px_76px_96px_88px]">
-            <span>Modelo</span>
-            <span>Retorno</span>
-            <span>Drawdown</span>
-            <span>Trades</span>
-            <span className="hidden md:block">Equity</span>
-            <span className="hidden md:block">Fecha</span>
-          </div>
-          <div className="divide-y divide-white/10">
-            {rows.map((row) => (
-              <div
-                key={row.id ?? row.name}
-                className="grid grid-cols-[1fr_76px_76px_64px] gap-3 px-3 py-3 text-sm md:grid-cols-[1fr_92px_92px_76px_96px_88px]"
-              >
-                <span className="min-w-0 truncate text-zinc-200">
+        <DataTable
+          ariaLabel="Corridas de paper trading guardadas"
+          rows={rows}
+          getRowKey={(row, i) => row.id ?? row.name ?? String(i)}
+          columns={[
+            {
+              key: 'modelo',
+              header: 'Modelo',
+              render: (row) => (
+                <span className="block max-w-[220px] truncate text-slate-200">
                   {row.model?.name ?? row.params?.model_name ?? 'Modelo'}:
                   {row.model?.version ?? row.params?.model_version ?? row.name ?? 'N/D'}
                 </span>
-                <span className={metricTone(row.metrics?.total_return)}>{formatPercent(row.metrics?.total_return)}</span>
-                <span className="text-zinc-300">{formatPercent(row.metrics?.max_drawdown)}</span>
-                <span className="text-zinc-300">{formatCount(row.metrics?.trade_count)}</span>
-                <span className="hidden text-zinc-300 md:block">{formatCurrencyOrNA(row.metrics?.final_equity)}</span>
-                <span className="hidden text-zinc-400 md:block">{row.created_at ? formatShortDate(row.created_at) : 'N/D'}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+              ),
+            },
+            { key: 'retorno', header: 'Retorno', numeric: true, render: (row) => <span className={metricTone(row.metrics?.total_return)}>{formatPercent(row.metrics?.total_return)}</span> },
+            { key: 'dd', header: 'Drawdown', numeric: true, render: (row) => formatPercent(row.metrics?.max_drawdown) },
+            { key: 'trades', header: 'Trades', numeric: true, render: (row) => formatCount(row.metrics?.trade_count) },
+            { key: 'equity', header: 'Equity', numeric: true, priority: 'secondary', render: (row) => formatCurrencyOrNA(row.metrics?.final_equity) },
+            { key: 'fecha', header: 'Fecha', numeric: true, priority: 'secondary', render: (row) => (row.created_at ? formatShortDate(row.created_at) : 'N/D') },
+          ]}
+        />
       )}
     </div>
   );
 }
 
-function FeedbackQualityPanel({ report }: { report: FeedbackSummaryResponse | null }) {
+function FeedbackQualityPanel({
+  report,
+  failed,
+}: {
+  report: FeedbackSummaryResponse | null;
+  failed?: boolean;
+}) {
   const summary = report?.summary;
   const actionRows = report?.by_action ?? [];
 
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <ShieldCheck aria-hidden="true" className="h-4 w-4 text-sky-300" />
-          <h2 className="text-sm font-medium text-zinc-100">Calidad del modelo</h2>
+          <ShieldCheck aria-hidden="true" className="h-4 w-4 text-cobalt" />
+          <h2 className="text-sm font-medium text-slate-100">Calidad del modelo</h2>
         </div>
-        <span className="text-xs text-zinc-500">{formatCount(summary?.evaluated_predictions)}</span>
+        <span className="text-xs text-slate-500">{formatCount(summary?.evaluated_predictions)}</span>
       </div>
 
-      {!report || !summary?.evaluated_predictions ? (
-        <div className="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-zinc-500">
-          Sin feedback evaluado todavia
-        </div>
+      {failed ? (
+        <EmptyState
+          variant="error"
+          icon={<AlertTriangle aria-hidden="true" className="h-6 w-6" />}
+          title="No se pudo cargar el feedback"
+        />
+      ) : !report || !summary?.evaluated_predictions ? (
+        <EmptyState
+          icon={<ShieldCheck aria-hidden="true" className="h-6 w-6" />}
+          title="Sin feedback evaluado todavía"
+          hint="Aparece cuando una predicción pasada ya tiene su etiqueta materializada."
+        />
       ) : (
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -1384,86 +1686,85 @@ function FeedbackQualityPanel({ report }: { report: FeedbackSummaryResponse | nu
             <SmallMetric label="Retorno total" value={formatPercent(summary.total_outcome_return)} />
           </div>
 
-          <div className="overflow-hidden rounded-lg border border-white/10">
-            <div className="grid grid-cols-[80px_72px_82px_1fr] gap-3 border-b border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-500 md:grid-cols-[92px_80px_92px_96px_1fr]">
-              <span>Accion</span>
-              <span>Casos</span>
-              <span>Acierto</span>
-              <span className="hidden md:block">Confianza</span>
-              <span>Retorno</span>
-            </div>
-            <div className="divide-y divide-white/10">
-              {actionRows.map((row) => {
-                const action = row.action ?? 'HOLD';
-                return (
-                  <div
-                    key={action}
-                    className="grid grid-cols-[80px_72px_82px_1fr] gap-3 px-3 py-3 text-sm md:grid-cols-[92px_80px_92px_96px_1fr]"
-                  >
-                    <span className={`font-medium ${signalTone(action).text}`}>{action}</span>
-                    <span className="text-zinc-300">{formatCount(row.count)}</span>
-                    <span className="text-zinc-300">{formatPercent(row.accuracy)}</span>
-                    <span className="hidden text-zinc-300 md:block">{formatPercent(row.mean_confidence)}</span>
-                    <span className={metricTone(row.total_outcome_return)}>{formatPercent(row.total_outcome_return)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
+          <DataTable
+            ariaLabel="Calidad del modelo por acción"
+            rows={actionRows}
+            getRowKey={(row, i) => row.action ?? String(i)}
+            columns={[
+              { key: 'accion', header: 'Acción', render: (row) => <span className={`font-medium ${signalTone(row.action ?? 'HOLD').text}`}>{row.action ?? 'HOLD'}</span> },
+              { key: 'casos', header: 'Casos', numeric: true, render: (row) => formatCount(row.count) },
+              { key: 'acierto', header: 'Acierto', numeric: true, render: (row) => formatPercent(row.accuracy) },
+              { key: 'conf', header: 'Confianza', numeric: true, priority: 'secondary', render: (row) => formatPercent(row.mean_confidence) },
+              { key: 'retorno', header: 'Retorno', numeric: true, render: (row) => <span className={metricTone(row.total_outcome_return)}>{formatPercent(row.total_outcome_return)}</span> },
+            ]}
+          />
         </div>
       )}
     </section>
   );
 }
 
-function PredictionHistoryPanel({ rows }: { rows: PredictionAuditRow[] }) {
+function PredictionHistoryPanel({
+  rows,
+  failed,
+}: {
+  rows: PredictionAuditRow[];
+  failed?: boolean;
+}) {
   return (
-    <section className="rounded-lg border border-white/10 bg-[#181b1a] p-4">
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <History aria-hidden="true" className="h-4 w-4 text-emerald-300" />
-          <h2 className="text-sm font-medium text-zinc-100">Auditoria</h2>
+          <h2 className="text-sm font-medium text-slate-100">Auditoría</h2>
         </div>
-        <span className="text-xs text-zinc-500">{rows.length}</span>
+        <span className="text-xs text-slate-500">{rows.length}</span>
       </div>
 
-      {rows.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-white/10 px-3 py-6 text-center text-sm text-zinc-500">
-          Sin predicciones historicas
-        </div>
+      {failed ? (
+        <EmptyState
+          variant="error"
+          icon={<AlertTriangle aria-hidden="true" className="h-6 w-6" />}
+          title="No se pudo cargar el historial"
+        />
+      ) : rows.length === 0 ? (
+        <EmptyState
+          icon={<Inbox aria-hidden="true" className="h-6 w-6" />}
+          title="Sin predicciones históricas"
+          hint="Cada corrida de inferencia agrega una fila auditable."
+        />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-white/10">
-          <div className="grid grid-cols-[88px_1fr_88px_96px] gap-3 border-b border-white/10 bg-black/20 px-3 py-2 text-xs text-zinc-500 md:grid-cols-[116px_92px_1fr_96px_112px_120px]">
-            <span>Fecha</span>
-            <span className="hidden md:block">Accion</span>
-            <span>Modelo</span>
-            <span>Confianza</span>
-            <span className="hidden md:block">Resultado</span>
-            <span className="hidden md:block">Riesgo</span>
-          </div>
-          <div className="divide-y divide-white/10">
-            {rows.map((row, index) => {
-              const blocked = row.risk?.blocked_reasons ?? [];
-              return (
-                <div
-                  key={`${row.prediction_id ?? row.timestamp ?? index}`}
-                  className="grid grid-cols-[88px_1fr_88px_96px] gap-3 px-3 py-3 text-sm md:grid-cols-[116px_92px_1fr_96px_112px_120px]"
-                >
-                  <span className="text-zinc-400">{row.timestamp ? formatShortDate(row.timestamp) : 'N/D'}</span>
-                  <span className={`hidden font-medium md:block ${signalTone(row.action).text}`}>{row.action}</span>
-                  <span className="min-w-0 truncate text-zinc-200">
-                    {row.model?.name ?? 'Modelo'}:{row.model?.version ?? 'N/D'}
-                  </span>
-                  <span className="text-zinc-200">{formatPercent(row.confidence)}</span>
-                  <span className="hidden text-zinc-300 md:block">{feedbackLabel(row.feedback)}</span>
-                  <span className="hidden truncate text-zinc-400 md:block">
-                    {blocked.length > 0 ? blocked.map(humanizeReason).join(', ') : formatPercent(row.risk?.position_size)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        <DataTable
+          ariaLabel="Historial de predicciones"
+          rows={rows}
+          getRowKey={(row, i) => String(row.prediction_id ?? row.timestamp ?? i)}
+          columns={[
+            { key: 'fecha', header: 'Fecha', render: (row) => (row.timestamp ? formatShortDate(row.timestamp) : 'N/D') },
+            { key: 'accion', header: 'Acción', priority: 'secondary', render: (row) => <span className={`font-medium ${signalTone(row.action).text}`}>{row.action}</span> },
+            {
+              key: 'modelo',
+              header: 'Modelo',
+              render: (row) => (
+                <span className="block max-w-[200px] truncate text-slate-200">
+                  {row.model?.name ?? 'Modelo'}:{row.model?.version ?? 'N/D'}
+                </span>
+              ),
+            },
+            { key: 'conf', header: 'Confianza', numeric: true, render: (row) => formatPercent(row.confidence) },
+            { key: 'resultado', header: 'Resultado', priority: 'secondary', render: (row) => feedbackLabel(row.feedback) },
+            {
+              key: 'riesgo',
+              header: 'Riesgo',
+              priority: 'secondary',
+              render: (row) => {
+                const blocked = row.risk?.blocked_reasons ?? [];
+                return blocked.length > 0
+                  ? blocked.map(humanizeReason).join(', ')
+                  : formatPercent(row.risk?.position_size);
+              },
+            },
+          ]}
+        />
       )}
     </section>
   );
@@ -1472,22 +1773,85 @@ function PredictionHistoryPanel({ rows }: { rows: PredictionAuditRow[] }) {
 function PriceSnapshot({ prices }: { prices: PricePoint[] }) {
   const latest = prices[0];
   if (!latest) {
-    return <span className="text-sm text-zinc-500">Sin precio</span>;
+    return <span className="text-sm text-slate-500">Sin precio</span>;
   }
 
   return (
-    <div className="flex items-center gap-2 rounded-lg border border-white/10 bg-black/20 px-3 py-2">
-      <CircleDollarSign aria-hidden="true" className="h-4 w-4 text-emerald-300" />
-      <span className="text-sm font-medium text-zinc-100">{formatCurrency(Number(latest.close))}</span>
+    <div className="flex items-center gap-2 rounded-lg border border-hairline/70 bg-inset px-3 py-2">
+      <CircleDollarSign aria-hidden="true" className="h-4 w-4 text-beam" />
+      <span className="text-sm font-medium tabular-nums text-slate-100">
+        {formatCurrency(Number(latest.close))}
+      </span>
     </div>
+  );
+}
+
+function PricePanel({
+  prices,
+  ticker,
+  signals,
+  failed,
+  onRetry,
+}: {
+  prices: PricePoint[];
+  ticker: string;
+  signals: { timestamp?: string; action: Signal }[];
+  failed: boolean;
+  onRetry: () => void;
+}) {
+  const latest = prices[0];
+  const oldest = prices[prices.length - 1];
+  const asOf = latest?.timestamp ? formatShortDate(latest.timestamp) : null;
+
+  return (
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+      <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-base font-medium text-slate-100">Precio</h2>
+          {asOf ? <p className="text-xs text-slate-500">Último cierre {asOf}</p> : null}
+        </div>
+        <PriceSnapshot prices={prices} />
+      </div>
+      {prices.length > 0 ? (
+        <>
+          <p className="sr-only">
+            Gráfico de precio de {ticker || 'el activo'}
+            {oldest?.timestamp && latest?.timestamp
+              ? `, del ${formatShortDate(oldest.timestamp)} al ${formatShortDate(latest.timestamp)}`
+              : ''}
+            {latest ? `. Último cierre ${formatCurrency(Number(latest.close))}.` : '.'}
+          </p>
+          <Suspense fallback={<ChartLoadingState height={420} />}>
+            <FinancialChart data={prices} signals={signals} />
+          </Suspense>
+        </>
+      ) : failed ? (
+        <EmptyState
+          variant="error"
+          icon={<AlertTriangle aria-hidden="true" className="h-6 w-6" />}
+          title="No se pudo cargar el histórico"
+          hint="La API respondió con error para este activo."
+          onRetry={onRetry}
+          className="min-h-[420px] justify-center"
+        />
+      ) : (
+        <EmptyState
+          icon={<BarChart3 aria-hidden="true" className="h-6 w-6" />}
+          title="Sin histórico de precio"
+          hint="Cargá datos de mercado para este activo."
+          command="py -3.14 -m collector.run_market_data_job --tickers <TICKER> --feature-sets technical_v2"
+          className="min-h-[420px] justify-center"
+        />
+      )}
+    </section>
   );
 }
 
 function StatusPill({ source, loading }: { source?: string; loading: boolean }) {
   if (loading) {
     return (
-      <span className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-300">
-        <Activity aria-hidden="true" className="h-4 w-4 animate-pulse text-sky-300" />
+      <span className="inline-flex items-center gap-2 rounded-lg border border-hairline/70 bg-white/[0.04] px-3 py-2 text-sm text-slate-300">
+        <Activity aria-hidden="true" className="h-4 w-4 animate-pulse text-cobalt" />
         Actualizando
       </span>
     );
@@ -1496,7 +1860,7 @@ function StatusPill({ source, loading }: { source?: string; loading: boolean }) 
   const isPrediction = source === 'prediction';
   const isDemo = source === 'demo_indicators';
   return (
-    <span className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-zinc-300">
+    <span className="inline-flex items-center gap-2 rounded-lg border border-hairline/70 bg-white/[0.04] px-3 py-2 text-sm text-slate-300">
       {isPrediction ? (
         <CheckCircle2 aria-hidden="true" className="h-4 w-4 text-emerald-300" />
       ) : isDemo ? (
@@ -1509,39 +1873,79 @@ function StatusPill({ source, loading }: { source?: string; loading: boolean }) 
   );
 }
 
-function MetricInline({ label, value }: { label: string; value: string }) {
+function RelativeTime({ since }: { since: number }) {
+  const [now, setNow] = useState(since);
+  useEffect(() => {
+    const update = () => setNow(Date.now());
+    update();
+    const id = window.setInterval(update, 15_000);
+    return () => window.clearInterval(id);
+  }, [since]);
+  const secs = Math.max(0, Math.round((now - since) / 1000));
+  const label =
+    secs < 45
+      ? `hace ${secs}s`
+      : secs < 3600
+        ? `hace ${Math.round(secs / 60)} min`
+        : `hace ${Math.round(secs / 3600)} h`;
+  return <span title={`Actualizado ${label}`}>Actualizado {label}</span>;
+}
+
+function SourceRibbon({ source }: { source?: string }) {
+  if (!source || source === 'prediction') return null;
+  const demo = source === 'demo_indicators';
+  return (
+    <div
+      role="status"
+      className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-sm ${
+        demo
+          ? 'border-red-400/40 bg-red-400/10 text-red-100'
+          : 'border-amber-300/40 bg-amber-300/10 text-amber-100'
+      }`}
+    >
+      <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+      <p>
+        {demo
+          ? 'Modo demo: las lecturas son sintéticas y no representan datos reales de mercado.'
+          : 'Sin modelo versionado para este activo: se muestran indicadores técnicos, no una predicción del modelo.'}
+      </p>
+    </div>
+  );
+}
+
+function MetricInline({ label, value }: { label: ReactNode; value: ReactNode }) {
   return (
     <div>
-      <p className="text-sm text-zinc-400">{label}</p>
-      <p className="text-lg font-medium text-zinc-100">{value}</p>
+      <p className="text-sm text-slate-400">{label}</p>
+      <p className="text-lg font-medium tabular-nums text-slate-100">{value}</p>
     </div>
   );
 }
 
-function MetricBox({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
+function MetricBox({ icon, label, value }: { icon?: ReactNode; label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-      <Icon aria-hidden="true" className="mb-2 h-4 w-4 text-zinc-400" />
-      <p className="text-xs text-zinc-500">{label}</p>
-      <p className="text-lg font-medium text-zinc-100">{value}</p>
+    <div className="rounded-lg border border-hairline/70 bg-inset p-3">
+      {icon ? <div className="mb-2 text-slate-400">{icon}</div> : null}
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="text-lg font-medium tabular-nums text-slate-100">{value}</p>
     </div>
   );
 }
 
-function SmallMetric({ label, value }: { label: string; value: string }) {
+function SmallMetric({ label, value }: { label: ReactNode; value: ReactNode }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/20 p-3">
-      <p className="text-xs text-zinc-500">{label}</p>
-      <p className="mt-1 text-sm font-medium text-zinc-100">{value}</p>
+    <div className="rounded-lg border border-hairline/70 bg-inset p-3">
+      <p className="text-xs text-slate-500">{label}</p>
+      <p className="mt-1 text-sm font-medium tabular-nums text-slate-100">{value}</p>
     </div>
   );
 }
 
 function InfoRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-4 border-b border-white/5 pb-2 last:border-b-0 last:pb-0">
-      <span className="text-zinc-500">{label}</span>
-      <span className="truncate text-right text-zinc-200">{value}</span>
+    <div className="flex items-center justify-between gap-4 border-b border-hairline/45 pb-2 last:border-b-0 last:pb-0">
+      <span className="text-slate-500">{label}</span>
+      <span className="truncate text-right text-slate-200">{value}</span>
     </div>
   );
 }
@@ -1549,7 +1953,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 function ChartLoadingState({ height }: { height: number }) {
   return (
     <div
-      className="flex items-center justify-center rounded-lg border border-dashed border-white/10 text-sm text-zinc-500"
+      className="flex items-center justify-center rounded-lg border border-dashed border-hairline/70 text-sm text-slate-500"
       style={{ height }}
     >
       Cargando grafico
@@ -1575,10 +1979,10 @@ function signalTone(signal: Signal) {
     };
   }
   return {
-    surface: 'border-amber-300/25 bg-amber-300/[0.07]',
-    text: 'text-amber-200',
-    icon: 'text-amber-200',
-    iconBg: 'bg-amber-300/15',
+    surface: 'border-slate-500/25 bg-slate-500/[0.07]',
+    text: 'text-slate-300',
+    icon: 'text-slate-300',
+    iconBg: 'bg-slate-500/15',
   };
 }
 
@@ -1586,12 +1990,6 @@ function SignalIcon({ signal, className }: { signal: Signal; className: string }
   if (signal === 'BUY') return <TrendingUp aria-hidden="true" className={className} />;
   if (signal === 'SELL') return <TrendingDown aria-hidden="true" className={className} />;
   return <MinusCircle aria-hidden="true" className={className} />;
-}
-
-function probabilityColor(label: string) {
-  if (label === 'BUY') return 'bg-emerald-300';
-  if (label === 'SELL') return 'bg-red-300';
-  return 'bg-amber-300';
 }
 
 function formatPercent(value?: number | null) {
@@ -1620,16 +2018,16 @@ function formatCount(value?: number | null) {
 }
 
 function metricTone(value?: number | null) {
-  if (value === null || value === undefined || Number.isNaN(value)) return 'text-zinc-300';
+  if (value === null || value === undefined || Number.isNaN(value)) return 'text-slate-300';
   if (value > 0) return 'text-emerald-300';
   if (value < 0) return 'text-red-300';
-  return 'text-zinc-300';
+  return 'text-slate-300';
 }
 
 function paperPositionTone(position?: string | null) {
   if (position === 'LONG') return 'bg-emerald-300/10 text-emerald-200';
   if (position === 'SHORT') return 'bg-red-300/10 text-red-200';
-  return 'bg-zinc-800 text-zinc-300';
+  return 'bg-slate-800 text-slate-300';
 }
 
 function formatCurrency(value: number) {
