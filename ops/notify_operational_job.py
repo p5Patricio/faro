@@ -9,6 +9,7 @@ from typing import Any
 
 import psycopg
 import requests
+from dotenv import load_dotenv
 
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from ops.notification_dispatch import dispatch_notifications
@@ -213,6 +214,23 @@ def _parse_failed_steps(raw: str | None) -> list[str] | None:
 
 
 def main() -> None:
+    # Load `.env` before any config resolution. `ops.run_local_scheduler`
+    # launches this module as a fresh subprocess, so nothing has populated
+    # `os.environ` yet -- unlike the collector/brain steps, which reach
+    # `LocalPostgresConfig.from_env()` (its own `load_dotenv()`) on the way
+    # in. Without this, `TelegramConfig.from_env()` below sees only whatever
+    # is already exported (commonly `TELEGRAM_BOT_TOKEN` but not
+    # `TELEGRAM_CHAT_ID`) and silently returns `None`, disabling every
+    # Telegram alert. `register_local_jobs.ps1` already documents the
+    # "a `.env` file `python-dotenv` will load" contract this satisfies.
+    #
+    # `override=True`: `.env` is this project's single source of truth for
+    # operational config, so it must win over a stale machine/user
+    # environment variable (e.g. a `TELEGRAM_BOT_TOKEN` left over from an
+    # earlier bot) that would otherwise shadow the correct value and fail
+    # the send with a 401.
+    load_dotenv(override=True)
+
     args = parse_args()
     payload = build_notification_payload(
         args.reports_dir,
