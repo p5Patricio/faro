@@ -84,3 +84,29 @@ The repository SHOULD surface dependency updates for Python, npm, and GitHub Act
 - WHEN scheduled maintenance checks run
 - THEN the repository receives grouped update proposals or alerts
 - AND maintainers can review them without manual package scanning
+
+### Requirement: SDD Change Tracking
+
+Substantial professional-improvement work MUST be tracked through OpenSpec
+artifacts (proposal, specs, design, tasks, state) before implementation.
+(Merged from `professional-improvements-foundation`, 2026-09-02.)
+
+#### Scenario: Active change is inspectable
+
+- GIVEN a professional-improvement change is in development
+- WHEN a reviewer opens its folder under `openspec/changes/`
+- THEN proposal, specs, design, tasks, and state artifacts exist
+- AND they describe scope, success criteria, and verification
+
+### Requirement: Maintainer Guidance
+
+The repository MUST document contribution, security, and release-history
+expectations.
+(Merged from `professional-improvements-foundation`, 2026-09-02.)
+
+#### Scenario: Contributor verifies a change
+
+- GIVEN a contributor changes backend, frontend, or docs
+- WHEN they read the repository guidance (CONTRIBUTING, SECURITY, CHANGELOG)
+- THEN they can find the relevant verification commands
+- AND they understand that `.env` and any other secret MUST NOT be committed
