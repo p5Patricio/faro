@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { Check, ChevronsUpDown, CornerDownLeft, Search, Star, X } from 'lucide-react';
 import { cn } from '../lib/cn.ts';
+import { matchScore } from '../lib/fuzzy.ts';
 import type { AssetMemory } from '../hooks/useAssetMemory.ts';
 
 export interface SwitchableAsset {
@@ -26,29 +27,6 @@ const CLASS_LABELS: Record<string, string> = {
 function classLabel(assetClass?: string): string {
   if (!assetClass) return 'Otros';
   return CLASS_LABELS[assetClass] ?? assetClass[0].toUpperCase() + assetClass.slice(1);
-}
-
-function matchScore(query: string, ticker: string, name: string): number {
-  const q = query.toLowerCase().trim();
-  if (!q) return 0;
-  const t = ticker.toLowerCase();
-  const n = name.toLowerCase();
-  if (t === q) return 1000;
-  if (t.startsWith(q)) return 850 - t.length;
-  if (n.startsWith(q)) return 650 - n.length;
-  if (t.includes(q)) return 450;
-  if (n.includes(q)) return 320;
-  if (isSubsequence(q, t)) return 180;
-  if (isSubsequence(q, n)) return 120;
-  return -1;
-}
-
-function isSubsequence(needle: string, haystack: string): boolean {
-  let i = 0;
-  for (let j = 0; j < haystack.length && i < needle.length; j += 1) {
-    if (haystack[j] === needle[i]) i += 1;
-  }
-  return i === needle.length;
 }
 
 interface AssetSwitcherProps {
