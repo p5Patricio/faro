@@ -240,7 +240,14 @@ El snapshot vive en `config/universe.sp100.json` (101 tickers; membresia al 2025
 
 Ampliar el universo de ingesta no amplia automaticamente los targets de reentrenamiento por defecto: `run_retraining_job` sigue acotado por `config/targets.core.json` (4 tickers) mas `--max-auto-targets`/`--max-global-scope-assets`, que fallan explicitamente en vez de truncar en silencio si se supera el limite.
 
-**Pendiente**: requiere un backfill real (`collector.run_market_data_job --assets-file config/universe.sp100.json`) seguido de una comparacion completa de reentrenamiento antes/despues para medir el tiempo de ejecucion real entre el baseline de ~4 activos y el universo ampliado (~101 activos). Se dejo deliberadamente fuera de esta iteracion -- `financial-intelligence-expansion` no reentrena sobre el universo ampliado en la misma tanda en que lo agrega -- como paso operativo separado.
+**Medido (2026-09-01)**: se corrio el backfill real (`collector.run_market_data_job --assets-file config/universe.sp100.json`, 101/101 tickers, 0 fallos) y una comparacion de reentrenamiento antes/despues sobre un mismo ticker (AAPL; 3 modelos x 4 umbrales x scopes `local,asset_class,global`):
+
+| `--max-global-scope-assets` | Universo cargado | Tiempo por ticker |
+| --- | --- | --- |
+| 4 (equivalente al baseline de ~4 activos) | 103 activos | 195 s |
+| 12 (valor por defecto actual) | 103 activos | 252 s |
+
+El tope de participantes por scope (`_cap_scope_datasets`) aplica a `asset_class` y a `global`; `local` nunca se acota. Triplicar los datasets participantes en esos dos scopes cuesta +29 % por ticker, no el peor caso sin tope. Extrapolado a un `full_retrain` de los 4 targets por defecto: ~13 min antes -> ~17 min despues. Los valores `max_auto_targets=8` / `max_global_scope_assets=12` quedan validados: no requieren ajuste.
 
 ## Jobs Operativos
 
