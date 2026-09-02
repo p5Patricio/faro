@@ -80,6 +80,42 @@ def test_verify_no_checksum_drift_raises_on_mismatch(tmp_path: Path) -> None:
         verify_no_checksum_drift(migrations, applied)
 
 
+def test_0006_applies_after_0007_without_reapplying() -> None:
+    """0006 is authored after 0007 but sorts before it (non-contiguous pattern).
+
+    Exercises the real ``db/migrations`` directory: a database that already has
+    every migration EXCEPT the new 0006 recorded must discover exactly 0006 as
+    pending, must not re-apply 0007, and must reject any later edit of the
+    already-applied 0006 through the checksum-drift guard that
+    ``apply_migrations`` runs before touching the database.
+    """
+    migrations = discover_migrations()
+    names = [migration.name for migration in migrations]
+
+    assert "0006_fundamental_facts.sql" in names
+    assert "0007_notifications.sql" in names
+    assert names.index("0006_fundamental_facts.sql") < names.index("0007_notifications.sql")
+
+    applied = {
+        migration.name: checksum_for(migration)
+        for migration in migrations
+        if migration.name != "0006_fundamental_facts.sql"
+    }
+
+    pending = pending_migrations(migrations, applied)
+    assert [migration.name for migration in pending] == ["0006_fundamental_facts.sql"]
+    assert "0007_notifications.sql" not in [migration.name for migration in pending]
+    verify_no_checksum_drift(migrations, applied)  # unapplied 0006 is ignored
+
+    # Simulate editing the immutable, already-applied 0006 migration file.
+    drifted = {migration.name: checksum_for(migration) for migration in migrations}
+    drifted["0006_fundamental_facts.sql"] = "0" * 64
+    with pytest.raises(
+        MigrationError, match="migration_checksum_mismatch:0006_fundamental_facts.sql"
+    ):
+        verify_no_checksum_drift(migrations, drifted)
+
+
 def test_resolve_dsn_prefers_explicit_argument(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LOCAL_DATABASE_URL", raising=False)
 

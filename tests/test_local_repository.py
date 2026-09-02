@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date
+
 import pandas as pd
 import pytest
 
@@ -576,3 +578,174 @@ def test_get_recent_ingestion_runs_filters_by_source_and_orders_desc(
     assert all(run["source"] == "sec_edgar" for run in sec_runs)
     assert sec_runs[0]["endpoint"] == "companyfacts"
     assert sec_runs[1]["endpoint"] == "company_tickers"
+
+
+# -- Fundamental facts ------------------------------------------------------
+
+_GET_FUNDAMENTAL_FACT_COLUMNS = [
+    "taxonomy",
+    "concept",
+    "unit",
+    "period_end",
+    "fiscal_year",
+    "fiscal_period",
+    "filed_date",
+    "accession",
+    "value",
+]
+
+
+def _fundamental_fact_row(
+    asset_id: str,
+    *,
+    taxonomy: str = "us-gaap",
+    concept: str = "Assets",
+    unit: str = "USD",
+    period_end: str = "2022-12-31",
+    fiscal_year: int | None = 2022,
+    fiscal_period: str = "FY",
+    filed_date: str = "2023-02-15",
+    accession: str = "0000320193-23-000006",
+    value: float = 100.0,
+) -> dict:
+    return {
+        "asset_id": asset_id,
+        "taxonomy": taxonomy,
+        "concept": concept,
+        "unit": unit,
+        "period_end": period_end,
+        "fiscal_year": fiscal_year,
+        "fiscal_period": fiscal_period,
+        "filed_date": filed_date,
+        "accession": accession,
+        "value": value,
+    }
+
+
+def test_fundamental_facts_restatement_creates_new_row(
+    repository: LocalPostgresRepository,
+    db_connection,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+
+    repository.upsert_fundamental_facts(
+        [_fundamental_fact_row(asset_id, period_end="2022-12-31", filed_date="2023-02-15", value=100.0)]
+    )
+    # A later filing revises FY2022 -- a NEW filed_date, so a NEW natural key.
+    repository.upsert_fundamental_facts(
+        [
+            _fundamental_fact_row(
+                asset_id,
+                period_end="2022-12-31",
+                filed_date="2023-11-01",
+                accession="0000320193-23-000101",
+                value=88.0,
+            )
+        ]
+    )
+
+    with db_connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM fundamental_facts WHERE asset_id = %s AND period_end = %s",
+            (asset_id, "2022-12-31"),
+        )
+        (row_count,) = cur.fetchone()
+        cur.execute(
+            "SELECT value FROM fundamental_facts "
+            "WHERE asset_id = %s AND period_end = %s AND filed_date = %s",
+            (asset_id, "2022-12-31", "2023-02-15"),
+        )
+        (original_value,) = cur.fetchone()
+
+    assert row_count == 2  # restatement took the INSERT branch, not UPDATE
+    assert float(original_value) == 100.0  # the earlier filing is byte-unchanged (C1)
+
+
+def test_fundamental_facts_round_trip_on_full_key(
+    repository: LocalPostgresRepository,
+    db_connection,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    rows = [
+        _fundamental_fact_row(
+            asset_id, concept="Assets", period_end="2021-12-31",
+            fiscal_year=2021, filed_date="2022-02-10", value=310.0,
+        ),
+        _fundamental_fact_row(
+            asset_id, concept="Assets", period_end="2022-12-31",
+            fiscal_year=2022, filed_date="2023-02-15", value=350.0,
+        ),
+        _fundamental_fact_row(
+            asset_id, concept="Liabilities", period_end="2022-12-31",
+            fiscal_year=2022, filed_date="2023-02-15", value=270.0,
+        ),
+        _fundamental_fact_row(
+            asset_id, concept="Revenues", period_end="2022-12-31",
+            fiscal_year=2022, filed_date="2023-02-15", value=400.0,
+        ),
+    ]
+
+    first = repository.upsert_fundamental_facts(rows)
+    second = repository.upsert_fundamental_facts([dict(row) for row in rows])
+
+    assert first == len(rows)
+    assert second == len(rows)  # returns the submitted count, not the affected count
+
+    with db_connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM fundamental_facts WHERE asset_id = %s", (asset_id,)
+        )
+        (total,) = cur.fetchone()
+        cur.execute(
+            "SELECT count(*) FROM ("
+            "  SELECT 1 FROM fundamental_facts WHERE asset_id = %s"
+            "  GROUP BY asset_id, taxonomy, concept, unit, period_end, fiscal_period, filed_date"
+            "  HAVING count(*) > 1"
+            ") duplicated_keys",
+            (asset_id,),
+        )
+        (duplicate_key_groups,) = cur.fetchone()
+
+    assert total == len(rows)  # the identical re-ingest created zero new rows
+    assert duplicate_key_groups == 0  # every 7-column natural key is exactly one row
+
+
+def test_get_fundamental_facts_returns_typed_empty_frame(
+    repository: LocalPostgresRepository,
+) -> None:
+    asset_id = repository.get_or_create_asset("btc-usd", asset_class="crypto")
+
+    frame = repository.get_fundamental_facts(asset_id)
+
+    # A crypto asset has no CIK and therefore no facts; the frame must still
+    # carry the 9 declared columns so the factor layer can index unconditionally.
+    assert list(frame.columns) == _GET_FUNDAMENTAL_FACT_COLUMNS
+    assert len(frame) == 0
+
+
+def test_get_fundamental_facts_applies_as_of_filed_date_in_sql(
+    repository: LocalPostgresRepository,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    repository.upsert_fundamental_facts(
+        [
+            _fundamental_fact_row(
+                asset_id, period_end="2022-12-31", filed_date="2023-02-15", value=100.0
+            ),
+            _fundamental_fact_row(
+                asset_id,
+                period_end="2022-12-31",
+                filed_date="2023-11-01",
+                accession="0000320193-23-000101",
+                value=88.0,
+            ),
+        ]
+    )
+
+    as_of = repository.get_fundamental_facts(asset_id, as_of_filed_date="2023-06-30")
+    full = repository.get_fundamental_facts(asset_id)
+
+    # The cutoff is a SQL predicate: only the filing on or before it survives.
+    assert as_of["filed_date"].tolist() == [date(2023, 2, 15)]
+    assert float(as_of.loc[0, "value"]) == 100.0
+    assert len(full) == 2  # without a cutoff both filings are visible

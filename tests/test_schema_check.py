@@ -30,3 +30,14 @@ def test_required_ml_relations_excludes_dead_tables_and_uses_scope_only_name() -
     assert "signals" not in REQUIRED_ML_RELATIONS
     assert "user_risk_profiles" not in REQUIRED_ML_RELATIONS
     assert "risk_profiles" in REQUIRED_ML_RELATIONS
+
+
+def test_fundamental_facts_is_a_required_relation_and_present_after_migration(
+    repository: LocalPostgresRepository,
+) -> None:
+    assert "fundamental_facts" in REQUIRED_ML_RELATIONS
+
+    statuses = check_relations(repository, relations=("fundamental_facts",))
+
+    assert statuses[0].name == "fundamental_facts"
+    assert statuses[0].available is True

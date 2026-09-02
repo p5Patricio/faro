@@ -26,6 +26,7 @@ REQUIRED_ML_RELATIONS = (
     "notifications",
     "asset_identifiers",
     "ingestion_runs",
+    "fundamental_facts",
 )
 
 

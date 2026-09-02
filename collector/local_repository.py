@@ -4,7 +4,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 import pandas as pd
@@ -60,6 +60,34 @@ class LocalPostgresError(RuntimeError):
     Subclasses ``RuntimeError`` so existing ``except RuntimeError`` call
     sites in ``api/main.py`` keep working unchanged.
     """
+
+
+# SEC XBRL fact store (db/migrations/0006_fundamental_facts.sql). The natural key
+# includes filed_date, so a restatement of an earlier period is a new row (INSERT
+# branch) and re-ingesting an unchanged payload is a no-op UPDATE. See design
+# decisions 2 (every key column NOT NULL -- the Postgres NULL-in-UNIQUE trap) and
+# 3 (upsert, not insert).
+FUNDAMENTAL_FACT_COLUMNS: tuple[str, ...] = (
+    "asset_id",
+    "taxonomy",
+    "concept",
+    "unit",
+    "period_end",
+    "fiscal_year",
+    "fiscal_period",
+    "filed_date",
+    "accession",
+    "value",
+)
+FUNDAMENTAL_FACT_KEY: tuple[str, ...] = (
+    "asset_id",
+    "taxonomy",
+    "concept",
+    "unit",
+    "period_end",
+    "fiscal_period",
+    "filed_date",
+)
 
 
 @dataclass
@@ -373,6 +401,92 @@ class LocalPostgresRepository:
                 "labels_daily", chunk, ("asset_id", "timestamp", "label_method", "horizon")
             )
         return inserted
+
+    # -- Fundamental facts -------------------------------------------------
+
+    def upsert_fundamental_facts(
+        self,
+        rows: list[dict[str, Any]],
+        batch_size: int = 500,
+    ) -> int:
+        """Persist SEC XBRL facts keyed by ``FUNDAMENTAL_FACT_KEY``.
+
+        The conflict target is the full 7-column natural key, which includes
+        ``filed_date``: a restatement (a later filing revising an earlier
+        ``period_end``) carries a new key and takes the INSERT branch, so the
+        earlier row is never mutated. Re-ingesting an unchanged payload hits
+        ON CONFLICT and rewrites the non-key columns (``fiscal_year``,
+        ``accession``, ``value``) to identical values -- a no-op. The
+        point-in-time guarantee is enforced by the key, not by this method.
+        """
+        if not rows:
+            return 0
+
+        expected = set(FUNDAMENTAL_FACT_COLUMNS)
+        prepared: list[dict[str, Any]] = []
+        for row in rows:
+            missing = expected - row.keys()
+            if missing:
+                raise ValueError(
+                    f"fundamental fact row missing columns: {sorted(missing)}"
+                )
+            prepared.append({column: row[column] for column in FUNDAMENTAL_FACT_COLUMNS})
+
+        upserted = 0
+        for start in range(0, len(prepared), batch_size):
+            chunk = prepared[start : start + batch_size]
+            upserted += self._upsert_batch(
+                "fundamental_facts", chunk, FUNDAMENTAL_FACT_KEY
+            )
+        return upserted
+
+    def get_fundamental_facts(
+        self,
+        asset_id: str,
+        *,
+        concepts: list[str] | None = None,
+        as_of_filed_date: str | date | None = None,
+    ) -> pd.DataFrame:
+        """Point-in-time fact read for one asset.
+
+        ``as_of_filed_date`` is applied in SQL (``filed_date <= %s``) so
+        ``fundamental_facts_asof_idx`` serves the cutoff and a multi-year
+        backtest never pulls future filings into memory. Always returns a
+        *typed* empty frame carrying the nine declared columns -- never a
+        column-less frame -- because the factor layer indexes columns
+        unconditionally and every crypto asset (no CIK) reaches here empty.
+        """
+        columns = [
+            "taxonomy",
+            "concept",
+            "unit",
+            "period_end",
+            "fiscal_year",
+            "fiscal_period",
+            "filed_date",
+            "accession",
+            "value",
+        ]
+        query = (
+            "SELECT taxonomy, concept, unit, period_end, fiscal_year, fiscal_period, "
+            "filed_date, accession, value FROM fundamental_facts WHERE asset_id = %s"
+        )
+        params: list[Any] = [asset_id]
+        if concepts is not None:
+            query += " AND concept = ANY(%s)"
+            params.append(list(concepts))
+        if as_of_filed_date is not None:
+            query += " AND filed_date <= %s::date"
+            params.append(as_of_filed_date)
+        query += " ORDER BY concept ASC, period_end ASC, filed_date ASC"
+
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+        if not rows:
+            return pd.DataFrame(columns=columns)
+        return pd.DataFrame(rows, columns=columns)
 
     # -- Model runs / predictions --------------------------------------------
 
