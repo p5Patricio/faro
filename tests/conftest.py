@@ -3,6 +3,11 @@ from __future__ import annotations
 import os
 from collections.abc import Iterator
 
+# Run the suite as the "test" environment. Among other things this disables
+# the API rate limiter (app_config.AppConfig.rate_limiting_enabled) so the
+# many TestClient requests, all from one client host, never trip it.
+os.environ.setdefault("APP_ENV", "test")
+
 import psycopg
 import pytest
 from dotenv import load_dotenv

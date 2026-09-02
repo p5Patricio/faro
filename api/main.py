@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from math import cos, sin
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
 
+from api.rate_limit import FixedWindowRateLimiter, client_key_for
 from app_config import AppConfig
 from brain.feedback import analyze_prediction_feedback
 from brain.logic import generate_signals
@@ -28,6 +32,11 @@ from ops.notification_rules import (
 
 
 APP_CONFIG = AppConfig.from_env()
+
+logger = logging.getLogger("faro.api")
+
+_RATE_LIMITER = FixedWindowRateLimiter(APP_CONFIG.rate_limit_per_minute)
+_RATE_LIMIT_EXEMPT_PATHS = {"/", "/api/health"}
 
 DEFAULT_UNIVERSE_FILE = "config/universe.sp100.json"
 INCOMPLETE_UNIVERSE_DISCLOSURE: dict[str, dict[str, str]] = {
@@ -56,10 +65,33 @@ app = FastAPI(title="Faro API", version="0.2.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(APP_CONFIG.cors_origins),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=APP_CONFIG.cors_allow_credentials,
+    allow_methods=["GET", "PUT", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if (
+        APP_CONFIG.rate_limiting_enabled
+        and request.method != "OPTIONS"
+        and request.url.path not in _RATE_LIMIT_EXEMPT_PATHS
+        and request.url.path.startswith("/api/")
+    ):
+        key = client_key_for(
+            forwarded_for=request.headers.get("x-forwarded-for"),
+            client_host=request.client.host if request.client else None,
+        )
+        decision = _RATE_LIMITER.check(key)
+        if not decision.allowed:
+            logger.warning("rate limit hit: client=%s path=%s", key, request.url.path)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "Demasiadas solicitudes; probá de nuevo en un momento."},
+                headers={"Retry-After": str(decision.retry_after)},
+            )
+    return await call_next(request)
 
 
 class RiskProfilePayload(BaseModel):
@@ -133,7 +165,8 @@ def get_assets(
 
     try:
         return repository.get_assets()
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error)
         require_demo_fallback(config)
         return demo_assets()
 
@@ -146,7 +179,12 @@ def get_universe():
     change for no benefit (design.md's explicit decision)."""
     try:
         doc = load_universe_document(DEFAULT_UNIVERSE_FILE)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as error:
+        logger.warning(
+            "universe snapshot unavailable (%s), serving incomplete disclosure: %s",
+            DEFAULT_UNIVERSE_FILE,
+            error,
+        )
         return dict(INCOMPLETE_UNIVERSE_DISCLOSURE)
     return universe_disclosure(doc)
 
@@ -169,7 +207,8 @@ def get_prices(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     return demo_prices(ticker, limit=limit)
@@ -232,7 +271,8 @@ def analyze_ticker(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     prices = demo_prices(ticker, limit=100)
@@ -272,7 +312,8 @@ def get_prediction_history(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     return []
@@ -305,7 +346,8 @@ def get_feedback_summary(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     return format_feedback_report(analyze_prediction_feedback(pd.DataFrame()))
@@ -360,7 +402,8 @@ def get_operational_alerts(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     return format_operational_alerts(ticker, [])
@@ -384,7 +427,8 @@ def get_backtest_history(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     return []
@@ -468,7 +512,8 @@ def get_paper_trading(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     result = run_paper_trading(
@@ -509,7 +554,8 @@ def get_paper_trading_runs(
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
-    except RuntimeError:
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
         require_demo_ticker(ticker, config)
 
     return []
@@ -554,6 +600,22 @@ def update_risk_profile(
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el perfil de riesgo") from None
     return format_risk_profile(profile, source="user")
+
+
+def log_repo_error(error: Exception, *, ticker: str | None = None) -> None:
+    """A real repository failure is otherwise indistinguishable from the
+    benign 'no database configured' path -- both quietly serve demo data.
+    Log it so an operator can tell whether something actually broke. The
+    endpoint name is read from the calling handler's frame."""
+    endpoint = sys._getframe(1).f_code.co_name
+    logger.warning(
+        "endpoint=%s ticker=%s serving demo data after repository error: %s: %s",
+        endpoint,
+        ticker or "-",
+        type(error).__name__,
+        error,
+        exc_info=error,
+    )
 
 
 def require_demo_fallback(config: AppConfig) -> None:

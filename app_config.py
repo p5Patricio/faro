@@ -8,12 +8,19 @@ VALID_ENVIRONMENTS = {"development", "staging", "production", "test"}
 TRUTHY_VALUES = {"1", "true", "yes", "on"}
 FALSY_VALUES = {"0", "false", "no", "off"}
 
+# Local dev servers only. Production MUST set API_CORS_ORIGINS explicitly.
+# A bare "*" was the old default and, combined with credentialed CORS, let
+# any site on the internet make authenticated requests against the API.
+DEFAULT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+DEFAULT_RATE_LIMIT_PER_MINUTE = 240
+
 
 @dataclass(frozen=True)
 class AppConfig:
     environment: str = "development"
     allow_demo_fallback: bool = True
-    cors_origins: tuple[str, ...] = ("*",)
+    cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
+    rate_limit_per_minute: int = DEFAULT_RATE_LIMIT_PER_MINUTE
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -24,12 +31,25 @@ class AppConfig:
                 "ALLOW_DEMO_FALLBACK",
                 default=environment != "production",
             ),
-            cors_origins=parse_csv_env("API_CORS_ORIGINS", default=("*",)),
+            cors_origins=parse_csv_env("API_CORS_ORIGINS", default=DEFAULT_CORS_ORIGINS),
+            rate_limit_per_minute=parse_int_env(
+                "API_RATE_LIMIT_PER_MINUTE", default=DEFAULT_RATE_LIMIT_PER_MINUTE
+            ),
         )
 
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def cors_allow_credentials(self) -> bool:
+        """Credentialed CORS is only valid with an explicit origin allow-list.
+        `Access-Control-Allow-Origin: *` and credentials cannot be combined."""
+        return "*" not in self.cors_origins
+
+    @property
+    def rate_limiting_enabled(self) -> bool:
+        return self.environment != "test" and self.rate_limit_per_minute > 0
 
 
 def normalize_environment(value: str) -> str:
@@ -61,3 +81,13 @@ def parse_csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
 
     values = tuple(item.strip() for item in raw_value.split(",") if item.strip())
     return values or default
+
+
+def parse_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return default
+    try:
+        return int(raw_value.strip())
+    except ValueError:
+        raise RuntimeError(f"{name} must be an integer") from None
