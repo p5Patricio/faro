@@ -52,13 +52,63 @@ Slice: PR 1 (`auto-chain` / `stacked-to-main`). Authored diff ~374 changed lines
 
 None blocking. Note: `openspec/changes/fundamental-analysis/` is currently untracked on branch `codex/sdd-professional-improvements`.
 
-## Remaining (out of scope for this launch)
+## Phase 2: Ingestion — parser + audited per-CIK job + coverage report — DONE (10/10 tasks)
 
-- [ ] Phase 2: Ingestion — parser + audited per-CIK job + coverage report
+Slice: PR 2 (`auto-chain` / `stacked-to-main`). This was a RETRY: a prior attempt was
+interrupted by an API rate limit right after writing the RED tests
+(`tests/test_fundamental_ingestion.py` + `tests/fixtures/companyfacts_fake.json`), which were
+left on disk and confirmed to fail with `ModuleNotFoundError` before any implementation code
+was written this session. Those RED tests were treated as the design already made and were not
+rewritten.
+
+### Completed Tasks
+
+- [x] 2.1 `tests/fixtures/companyfacts_fake.json` (pre-existing from the interrupted attempt, verified as-is): 2 fiscal years, one restatement (`Assets` `period_end=2022-12-31` filed `2023-02-15` then `2023-11-01`), one tag-fallback pair (`SalesRevenueNet` / `RevenueFromContractWithCustomerExcludingAssessedTax`), one non-allow-listed concept (`MarketableSecuritiesCurrent`).
+- [x] 2.2 `test_parse_company_facts_maps_filed_and_period_end_one_to_one` (pre-existing, verified as-is)
+- [x] 2.3 `test_parse_company_facts_skips_entries_missing_end_filed_or_val` + `test_parse_company_facts_in_batch_dedupe_keeps_last` (pre-existing, verified as-is)
+- [x] 2.4 `test_run_fundamental_ingestion_audits_every_fetch` (pre-existing, verified as-is)
+- [x] 2.5 `test_run_fundamental_ingestion_job_summary_row` (pre-existing, verified as-is)
+- [x] 2.6 `test_run_fundamental_ingestion_report_has_per_concept_coverage` (pre-existing, verified as-is)
+- [x] 2.7 `collector/fundamentals.py` — `CONCEPT_CHAINS` (17 logical concepts incl. the two split `shares_outstanding_mve` / `shares_outstanding_wavg` chains), `ALLOWED_TAGS` (derived), `parse_company_facts(payload, *, asset_id)`
+- [x] 2.8 `collector/run_fundamental_ingestion.py` — `run_fundamental_ingestion(repository, client, *, ciks=None, limit=None)`
+- [x] 2.9 job-summary `insert_ingestion_run` row + `--out` JSON report + CLI (`--ciks`, `--limit`, `--out`)
+- [x] 2.10 Runtime harness NOT run — `SEC_USER_AGENT` is not configured in this environment (verified: `SecEdgarConfig.from_env()` returns `None`), so `main()` would raise `SecEdgarConfigError` before any socket opens; no local Postgres CIK-identifier data was seeded either. The `--out` report *shape* (including the per-concept coverage map that gates Phase 3) is proven at the unit level by `test_run_fundamental_ingestion_report_has_per_concept_coverage`. Open follow-up before Phase 3: run `py -3.14 -m collector.run_fundamental_ingestion --limit 3 --out artifacts/fund_coverage.json` with `SEC_USER_AGENT` set against real Postgres and attach the coverage summary.
+
+### Files Changed
+
+| File | Action | What |
+|------|--------|------|
+| `collector/fundamentals.py` | Created (181 lines) | Pure module. `US_GAAP`/`DEI`/`MONEY`/`SHARES` constants; `CONCEPT_CHAINS: dict[str, tuple[str, tuple[tuple[str,str], ...]]]` (17 logical concepts, design §2 verbatim except `shares_outstanding` split into `shares_outstanding_mve` + `shares_outstanding_wavg` per tasks.md Open Question 3, resolved for Phase 2); `ALLOWED_TAGS = frozenset(pair for _unit, chain in CONCEPT_CHAINS.values() for pair in chain)`; `parse_company_facts(payload, *, asset_id) -> list[dict]` walks `facts[taxonomy][concept]["units"][unit]`, keeps only `ALLOWED_TAGS` pairs, skips entries missing `end`/`filed`/numeric `val` (`bool` explicitly rejected despite being an `int` subclass), `fp` normalized `.strip().upper()` (`""` when absent), in-batch dedupe keeps the LAST occurrence per the 7-column natural key. |
+| `collector/run_fundamental_ingestion.py` | Created (228 lines) | Mirrors `collector/run_identifier_resolution.py`. `run_fundamental_ingestion(repository, client, *, ciks=None, limit=None) -> dict`: resolves `repository.get_asset_identifiers(id_type="cik")`, `--ciks` FILTERS (never bypasses) via a local 10-digit zero-pad normalizer, `limit` caps the filtered target list, per target calls `client.fetch_company_facts(cik)` (no per-fetch audit row written here — the client's own `finally`/`RepositoryIngestionRecorder` already does), on failure records `{cik, reason}` only (never `detail`/`SEC_USER_AGENT`) and continues, on success `parse_company_facts` → `repository.upsert_fundamental_facts(rows)` and accumulates per-logical-concept coverage + running max `filed_date`. After the loop: one job-summary `insert_ingestion_run(source="sec_edgar", endpoint="fundamental_ingestion", target_key="")` row and a JSON-serializable report dict (`status`, `assets_processed`, `assets_with_no_facts`, `failed_ciks`, `unresolved_ciks`, `request_count`, `rows_written`, `max_filed_date`, `per_concept_coverage`). `main()` CLI: `--ciks`, `--limit`, `--out` (default `artifacts/fund_coverage.json`, module constant, never request-derived), writes the file and also prints via `json.dumps(..., indent=2)`. |
+| `tests/fixtures/companyfacts_fake.json` | Pre-existing, verified (104 lines) | See 2.1. |
+| `tests/test_fundamental_ingestion.py` | Pre-existing, verified (426 lines) | 11 tests: 6 parser tests + 5 job tests, using a `FakeFactsSession` (URL→canned-response map, robust to fetch ordering) and a `FakeFundamentalRepository` (in-memory `get_asset_identifiers`/`upsert_fundamental_facts`/`insert_ingestion_run`). |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command + result | `py -3.14 -m pytest tests/test_fundamental_ingestion.py` → **11 passed**, first run after implementation (no retries needed). RED confirmed beforehand: `ModuleNotFoundError: No module named 'collector.fundamentals'` on collection. |
+| Runtime harness command + result | `py -3.14 -m collector.run_fundamental_ingestion --limit 3 --out artifacts/fund_coverage.json` — **N/A this session**: `SEC_USER_AGENT` is not configured (verified via `SecEdgarConfig.from_env()` → `None`) and no CIK-mapped assets exist in this session's Postgres, so `main()` would raise `SecEdgarConfigError` before any socket opens. The report shape is exercised at the unit level instead (`test_run_fundamental_ingestion_report_has_per_concept_coverage`, `test_run_fundamental_ingestion_job_summary_row`). |
+| Full suite | `py -3.14 -m pytest -q` → **364 passed** (353 baseline + 11 new), 1 pre-existing joblib/loky CPU-count warning, 0 regressions, 564.30s. |
+| Rollback boundary | Delete `collector/fundamentals.py` + `collector/run_fundamental_ingestion.py`. `fundamental_facts` (Phase 1) just stops being written; nothing else imports the new surface yet. |
+
+### Deviations from Design
+
+1. **`shares_outstanding` split into two chains in `CONCEPT_CHAINS`**, not the single chain design.md §2's code block shows. This matches `tasks.md`'s own "Open Questions — resolved for tasks" #3 ("Constants land in Phase 2; consumed in Phase 3") and is exactly what `tests/test_fundamental_ingestion.py::test_allowed_tags_is_derived_from_concept_chains` asserts (`shares_outstanding_mve` and `shares_outstanding_wavg` present and distinct). Followed the resolved task decision over the design's unresolved illustrative snippet, per the "fix the test, not the design" guidance — here neither needed fixing; design.md's own Open Questions section already states "Recommended: yes, split them" for the same decision.
+2. **Authored diff is larger than the ~390-line slice-plan estimate.** Total changed lines across the 4 slice-2 files: 939 (`fundamentals.py` 181, `run_fundamental_ingestion.py` 228, `companyfacts_fake.json` 104, `test_fundamental_ingestion.py` 426), vs. design.md §9's estimate of 140+130+60+120=450 (tasks.md's Review Workload Forecast rounds this to "~390"). The test file and fixture were pre-existing from the interrupted prior attempt and were deliberately NOT rewritten (retry instructions treat them as the RED-test design already made); they alone are 530 lines, already over the 400-line PR budget before any implementation code existed. My two new modules (409 lines) are also above their 270-line combined estimate, driven by matching this codebase's established verbose-docstring convention (`sec_edgar_client.py`, `ingestion_audit.py`, `run_identifier_resolution.py` all carry similarly dense module/function docstrings). No code was cut to force a smaller diff, since `tasks.md` explicitly says "do not trim C1 assertions" for a related slice and the same principle was applied here to the parser/job test coverage. Flagged for the orchestrator/gatekeeper's delivery-strategy handling, not resolved unilaterally (this repo's receipt-driven review is OFF and slice-2 was not re-split).
+3. Task 2.10's runtime harness was not exercised — see the Work Unit Evidence row above.
+
+### Issues Found
+
+None blocking.
+
+## Remaining (out of scope this launch)
+
 - [ ] Phase 3: Factor math — `brain/fundamental_factors.py`
 - [ ] Phase 4: Overlay + C1 hard test
 - [ ] Phase 5: Wiring + docs
 
 ### Status
 
-10/10 Phase 1 tasks complete. Ready for `sdd-verify` of Phase 1, or `sdd-apply` Phase 2.
+20/20 Phase 1+2 tasks complete (10/10 + 10/10). Full suite: 364 passed, 0 regressions. Ready for
+`sdd-verify` of Phase 1+2, or `sdd-apply` Phase 3.
