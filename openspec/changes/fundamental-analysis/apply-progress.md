@@ -193,12 +193,110 @@ None blocking.
   literally match if one concept has a data gap the other doesn't — this is expected/designed
   behavior (distinct-period tolerance), not a bug, and doesn't need any Phase 4 change.
 
+## Phase 4: Overlay + C1 hard test — DONE (9/9 tasks)
+
+Slice: PR 4 (`auto-chain` / `stacked-to-main`). This was a RETRY: a prior attempt was
+interrupted by an API rate limit right after implementing production code
+(`brain/materialize_fundamentals.py`, the `brain/features.py` registration diff) but
+BEFORE writing any tests. Both were read in full, checked for correctness against
+design.md §7/§6, and treated as the implementation already made — not rewritten from
+scratch. Tests (4.1-4.5) were written fresh this session against that pre-existing
+implementation, so the GREEN code predates the RED tests here — the same documented
+deviation Phase 3 reported ("standard mode permits this; report it honestly, don't
+present it as compliant").
+
+### Completed Tasks
+
+- [x] 4.1 `test_no_row_uses_a_filing_dated_on_or_after_its_own_timestamp` (C1-a)
+- [x] 4.2 `test_restatement_never_leaks_backward` (C1-b)
+- [x] 4.3 `test_c1c_nan_never_raises` + `test_non_stock_asset_is_skipped_not_failed`
+- [x] 4.4 `test_technical_v2_columns_byte_identical` + `test_fundamental_v1_composes_technical_v2_plus_three_factors` (C1-d)
+- [x] 4.5 `test_c1e_db_round_trip` (C1-e, real repository fixture, rolled back)
+- [x] 4.6 `FUNDAMENTAL_OVERLAY_COLUMNS` + `FEATURE_COLUMNS_BY_SET["fundamental_v1"]` in `brain/features.py` (pre-existing, verified as-is)
+- [x] 4.7 `build_fundamental_overlay(spine, facts, prices, *, lag_trading_days=1)` in `brain/materialize_fundamentals.py` (pre-existing; ONE bug found and fixed — see Deviations)
+- [x] 4.8 `FundamentalMaterializationConfig` / `FundamentalMaterializationResult` / `materialize_asset_fundamentals(repository, config)` + `main()` CLI (pre-existing, verified as-is)
+- [x] 4.9 `py -3.14 -m brain.materialize_fundamentals --ticker AAPL` — ran end-to-end (see Work Unit Evidence); `feature_rows_loaded=0` because no `fundamental_facts` are seeded for AAPL in this database (same Phase 2/3 ingestion gap), not a code defect
+
+### Files Changed
+
+| File | Action | What |
+|------|--------|------|
+| `brain/features.py` | Modified (+18), pre-existing verified as-is | `FUNDAMENTAL_OVERLAY_COLUMNS = ["piotroski_f_score", "altman_z_score", "gross_profitability"]` and `FEATURE_COLUMNS_BY_SET["fundamental_v1"] = compose_feature_set("technical_v2", FUNDAMENTAL_OVERLAY_COLUMNS)`, placed directly after `compose_feature_set`'s definition per design §6. `FEATURE_COLUMNS_TECHNICAL_V1/_V2`, the dict literal's other entries, `build_features`, and `FEATURE_SET_OVERLAYS_BY_ASSET_CLASS` untouched. |
+| `brain/materialize_fundamentals.py` | Created (263 lines), pre-existing verified against new tests, one bug fixed | `build_fundamental_overlay(spine, facts, prices, *, lag_trading_days=1)` — events-from-`facts["filed_date"]`, `searchsorted`+lag for the strict `effective > f` boundary, `compute_factors_as_of` per event, then an as-of join onto the full spine (see Deviations for the `merge_asof` fix). `FundamentalMaterializationConfig`/`FundamentalMaterializationResult` dataclasses. `materialize_asset_fundamentals(repository, config)` — stock-only gate on `assets.asset_class`, writes via `repository.upsert_features(..., feature_set="fundamental_v1")`. `main()` CLI mirroring `brain/materialize_dataset.py`. |
+| `tests/test_fundamental_lookahead.py` | Created (408 lines) | C1-a look-ahead (`test_no_row_uses_a_filing_dated_on_or_after_its_own_timestamp`), C1-b restatement (`test_restatement_never_leaks_backward`), C1-c NaN-never-raises (`test_c1c_nan_never_raises`, 4 sub-cases), stock-only scope (`test_non_stock_asset_is_skipped_not_failed`, real repository), C1-e DB round trip (`test_c1e_db_round_trip`, real repository). Local `_fact`/`_facts_frame`/`_spine`/`_flat_prices`/`_price_history`/`_two_year_facts` helpers (the last reusing the exact fixture values `tests/test_fundamental_factors.py::_two_year_facts` uses, so "resolves to a number" assertions rest on a fixture already proven correct at the unit level). |
+| `tests/test_feature_set_resolution.py` | Modified (+29) | Import `FUNDAMENTAL_OVERLAY_COLUMNS` from `brain.features` and the `brain.fundamental_factors` module; `test_technical_v2_columns_byte_identical` and `test_fundamental_v1_composes_technical_v2_plus_three_factors` (C1-d / C2 regression). |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command + result | `py -3.14 -m pytest tests/test_fundamental_lookahead.py tests/test_feature_set_resolution.py -q` → **16 passed** (5 new in the lookahead file + 11 in feature_set_resolution, 9 pre-existing + 2 new). One RED-then-fixed cycle during this session: `test_c1c_nan_never_raises` sub-case (d) failed on first run against the pre-existing implementation (see Deviations), fixed, then all 16 passed clean. |
+| Runtime harness command + result | `py -3.14 -m brain.materialize_fundamentals --ticker AAPL` → ran end-to-end against the real local Postgres configured in this environment (`LOCAL_DATABASE_URL`, unlike Phases 2-3's harness gap): `{"ticker": "AAPL", "asset_class": "stock", "price_rows": 1678, "fact_rows": 0, "event_dates": 0, "first_factor_timestamp": null, "feature_rows_loaded": 0, "skipped_assets": []}` — no exception, `feature_rows_loaded=0` only because no `fundamental_facts` rows exist for AAPL (ingestion job never run against this DB). Real step-shaped-row landing is proven at the unit/DB-round-trip level instead by `test_c1e_db_round_trip`. |
+| Full suite | `py -3.14 -m pytest -q` → **393 passed** (386 baseline + 7 new: 5 in `test_fundamental_lookahead.py` + 2 in `test_feature_set_resolution.py`), 0 regressions, 1 pre-existing joblib/loky CPU-count warning, 58.74s. |
+| Rollback boundary | `delete from features_daily where feature_set='fundamental_v1';` then revert the `FEATURE_COLUMNS_BY_SET["fundamental_v1"]` assignment + `FUNDAMENTAL_OVERLAY_COLUMNS` in `brain/features.py`, delete `brain/materialize_fundamentals.py`, `tests/test_fundamental_lookahead.py`, and the two added tests in `tests/test_feature_set_resolution.py`. Nothing outside this slice imports `brain.materialize_fundamentals` yet. |
+
+### Deviations from Design
+
+1. **Bug found and fixed in `build_fundamental_overlay`: `reindex(...).ffill()` → `pd.merge_asof(..., direction="backward")`.**
+   The pre-existing implementation joined per-event rows onto the full spine calendar with
+   `events_frame.reindex(target_index).ffill()`. `test_c1c_nan_never_raises` sub-case (d)
+   (a concept present only under an unexpected unit) exposed a genuine bug: when a LATER
+   event's own `compute_factors_as_of` call legitimately returns `NaN` for one factor (e.g.
+   Altman, because the FY2022 `RetainedEarningsAccumulatedDeficit` fact was only present
+   under an unexpected unit), plain `.ffill()` cannot distinguish "no event happened yet on
+   this day" (a real gap that should carry the prior event's value forward) from "an event
+   DID happen, and this one factor is legitimately NaN" (a real, current value that must
+   stay NaN). `.ffill()` treated both cases identically and silently overwrote the fresh
+   NaN with FY2021's now-superseded Altman Z-score for the entire rest of the series —
+   exactly the kind of silent-guess behavior the whole change's philosophy (design.md's
+   "never convert or guess a different unit", ADR-4's "NaN, never a partial sum") argues
+   against. Fixed by replacing the reindex+ffill step with
+   `pd.merge_asof(target_frame, events_frame, on="timestamp", direction="backward")`, which
+   carries the exact matched event row — NaN and all — forward until the next event,
+   instead of skipping over a real NaN. Verified: all 16 focused tests and the full 393-test
+   suite pass after the fix, including the pre-existing look-ahead/restatement assertions
+   this function must also satisfy (C1-a, C1-b), which were unaffected by the fix since
+   neither fixture ever hit the specific "later event's own factor is NaN" edge case.
+   `docstring` in `brain/materialize_fundamentals.py` updated to describe the corrected
+   algorithm and explicitly document why plain `ffill()` was rejected.
+2. **Sequencing**: as in Phase 3, tests were written this session against an
+   already-existing implementation (verified, not rewritten, per the retry brief) rather
+   than watching each RED test fail before any GREEN code existed. Standard mode
+   (`testing.strict_tdd: false`) permits this. One test (`test_c1c_nan_never_raises`
+   sub-case (d)) DID fail RED against the pre-existing code on first run, was diagnosed as
+   a genuine bug (not a test-fixture error), and the implementation was fixed until GREEN —
+   this is the one part of Phase 4 that followed a literal RED→GREEN cycle.
+3. **`pd.merge_asof` requires `events_frame`/`target_frame` sorted by `timestamp`** — both
+   already are (`events_frame` is explicitly `.sort_values("timestamp")`-ed;
+   `target_frame` is built from `spine_ts`, itself `spine_sorted["timestamp"]`). No
+   additional sort was needed, but this is now a load-bearing precondition of the function
+   worth flagging for any future editor of this file.
+
+### Issues Found
+
+The one bug above (fixed same session, not left open).
+
+### Risks / Notes for Phase 5
+
+- `main()`'s runtime harness (`py -3.14 -m brain.materialize_fundamentals --ticker AAPL`)
+  confirms the CLI wires cleanly end-to-end against this environment's real Postgres, but
+  `feature_rows_loaded` will stay `0` for every ticker until the Phase 2 ingestion job is
+  actually run (with `SEC_USER_AGENT` set) against this same database. Phase 5's runbook
+  section should make this ordering explicit: ingest first, then materialize, then retrain.
+- `test_c1e_db_round_trip` demonstrates the exact pattern Phase 5's own
+  `test_retraining_job_runs_on_fundamental_v1_feature_set` (task 5.1) will need: seed
+  `prices` + `fundamental_facts` directly via the repository (no live SEC call), call
+  `materialize_asset_fundamentals`, then hand the result to `run_retraining_job`.
+- The `merge_asof`-based join (Deviation 1) is a pure internal implementation detail of
+  `build_fundamental_overlay` — its public shape (`DataFrame[timestamp, 3 factors,
+  max_filed_date]`) and every documented C1 guarantee are unchanged, so Phase 5 needs no
+  awareness of it beyond this note.
+
 ## Remaining (out of scope this launch)
 
-- [ ] Phase 4: Overlay + C1 hard test
 - [ ] Phase 5: Wiring + docs
 
 ### Status
 
-30/30 Phase 1+2+3 tasks complete (10/10 + 10/10 + 10/10). Full suite: 386 passed, 0
-regressions. Ready for `sdd-verify` of Phase 1+2+3, or `sdd-apply` Phase 4.
+39/39 Phase 1+2+3+4 tasks complete (10/10 + 10/10 + 10/10 + 9/9). Full suite: 393 passed, 0
+regressions. Ready for `sdd-verify` of Phase 1-4, or `sdd-apply` Phase 5.

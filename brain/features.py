@@ -67,6 +67,24 @@ def compose_feature_set(base_feature_set: str, overlay_columns: list[str]) -> li
     return [*feature_columns_for_set(base_feature_set), *overlay_columns]
 
 
+# fundamental-analysis (Phase 4): the opt-in stock-only overlay. `compose_feature_set`
+# returns a NEW list ([*base, *overlay]), so technical_v2's list object is never
+# mutated or aliased -- C2 holds structurally, not by convention. The three columns
+# here MUST equal set(brain.fundamental_factors.FACTOR_KEYS) -- asserted by a
+# contract test in tests/test_feature_set_resolution.py. This module intentionally
+# never imports brain.fundamental_factors (keeps the import graph acyclic; see that
+# module's own docstring), so the two lists are declared independently and kept in
+# sync by the contract test, not by a shared import.
+FUNDAMENTAL_OVERLAY_COLUMNS = [
+    "piotroski_f_score",
+    "altman_z_score",
+    "gross_profitability",
+]
+FEATURE_COLUMNS_BY_SET["fundamental_v1"] = compose_feature_set(
+    "technical_v2", FUNDAMENTAL_OVERLAY_COLUMNS
+)
+
+
 def prepare_price_frame(prices: list[dict] | pd.DataFrame) -> pd.DataFrame:
     """Normalize raw OHLCV rows into a chronological DataFrame."""
     df = pd.DataFrame(prices).copy()

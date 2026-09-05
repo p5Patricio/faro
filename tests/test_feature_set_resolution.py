@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import pytest
 
+from brain import fundamental_factors
 from brain.features import (
     DEFAULT_BASE_FEATURE_SET,
     FEATURE_COLUMNS_TECHNICAL_V2,
     FEATURE_SET_OVERLAYS_BY_ASSET_CLASS,
+    FUNDAMENTAL_OVERLAY_COLUMNS,
     compose_feature_set,
     feature_columns_for_set,
     feature_set_for_asset_class,
@@ -60,3 +62,30 @@ def test_compose_feature_set_appends_overlay_columns_without_mutating_spine():
     assert composed == [*FEATURE_COLUMNS_TECHNICAL_V2, "funding_rate_z"]
     # technical_v2 itself is never mutated
     assert feature_columns_for_set("technical_v2") == FEATURE_COLUMNS_TECHNICAL_V2
+
+
+# -- fundamental-analysis (Phase 4): C1-d / C2 regression -------------------
+
+
+def test_technical_v2_columns_byte_identical():
+    """C1-d / C2: registering fundamental_v1 must not perturb technical_v2's
+    resolution at all -- every promoted technical_v2 model stays untouched."""
+    assert feature_columns_for_set("technical_v2") == FEATURE_COLUMNS_TECHNICAL_V2
+
+
+def test_fundamental_v1_composes_technical_v2_plus_three_factors():
+    """spec: 'fundamental_v1 composes the spine plus three factors;
+    technical_v2 is untouched' -- fundamental_v1 is technical_v2's column
+    list followed by exactly the three composite factor columns, no
+    NULL-padding, no raw ratios (ROA, current ratio, leverage, gross margin,
+    asset turnover) ever exposed as columns."""
+    technical_columns = feature_columns_for_set("technical_v2")
+    fundamental_columns = feature_columns_for_set("fundamental_v1")
+
+    assert fundamental_columns[:25] == technical_columns
+    assert len(fundamental_columns) == 28
+    assert fundamental_columns[25:] == ["piotroski_f_score", "altman_z_score", "gross_profitability"]
+
+    # Kept in sync by this contract test, not by a shared import --
+    # brain/features.py intentionally never imports brain/fundamental_factors.py.
+    assert set(FUNDAMENTAL_OVERLAY_COLUMNS) == set(fundamental_factors.FACTOR_KEYS)
