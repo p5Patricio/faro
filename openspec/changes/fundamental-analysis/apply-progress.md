@@ -292,11 +292,116 @@ The one bug above (fixed same session, not left open).
   max_filed_date]`) and every documented C1 guarantee are unchanged, so Phase 5 needs no
   awareness of it beyond this note.
 
-## Remaining (out of scope this launch)
+## Phase 5: Wiring + docs — DONE (5/5 tasks)
 
-- [ ] Phase 5: Wiring + docs
+Slice: PR 5 (`auto-chain` / `stacked-to-main`), the final slice. Standard mode
+(`testing.strict_tdd: false`). Task 5.1's test exercises pipeline WIRING that Phases 1-4
+already implemented and committed (no new production code was needed to make it pass) — it
+went straight from written to green on the first real-Postgres run, so there was no separate
+RED-then-GREEN cadence to report here beyond "written, run once, passed." Tasks 5.2-5.3 are
+the actual GREEN production changes this phase adds (a new config file + CLI help text).
+
+### Completed Tasks
+
+- [x] 5.1 `test_retraining_job_runs_on_fundamental_v1_feature_set` — real `repository` fixture
+      (Postgres, rolled back): seeds an `aapl` stock (two clean fiscal years of
+      `fundamental_facts`, 250 days of prices, `triple_barrier` labels) and a `btc-usd` crypto
+      asset with no fundamentals, materializes `fundamental_v1` for AAPL, then runs
+      `run_retraining_job(feature_set="fundamental_v1")` end-to-end for real (no monkeypatch
+      of `promote_candidate_from_report`/`run_candidate_matrix` — the first genuinely
+      end-to-end retraining test in this file). Asserts the job succeeds (a model trains,
+      is promoted, and a prediction is generated: `prediction_loaded is True`) and that
+      `BTC-USD` surfaces in `skipped_assets` with reason `no_materialized_dataset`, never in
+      `errors`.
+- [x] 5.2 `config/targets.stocks.json` — `["AAPL", "MSFT"]`, the two stock tickers already
+      present in `config/targets.core.json` (`["BTC-USD", "ETH-USD", "AAPL", "MSFT"]`) with the
+      two crypto tickers removed. Same shape `load_default_targets` in
+      `brain/run_retraining_job.py` already expects (a bare JSON array of ticker strings).
+- [x] 5.3 `brain/run_retraining_job.py` `--feature-set` help text extended (10 lines) — see
+      Deviations for why there was no `choices=[...]` list to widen.
+- [x] 5.4 `README.md` new "Analisis Fundamental" section (Spanish, matches the doc's existing
+      tone) + `ESTADO_PROYECTO.md` capability-table row and Riesgos Conocidos bullet.
+- [x] 5.5 `collector/run_market_data_job.py` verified unchanged (confirmed via `git status`:
+      not in the modified-files list); the `fundamental_v1` vs `technical_v2` walk-forward
+      comparison is recorded as a documented follow-up in both README.md and
+      ESTADO_PROYECTO.md, not re-litigated as a gate (matches proposal.md's Product Decision 2,
+      already resolved).
+
+### Files Changed
+
+| File | Action | What |
+|------|--------|------|
+| `tests/test_brain_pipeline.py` | Modified (+141) | Two new imports (`brain.materialize_fundamentals`, `collector.fundamentals.CONCEPT_CHAINS`); `_fundamental_fact_row` + `_two_fiscal_years_of_fundamental_facts` helpers (reusing the exact hand-verified financial values `tests/test_fundamental_factors.py`/`tests/test_fundamental_lookahead.py` already prove correct, built via the real `CONCEPT_CHAINS` map so tags stay in sync with production); `test_retraining_job_runs_on_fundamental_v1_feature_set`. |
+| `config/targets.stocks.json` | Created (1 line) | `["AAPL", "MSFT"]` — stock-only retraining targets. |
+| `brain/run_retraining_job.py` | Modified (+17 -1) | `--feature-set` argument gained a multi-line `help=` string documenting: no fixed choices (any name in `FEATURE_COLUMNS_BY_SET`), the `fundamental_v1` overlay's 3 columns, its stock-only scope, the correct flag name (`--targets-file`, not `--tickers-file`), and its two-step ingestion prerequisite. |
+| `README.md` | Modified (+42) | New "## Analisis Fundamental" section (Spanish) after "## Jobs Operativos" / before "## Perfiles de Riesgo": the 3-step flow (standalone weekly ingestion -> per-ticker materialize -> retrain with `--targets-file config/targets.stocks.json`), the conservative trading-calendar-gap bias, the ~1-year Piotroski warm-up, and the `fundamental_v1` vs `technical_v2` walk-forward follow-up note. |
+| `ESTADO_PROYECTO.md` | Modified (+2) | One row in the "Capacidades Implementadas" table (links to the new README section) and one bullet in "Riesgos Conocidos" (the same lag-bias + warm-up + follow-up framing, condensed). |
+
+### Work Unit Evidence
+
+| Evidence | Value |
+|---|---|
+| Focused test command + result | `py -3.14 -m pytest tests/test_brain_pipeline.py -q` → **46 passed** (45 baseline + 1 new), first run against the fixed fixture passed clean (see Deviations for the one date-alignment fix made before it passed). |
+| Runtime harness command + result | `py -3.14 -m brain.run_retraining_job --feature-set fundamental_v1 --targets-file config/targets.stocks.json --skip-upload` against local Postgres → ran end-to-end, `default_targets: ["AAPL", "MSFT"]` correctly loaded from the new file, every stored asset reported `no_materialized_dataset` in `skipped_assets` (expected: the ingestion job has never populated `fundamental_facts` in this environment, same `SEC_USER_AGENT` gap Phases 2-4 already documented) — confirms the CLI wiring end-to-end, not real non-zero training (that is what the focused test's seeded-facts path proves instead). |
+| Full suite | `py -3.14 -m pytest -q` → **394 passed** (393 baseline + 1 new), 0 regressions, 1 pre-existing joblib/loky CPU-count warning, 27.54s. |
+| Rollback boundary | Delete `config/targets.stocks.json`; revert the `--feature-set` help text in `brain/run_retraining_job.py`; revert the new README.md/ESTADO_PROYECTO.md sections; delete the new test + its two helpers from `tests/test_brain_pipeline.py`. Nothing outside this slice imports the new config file or depends on the doc changes. |
+
+### Deviations from Design
+
+1. **No `choices=[...]` list exists on `--feature-set` in `brain/run_retraining_job.py` to
+   widen.** Task 5.3 (and design.md §9) assumed a constrained choices list; the actual
+   argument is `parser.add_argument("--feature-set", default="technical_v2")` with no
+   `choices=`, matching every other `--feature-set` flag across `brain/` (`train.py`,
+   `materialize_dataset.py`, `evaluate_candidate_matrix.py`, etc. — none constrain it).
+   `fundamental_v1` already resolves through `feature_columns_for_set` (registered in Phase 4)
+   with zero code change needed; there was nothing to "widen." Extended the help text instead
+   (satisfies the same operator-facing discoverability goal 5.3 was after) and verified with
+   `--help` plus a real `--feature-set fundamental_v1 --targets-file config/targets.stocks.json`
+   dry run against local Postgres.
+2. **The orchestrator's brief and design.md's own runbook example both say
+   `--tickers-file`, but the actual CLI flag is `--targets-file`.** Verified by reading
+   `brain/run_retraining_job.py`'s `parse_args()` directly (`parser.add_argument("--targets-file",
+   default=DEFAULT_TARGETS_FILE, ...)`) and confirmed with `--help` — no `--tickers-file`
+   flag exists anywhere in this codebase. Used the correct flag name (`--targets-file`) in the
+   `--feature-set` help text, the README.md runbook section, and this progress file, rather
+   than reproducing a flag that would fail at the shell. Flagging this explicitly since it
+   contradicts the literal wording handed down through proposal.md's slice-plan estimate and
+   the launch brief.
+3. **`test_retraining_job_runs_on_fundamental_v1_feature_set`'s first fixture attempt failed**
+   (`materialization.feature_rows_loaded == 0`) because both fiscal-year facts were filed
+   before `make_prices`' price history began, so Altman's exact-date-only price lookup
+   (`_price_close_on`, never interpolated) found no matching price row for either filing and
+   `altman_z_score` was `NaN` for every event — which then made `upsert_features`'s `dropna`
+   (which requires ALL 28 `fundamental_v1` columns non-null) drop every single row. Fixed by
+   moving the second fiscal year's `filed_date` to a date inside the price window (past the
+   50-day technical warm-up) so Altman's price lookup actually resolves once both fiscal years
+   are visible; the first fiscal year's filing intentionally stays before the price window
+   (harmless, since Piotroski is `NaN` there regardless, for the independent reason that no
+   prior FY exists yet at that cutoff — those rows get dropped anyway). This is a fixture
+   correctness issue in the new test, not a defect in Phase 4's pre-existing production code.
+4. **Promotion criteria in the new test's `RetrainingJobConfig` are deliberately relaxed**
+   (`min_total_return=-1.0`, `min_profit_factor=0.0`, `max_drawdown_floor=-1.0`,
+   `min_active_trades=1`) so the assertion "a model trains and infers" does not depend on a
+   synthetic sine-wave-plus-trend price series happening to be profitable under
+   `triple_barrier` labeling with a single `logistic_regression` candidate — `evaluate_promotion`
+   still enforces its own non-configurable `require_positive_edge_vs_no_trade` check
+   unconditionally (not exposed via `RetrainingJobConfig`), so the test is not a rubber stamp:
+   it was run for real against local Postgres and confirmed `succeeded: 1` with
+   `prediction_loaded: true` before these assertions were written, not assumed.
+
+### Issues Found
+
+None blocking. The two items in Deviations #3-4 above are fixture-authoring corrections made
+before the test was finalized, not open defects in shipped Phase 1-4 code.
+
+## Milestone: All 5 Phases Complete
+
+44/44 tasks across Phases 1-5 done (10/10 + 10/10 + 10/10 + 9/9 + 5/5). This is the final
+phase of the `fundamental-analysis` change per tasks.md's dependency graph — no further
+`sdd-apply` batches remain.
 
 ### Status
 
-39/39 Phase 1+2+3+4 tasks complete (10/10 + 10/10 + 10/10 + 9/9). Full suite: 393 passed, 0
-regressions. Ready for `sdd-verify` of Phase 1-4, or `sdd-apply` Phase 5.
+Full suite: **394 passed**, 0 regressions (393 baseline + 1 new in Phase 5), 1 pre-existing
+joblib/loky CPU-count warning, 27.54s. Ready for `sdd-verify` of the complete change
+(Phases 1-5).

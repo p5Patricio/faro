@@ -23,6 +23,7 @@ Faro ya cuenta con una base funcional para investigar, entrenar, evaluar y monit
 | Endurecimiento API | CORS acotado (origenes explicitos, credenciales solo con lista explicita), rate limiting per-IP en `/api/*`, logging estructurado de fallos que caen a modo demo. |
 | Notificaciones | Bot de Telegram (long-polling) para fallo de job, cambio de senal, degradacion de modelo y datos vencidos, con cooldown y dedupe. Webhook generico opcional. |
 | Scheduler | `ops/run_local_scheduler` orquestado por el Programador de Tareas de Windows (reemplaza el GitHub Actions que corria contra Supabase). |
+| Analisis fundamental | Feature set opcional `fundamental_v1` (Piotroski F-Score, Altman Z-Score, Novy-Marx gross profitability) sobre hechos XBRL de SEC EDGAR, calculado punto-en-el-tiempo por `filed_date` (nunca `period_end`). Solo acciones; ingestion standalone y apagada por defecto (no enganchada al job diario). Ver [Analisis Fundamental](README.md#analisis-fundamental) en el README. |
 | SDD | OpenSpec para planificar mejoras profesionales por bloques; base compartida de inteligencia financiera archivada. |
 | Frontend | Consola React decision-first: switcher de activos con command palette, tabs de evidencia, gauge de confianza con umbral, distribucion de probabilidad, sparkline de senales, drawer de perfil de riesgo, tablas unificadas, estados vacios que ensenan, pasada de accesibilidad (WCAG 2.2), auto-refresh. |
 | Calidad | Suite backend contra PostgreSQL real (~350 tests). Frontend con vitest + testing-library sobre los primitivos nuevos. |
@@ -68,3 +69,4 @@ cd ui && npm run lint && npm run build && npm test && npm audit
 - Aplicar la membresia actual del S&P 100 a historia 2020-2026 introduce sesgo de supervivencia; esta anotado en el snapshot y expuesto en `/api/universe`.
 - Criptomonedas y acciones tienen microestructuras distintas; deben evaluarse con costos, horarios, liquidez y volatilidad propios.
 - El sistema todavia no ejecuta ordenes reales. Esa ausencia es intencional hasta cerrar validacion, monitoreo y gobierno de riesgo.
+- `fundamental_v1`: un hueco en el historico de `prices` alrededor de una fecha de filing SEC ensancha el lag efectivo (nunca lo acorta) y el primer ano XBRL de un filer no produce F-Score de Piotroski (falta el ano fiscal previo) hasta el segundo `FY` filed. Ambos son comportamiento esperado y documentado, no un defecto. Una comparacion formal `fundamental_v1` vs `technical_v2` (walk-forward, mismo subconjunto de acciones) queda como seguimiento, no como bloqueo.

@@ -19,6 +19,7 @@ from brain.inference_job import (
     target_ticker_for_model_run,
 )
 from brain.labeling import BUY, HOLD, SELL, fixed_horizon_labels, triple_barrier_labels
+from brain.materialize_fundamentals import FundamentalMaterializationConfig, materialize_asset_fundamentals
 from brain.models import available_model_names, create_model, walk_forward_evaluate
 from brain.promotion import build_promoted_training_frame, select_candidate
 from brain.risk import RiskPolicy, apply_risk_policy
@@ -31,6 +32,7 @@ from brain.retraining_job import (
 from brain.run_retraining_job import DEFAULT_UNIVERSE_FILE, load_universe_disclosure
 from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest, select_scope_datasets
 from brain.selection import PromotionCriteria, evaluate_promotion, rank_candidate_summaries, score_candidate
+from collector.fundamentals import CONCEPT_CHAINS
 from collector.universe import load_universe_document, universe_disclosure
 
 
@@ -1035,6 +1037,145 @@ def test_run_retraining_job_skips_when_no_candidate_passes(monkeypatch) -> None:
     assert result["succeeded"] == 0
     assert result["failed"] == 0
     assert result["skipped"][0]["reason"] == "no_promotable_candidate"
+
+
+def _fundamental_fact_row(
+    logical_concept: str,
+    *,
+    period_end: str,
+    filed_date: str,
+    value: float,
+    fiscal_period: str = "FY",
+    accession: str = "acc-1",
+) -> dict:
+    """Build one raw `fundamental_facts` row via the real `CONCEPT_CHAINS`
+    (the same map `collector.fundamentals.parse_company_facts` and
+    `brain.fundamental_factors._select_as_of` read), so this fixture's tags
+    stay in sync with the production chains instead of duplicating them."""
+    expected_unit, chain = CONCEPT_CHAINS[logical_concept]
+    taxonomy, concept = chain[0]
+    return {
+        "taxonomy": taxonomy,
+        "concept": concept,
+        "unit": expected_unit,
+        "period_end": period_end,
+        "fiscal_year": None,
+        "fiscal_period": fiscal_period,
+        "filed_date": filed_date,
+        "accession": accession,
+        "value": value,
+    }
+
+
+def _two_fiscal_years_of_fundamental_facts() -> list[dict]:
+    """A stock with two clean fiscal years -- all 9 Piotroski signals TRUE,
+    Altman/Novy-Marx both finite. Same hand-built values
+    `tests/test_fundamental_factors.py::_two_year_facts` and
+    `tests/test_fundamental_lookahead.py::_two_year_facts` use (already
+    proven correct at the unit level). `year_one` is filed well before
+    `make_prices`' spine starts -- harmless, since Piotroski is NaN for
+    every row that only has one fiscal year available, so `upsert_features`
+    drops that whole warm-up window anyway regardless of `year_one`'s own
+    Altman resolution. `year_two` is filed ON a date inside the spine (past
+    the 50-day technical warm-up) so Altman's exact-date price lookup
+    (`_price_close_on`, never interpolated) actually resolves once both
+    fiscal years are visible -- this test proves the pipeline WIRING
+    end-to-end (materialize -> retrain), not the C1 lag itself, which
+    Phase 4's dedicated look-ahead suite already covers."""
+    year_one = dict(period_end="2021-12-31", filed_date="2022-02-10")
+    year_two = dict(period_end="2022-12-31", filed_date="2024-03-01")
+    return [
+        _fundamental_fact_row("assets", value=1000.0, **year_one),
+        _fundamental_fact_row("assets_current", value=400.0, **year_one),
+        _fundamental_fact_row("liabilities", value=600.0, **year_one),
+        _fundamental_fact_row("liabilities_current", value=200.0, **year_one),
+        _fundamental_fact_row("equity", value=400.0, **year_one),
+        _fundamental_fact_row("long_term_debt", value=300.0, **year_one),
+        _fundamental_fact_row("net_income", value=50.0, **year_one),
+        _fundamental_fact_row("cfo", value=40.0, **year_one),
+        _fundamental_fact_row("retained_earnings", value=150.0, **year_one),
+        _fundamental_fact_row("operating_income", value=80.0, **year_one),
+        _fundamental_fact_row("revenue", value=900.0, **year_one),
+        _fundamental_fact_row("cost_of_revenue", value=600.0, **year_one),
+        _fundamental_fact_row("shares_outstanding_wavg", value=100.0, **year_one),
+        _fundamental_fact_row("shares_outstanding_mve", value=101.0, **year_one),
+        _fundamental_fact_row("assets", value=1200.0, **year_two),
+        _fundamental_fact_row("assets_current", value=500.0, **year_two),
+        _fundamental_fact_row("liabilities", value=650.0, **year_two),
+        _fundamental_fact_row("liabilities_current", value=220.0, **year_two),
+        _fundamental_fact_row("equity", value=550.0, **year_two),
+        _fundamental_fact_row("long_term_debt", value=280.0, **year_two),
+        _fundamental_fact_row("net_income", value=90.0, **year_two),
+        _fundamental_fact_row("cfo", value=110.0, **year_two),
+        _fundamental_fact_row("retained_earnings", value=200.0, **year_two),
+        _fundamental_fact_row("operating_income", value=130.0, **year_two),
+        _fundamental_fact_row("revenue", value=1100.0, **year_two),
+        _fundamental_fact_row("cost_of_revenue", value=650.0, **year_two),
+        _fundamental_fact_row("shares_outstanding_wavg", value=98.0, **year_two),
+        _fundamental_fact_row("shares_outstanding_mve", value=99.0, **year_two),
+    ]
+
+
+def test_retraining_job_runs_on_fundamental_v1_feature_set(repository, tmp_path) -> None:
+    """Phase 5 acceptance (proposal.md Success Criteria / design.md slice 5):
+    `--feature-set fundamental_v1` materializes and retrains end-to-end on a
+    stock fixture, and a crypto asset in the same run appears in
+    `skipped_assets`, never as an error. Wires `materialize_asset_fundamentals`
+    (Phase 4) into `run_retraining_job` (pre-existing, feature-set-agnostic)
+    for real against the real `repository` fixture -- the first genuinely
+    end-to-end, no-monkeypatch retraining test in this file."""
+    stock_asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    repository.get_or_create_asset("btc-usd", asset_class="crypto")
+
+    prices = make_prices(250)
+    repository.upsert_prices(stock_asset_id, prices)
+    repository.upsert_fundamental_facts(
+        [{**row, "asset_id": stock_asset_id} for row in _two_fiscal_years_of_fundamental_facts()]
+    )
+    labels = triple_barrier_labels(prices, horizon=5, profit_take=0.01, stop_loss=0.01)
+    repository.upsert_labels(stock_asset_id, labels, label_method="triple_barrier", horizon=5)
+
+    materialization = materialize_asset_fundamentals(
+        repository, FundamentalMaterializationConfig(ticker="aapl")
+    )
+    assert materialization.skipped_assets == []
+    assert materialization.feature_rows_loaded > 0
+
+    result = run_retraining_job(
+        repository=repository,
+        tickers=["AAPL", "BTC-USD"],
+        config=RetrainingJobConfig(
+            feature_set="fundamental_v1",
+            label_method="triple_barrier",
+            horizon=5,
+            model_names=["logistic_regression"],
+            confidence_thresholds=[0.55],
+            scopes=["local"],
+            splits=3,
+            min_rows=30,
+            min_total_return=-1.0,
+            min_profit_factor=0.0,
+            max_drawdown_floor=-1.0,
+            min_active_trades=1,
+            upload_artifacts=False,
+            model_dir=str(tmp_path),
+        ),
+    )
+
+    # A crypto asset materializes zero fundamental_v1 rows (Phase 4's
+    # stock-only scope gate) and is therefore never even a candidate
+    # dataset -- it surfaces in skipped_assets, never in errors, and is
+    # never resolved as a retraining target.
+    assert result["failed"] == 0
+    assert result["errors"] == []
+    assert result["attempted"] == 1
+    assert result["succeeded"] == 1
+    assert result["results"][0]["ticker"] == "AAPL"
+    assert result["results"][0]["prediction_loaded"] is True
+
+    skipped_tickers = {item["ticker"] for item in result["skipped_assets"]}
+    assert skipped_tickers == {"BTC-USD"}
+    assert result["skipped_assets"][0]["reason"] == "no_materialized_dataset"
 
 
 def test_apply_risk_policy_sizes_confident_trade() -> None:

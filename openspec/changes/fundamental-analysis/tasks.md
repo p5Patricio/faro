@@ -132,11 +132,11 @@ Files: `config/targets.stocks.json` (new), `brain/run_retraining_job.py` (help t
 choices), `README.md` + `ESTADO_PROYECTO.md` (runbook note), `tests/test_brain_pipeline.py` (+cases).
 Estimate ~215 lines. `depends_on`: Phase 4 (`fundamental_v1` materializable).
 
-- [ ] 5.1 RED: in `tests/test_brain_pipeline.py` add `test_retraining_job_runs_on_fundamental_v1_feature_set` — on a stock fixture, `materialize_asset_fundamentals` then `run_retraining_job(RetrainingJobConfig(feature_set="fundamental_v1"))` completes end-to-end (a model trains and infers); a crypto asset in the same run appears in `skipped_assets`, never as an error.
-- [ ] 5.2 GREEN: create `config/targets.stocks.json` — a stock-only target list for retraining (no crypto tickers), matching the shape `RetrainingJobConfig.default_targets` / `--tickers` expects.
-- [ ] 5.3 GREEN: in `brain/run_retraining_job.py`, widen `--feature-set` (add `fundamental_v1` to any constrained `choices=[...]`) and extend help text (~8 lines) noting the stock-only targets file and the ingestion prerequisite.
-- [ ] 5.4 GREEN: add a "Fundamental analysis" runbook section to `README.md` and a note to `ESTADO_PROYECTO.md` — the standalone weekly Windows Task Scheduler entry for `py -3.14 -m collector.run_fundamental_ingestion` (OFF by default, NOT wired into `collector/run_market_data_job.py`), then `py -3.14 -m brain.materialize_fundamentals --ticker <T>` and `py -3.14 -m brain.run_retraining_job --feature-set fundamental_v1 --tickers-file config/targets.stocks.json`; state the conservative trading-calendar-gap bias and the ~1-year first-XBRL-year F-Score warm-up as expected behavior.
-- [ ] 5.5 Leave `collector/run_market_data_job.py` unchanged (no daily-job hook); record the `fundamental_v1` vs `technical_v2` walk-forward comparison as a documented follow-up, not a gate.
+- [x] 5.1 RED: in `tests/test_brain_pipeline.py` add `test_retraining_job_runs_on_fundamental_v1_feature_set` — on a stock fixture, `materialize_asset_fundamentals` then `run_retraining_job(RetrainingJobConfig(feature_set="fundamental_v1"))` completes end-to-end (a model trains and infers); a crypto asset in the same run appears in `skipped_assets`, never as an error.
+- [x] 5.2 GREEN: create `config/targets.stocks.json` — a stock-only target list for retraining (no crypto tickers), matching the shape `RetrainingJobConfig.default_targets` / `--tickers` expects.
+- [x] 5.3 GREEN: in `brain/run_retraining_job.py`, widen `--feature-set` (add `fundamental_v1` to any constrained `choices=[...]`) and extend help text (~8 lines) noting the stock-only targets file and the ingestion prerequisite.
+- [x] 5.4 GREEN: add a "Fundamental analysis" runbook section to `README.md` and a note to `ESTADO_PROYECTO.md` — the standalone weekly Windows Task Scheduler entry for `py -3.14 -m collector.run_fundamental_ingestion` (OFF by default, NOT wired into `collector/run_market_data_job.py`), then `py -3.14 -m brain.materialize_fundamentals --ticker <T>` and `py -3.14 -m brain.run_retraining_job --feature-set fundamental_v1 --tickers-file config/targets.stocks.json`; state the conservative trading-calendar-gap bias and the ~1-year first-XBRL-year F-Score warm-up as expected behavior.
+- [x] 5.5 Leave `collector/run_market_data_job.py` unchanged (no daily-job hook); record the `fundamental_v1` vs `technical_v2` walk-forward comparison as a documented follow-up, not a gate.
 
 ## Dependency graph
 
@@ -152,3 +152,8 @@ Strictly sequential (`stacked-to-main`, `auto-chain`): each phase depends only o
 plus Phase 3's extra gate on Phase 2's per-concept coverage report. No two phases can run in parallel —
 every slice imports or extends the previous slice's new public surface. Each phase ends green and is
 independently revertible per design §9.
+
+## Status
+
+All 44 tasks across Phases 1-5 are complete (10/10 + 10/10 + 10/10 + 9/9 + 5/5). Full suite:
+394 passed, 0 regressions (393 baseline + 1 new in Phase 5). Ready for `sdd-verify`.

@@ -378,6 +378,48 @@ schtasks /Delete /TN "Faro\DailyOperationalCycle" /F
 
 Los reportes JSON quedan en `reports/*.json` (gitignorado) y el log de cada corrida en `logs/*.log` (gitignorado).
 
+## Analisis Fundamental
+
+El feature set opcional `fundamental_v1` (`technical_v2` mas tres factores compuestos --
+`piotroski_f_score`, `altman_z_score`, `gross_profitability` -- calculados punto-en-el-tiempo
+por `filed_date` de SEC EDGAR, nunca por `period_end`) es solo para acciones; los activos
+cripto no tienen hechos XBRL, no generan filas `fundamental_v1` y quedan fuera automaticamente
+(`skipped_assets`, nunca un error).
+
+Flujo, en orden (cada paso depende de los datos que deja el anterior):
+
+1. **Ingestion (standalone, apagada por defecto).** `python -m collector.run_fundamental_ingestion`
+   descarga `companyfacts` de SEC EDGAR por CIK y puebla `fundamental_facts` (requiere
+   `SEC_USER_AGENT` en el entorno). Este job **no** esta enganchado a
+   `collector/run_market_data_job.py`: es una tarea programada semanal independiente en el
+   Programador de Tareas de Windows, a agregar junto a las dos existentes en
+   `ops/register_local_jobs.ps1` (ver [Scheduler Local](#scheduler-local)).
+2. **Materializacion por ticker.** `py -3.14 -m brain.materialize_fundamentals --ticker <TICKER>`
+   lee `fundamental_facts` + precios, calcula los tres factores con un lag de al menos 1 dia
+   de trading sobre la fecha de filing (`filed_date`, nunca `period_end`), y escribe
+   `features_daily` bajo `feature_set='fundamental_v1'`.
+3. **Reentrenamiento.** `py -3.14 -m brain.run_retraining_job --feature-set fundamental_v1 --targets-file config/targets.stocks.json`
+   entrena sobre `fundamental_v1` en vez de `technical_v2`. `config/targets.stocks.json` es la
+   lista de targets solo-acciones (sin cripto) para este feature set, separada de
+   `config/targets.core.json` (que sigue siendo cripto-pesada y es el default cuando no se
+   pasa `--targets-file`).
+
+Comportamiento esperado, no un defecto:
+
+- **El lag efectivo nunca se reduce, solo se ensancha.** El calendario usado es el propio
+  historico de precios del activo, no un calendario bursatil externo; un hueco en `prices`
+  alrededor de una fecha de filing alarga el lag de "1 dia de trading" a lo que dure el hueco.
+  Nunca se acorta: es una decision conservadora (evita look-ahead), no un bug.
+- **~1 ano de calentamiento en el primer ano XBRL.** El F-Score de Piotroski necesita un ano
+  fiscal anterior para sus senales interanuales; en el primer ano de un filer no hay ano
+  previo, asi que esas filas quedan en `NaN` y se descartan (`dropna` de `upsert_features`)
+  hasta que exista un segundo `FY`. Reduce las filas disponibles al arrancar, pero no es un
+  error.
+- Una comparacion formal `fundamental_v1` vs `technical_v2` (walk-forward, mismo subconjunto
+  de acciones) queda como seguimiento documentado, no como bloqueo de este cambio: el gate de
+  promocion existente ya adopta `fundamental_v1` por ticker solo cuando supera al incumbente
+  `technical_v2` en `objective_score`.
+
 ## Perfiles de Riesgo
 
 Los endpoints de perfil de riesgo no requieren autenticacion; el alcance (`scope_type`/`scope_value`) reemplaza al usuario:

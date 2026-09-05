@@ -41,7 +41,22 @@ def parse_args() -> argparse.Namespace:
         default=12,
         help="Cap how many datasets participate in a training scope (deterministic, highest-row-count first)",
     )
-    parser.add_argument("--feature-set", default="technical_v2")
+    parser.add_argument(
+        "--feature-set",
+        default="technical_v2",
+        help=(
+            "Feature set to train on. No fixed choices list here: any name registered in "
+            "brain.features.FEATURE_COLUMNS_BY_SET is accepted, including the opt-in "
+            "'fundamental_v1' overlay (technical_v2 plus piotroski_f_score, altman_z_score, "
+            "gross_profitability) added by the fundamental-analysis change. 'fundamental_v1' "
+            "is stock-only -- pair it with --targets-file config/targets.stocks.json (or an "
+            "explicit --tickers list of stocks) rather than the crypto-heavy "
+            "config/targets.core.json default. It also has two prerequisites that must run "
+            "first: 'python -m collector.run_fundamental_ingestion' (needs SEC_USER_AGENT set) "
+            "to populate fundamental_facts, then 'python -m brain.materialize_fundamentals "
+            "--ticker <T>' per ticker to materialize the fundamental_v1 rows this job reads."
+        ),
+    )
     parser.add_argument("--label-method", choices=["fixed_horizon", "triple_barrier"], default="triple_barrier")
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--models", default=",".join(available_model_names()))
