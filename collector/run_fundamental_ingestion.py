@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any
 
 import psycopg
+from dotenv import load_dotenv
 
 from collector.fundamentals import CONCEPT_CHAINS, parse_company_facts
 from collector.ingestion_audit import RepositoryIngestionRecorder
@@ -203,6 +204,12 @@ def _parse_ciks(value: str | None) -> list[str] | None:
 
 
 def main() -> None:
+    # Must run BEFORE SecEdgarConfig.from_env() -- that call reads
+    # os.getenv("SEC_USER_AGENT") directly, and .env is otherwise only
+    # loaded later, inside LocalPostgresConfig.from_env(). override=True
+    # so a stale OS-level env var never shadows a fresher .env value (same
+    # fix as ops/notify_operational_job.py).
+    load_dotenv(override=True)
     args = parse_args()
     config = SecEdgarConfig.from_env()
     if config is None:

@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
+from dotenv import load_dotenv
 
 from collector.ingestion_audit import RepositoryIngestionRecorder
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
@@ -151,6 +152,9 @@ def _parse_tickers(value: str | None) -> list[str] | None:
 
 
 def main() -> None:
+    # Must run BEFORE SecEdgarConfig.from_env() -- see the identical fix in
+    # collector/run_fundamental_ingestion.py for the full rationale.
+    load_dotenv(override=True)
     args = parse_args()
     config = SecEdgarConfig.from_env()
     if config is None:
