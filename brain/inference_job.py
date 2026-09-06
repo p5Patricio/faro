@@ -30,10 +30,15 @@ def load_promoted_model_runs(
     )
     selected = []
     skipped = []
+    # model_runs arrives newest-first (ascending=False). Only the most
+    # recent promoted run per ticker serves predictions -- a later
+    # promotion supersedes an earlier one regardless of feature set, so a
+    # freshly adopted fundamental_v1 model replaces the technical_v2 one it
+    # beat instead of both writing competing predictions (see
+    # find_incumbent_model_run: adoption is already gated on objective_score).
+    seen_tickers: set[str] = set()
     for model_run in model_runs:
-        if include_unpromoted or is_promoted_model_run(model_run):
-            selected.append(model_run)
-        else:
+        if not (include_unpromoted or is_promoted_model_run(model_run)):
             skipped.append(
                 {
                     "model_run_id": model_run.get("id"),
@@ -42,6 +47,23 @@ def load_promoted_model_runs(
                     "reason": "not_promoted",
                 }
             )
+            continue
+
+        ticker = target_ticker_for_model_run(model_run, required=False)
+        if ticker is not None:
+            if ticker in seen_tickers:
+                skipped.append(
+                    {
+                        "model_run_id": model_run.get("id"),
+                        "model_name": model_run.get("model_name"),
+                        "model_version": model_run.get("model_version"),
+                        "reason": "superseded_by_newer_promotion",
+                    }
+                )
+                continue
+            seen_tickers.add(ticker)
+
+        selected.append(model_run)
     return selected, skipped
 
 

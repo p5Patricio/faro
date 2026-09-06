@@ -120,7 +120,6 @@ def run_retraining_job(
             incumbent = find_incumbent_model_run(
                 repository,
                 ticker=ticker,
-                feature_set=job_config.feature_set,
                 label_method=job_config.label_method,
                 horizon=job_config.horizon,
                 limit=job_config.incumbent_lookup_limit,
@@ -308,18 +307,24 @@ def find_incumbent_model_run(
     repository: LocalPostgresRepository,
     *,
     ticker: str,
-    feature_set: str,
     label_method: str,
     horizon: int,
     limit: int = 100,
 ) -> dict[str, Any] | None:
+    """The current best promoted model for this ticker, compared ACROSS all
+    feature sets. A `fundamental_v1` candidate competes against the model
+    actually serving the ticker (usually `technical_v2`), not only against a
+    previous `fundamental_v1` run -- so a new feature set is adopted only
+    when it genuinely beats the incumbent's `objective_score` (fundamental-
+    analysis proposal.md, Product Decision 2: best score wins, per-ticker
+    adoption is automatic). `label_method` and `horizon` must still match:
+    comparing a 5-day model against a 10-day one is not apples to apples.
+    """
     model_runs = repository.get_model_runs(limit=limit, ascending=False)
     for model_run in model_runs:
         if not is_promoted_model_run(model_run):
             continue
         if target_ticker_for_model_run(model_run, required=False) != ticker.upper():
-            continue
-        if model_run.get("feature_set") != feature_set:
             continue
         if model_run.get("label_method") != label_method:
             continue

@@ -692,6 +692,39 @@ def test_load_promoted_model_runs_filters_unpromoted_runs() -> None:
     assert min_confidence_for_model_run(promoted) == 0.65
 
 
+def test_load_promoted_model_runs_keeps_only_newest_per_ticker() -> None:
+    # get_model_runs returns newest-first; the older AAPL run is a different
+    # feature set but the same ticker, so only the newest one serves.
+    newer_aapl = {
+        "id": "run-new",
+        "model_name": "extra_trees",
+        "model_version": "v2",
+        "feature_set": "fundamental_v1",
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "AAPL"},
+    }
+    older_aapl = {
+        "id": "run-old",
+        "model_name": "extra_trees",
+        "model_version": "v1",
+        "feature_set": "technical_v2",
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "AAPL"},
+    }
+    msft = {
+        "id": "run-msft",
+        "model_name": "random_forest",
+        "model_version": "v1",
+        "feature_set": "technical_v2",
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "MSFT"},
+    }
+    repository = FakeModelRunRepository([newer_aapl, older_aapl, msft])
+
+    selected, skipped = load_promoted_model_runs(repository, limit=50)
+
+    assert [run["id"] for run in selected] == ["run-new", "run-msft"]
+    superseded = [entry["model_run_id"] for entry in skipped if entry["reason"] == "superseded_by_newer_promotion"]
+    assert superseded == ["run-old"]
+
+
 class FakeInferenceRepository:
     """Minimal repository stub for `run_latest_inference_job`'s previous-action
     read (Req: Signal Alerts Fire Only on Action Transition)."""
@@ -987,6 +1020,65 @@ def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monk
     assert result["failed"] == 0
     assert result["skipped"][0]["reason"] == "candidate_not_better_than_incumbent"
     assert result["skipped"][0]["incumbent_model_run_id"] == "run-incumbent"
+
+
+def test_incumbent_lookup_compares_across_feature_sets(monkeypatch) -> None:
+    """A fundamental_v1 candidate is measured against the technical_v2 model
+    already serving the ticker, not only against a prior fundamental_v1 run
+    (proposal.md, fundamental-analysis, Product Decision 2)."""
+    target = AssetDataset(
+        asset_id="aapl-id",
+        ticker="AAPL",
+        asset_class="stock",
+        dataset=pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")}),
+    )
+    candidate = {
+        "candidate_id": "AAPL::extra_trees::confidence_0.6500::local",
+        "promotion": {"status": "pass"},
+        "model_name": "extra_trees",
+        "scope": "local",
+        "target_ticker": "AAPL",
+        "min_confidence": 0.65,
+        "objective_score": 0.30,
+    }
+    technical_incumbent = {
+        "id": "run-technical",
+        "model_name": "extra_trees",
+        "model_version": "v1",
+        "feature_set": "technical_v2",
+        "label_method": "triple_barrier",
+        "horizon": 5,
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "AAPL"},
+        "metrics": {"promotion": {"candidate": {"candidate_id": "old", "objective_score": 0.55}}},
+    }
+
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr(
+        "brain.retraining_job.run_candidate_matrix",
+        lambda *args, **kwargs: {"results": [], "ranking": [candidate], "errors": []},
+    )
+
+    def fail_if_promoted(**kwargs):
+        raise AssertionError("A worse cross-feature-set candidate must not be promoted")
+
+    monkeypatch.setattr("brain.retraining_job.promote_candidate_from_report", fail_if_promoted)
+
+    result = run_retraining_job(
+        repository=FakeRetrainingRepository([technical_incumbent]),
+        tickers=["AAPL"],
+        config=RetrainingJobConfig(
+            model_names=["extra_trees"],
+            confidence_thresholds=[0.65],
+            scopes=["local"],
+            feature_set="fundamental_v1",
+            upload_artifacts=False,
+            min_active_trades=1,
+        ),
+    )
+
+    assert result["succeeded"] == 0
+    assert result["skipped"][0]["reason"] == "candidate_not_better_than_incumbent"
+    assert result["skipped"][0]["incumbent_model_run_id"] == "run-technical"
 
 
 def test_compare_candidate_to_incumbent_allows_real_improvement() -> None:
