@@ -36,16 +36,32 @@ if (-not (Test-Path $Script)) {
     throw "Cannot find $Script - run this from the repo's ops/ folder."
 }
 
-Write-Host "Registering Faro\LocalAppServers (repo root: $RepoRoot)"
+Write-Host "Registering Faro\LocalAppServers for $env:USERNAME (repo root: $RepoRoot)"
 
-# ONLOGON trigger, current user, non-elevated, hidden. Overwrites (/F) an
-# existing task of the same name so re-running this is idempotent.
+# ONLOGON trigger, scoped to the CURRENT user with /RU. Without /RU an
+# ONLOGON task registers against the Users group, which needs elevation;
+# /RU "$env:USERNAME" keeps it a per-user task that registers from a normal
+# prompt. /RL LIMITED (no elevation at run time), /F overwrites an existing
+# task so re-running is idempotent. schtasks is an external exe -- its
+# failures do NOT throw -- so $LASTEXITCODE is checked explicitly below.
 schtasks /Create `
     /TN "Faro\LocalAppServers" `
     /SC ONLOGON `
+    /RU "$env:USERNAME" `
     /RL LIMITED `
     /F `
     /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Script`""
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "schtasks failed (exit $LASTEXITCODE) - the task was NOT registered." -ForegroundColor Red
+    Write-Host "If it said 'Access is denied', re-run this script from an elevated"
+    Write-Host "PowerShell (right-click -> Run as administrator), or create a"
+    Write-Host "top-level task instead of one under the Faro\ folder:"
+    Write-Host "  schtasks /Create /TN FaroLocalAppServers /SC ONLOGON /RU `"$env:USERNAME`" /RL LIMITED /F ``"
+    Write-Host "    /TR `"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$Script\`"`""
+    exit 1
+}
 
 Write-Host ""
 Write-Host "Registered. It fires at your next logon. Commands:"
