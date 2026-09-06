@@ -11,7 +11,15 @@ FALSY_VALUES = {"0", "false", "no", "off"}
 # Local dev servers only. Production MUST set API_CORS_ORIGINS explicitly.
 # A bare "*" was the old default and, combined with credentialed CORS, let
 # any site on the internet make authenticated requests against the API.
-DEFAULT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
+# 47319 is the frontend port used by ops/run_local_app.ps1 (deliberately
+# outside the common dev range); 5173 is Vite's default, kept for anyone
+# running `npm run dev` without that script.
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:47319",
+    "http://127.0.0.1:47319",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
 DEFAULT_RATE_LIMIT_PER_MINUTE = 240
 
 
