@@ -23,11 +23,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def _write_json_atomic(path: Path, obj: object) -> None:
+    """Write via a temp file + os.replace so a kill mid-write never leaves a
+    truncated / zero-byte state file (the process can die at any instant --
+    console-close, log-off, Monitor timeout)."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = REPO_ROOT / "logs"
@@ -127,7 +137,7 @@ def main() -> int:
                 outcome, detail = "error", f"unparseable report: {exc}"
 
         state[ticker] = {"outcome": outcome, "detail": detail, "seconds": seconds, "at": _now()}
-        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        _write_json_atomic(state_path, state)
         done = len(state)
         log(f"[{done}/{len(targets)}] {ticker:6} {outcome:11} {seconds:6.1f}s  {detail}")
 
@@ -139,4 +149,18 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Launched via pythonw (no console): an uncaught exception would vanish,
+    # so pin it to a file before re-raising.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException as exc:  # noqa: BLE001
+        import traceback
+
+        crash = LOG_DIR / "retrain_batched_crash.log"
+        crash.parent.mkdir(exist_ok=True)
+        with crash.open("a", encoding="utf-8") as fh:
+            fh.write(f"\n--- {datetime.now(timezone.utc).astimezone():%Y-%m-%d %H:%M:%S} ---\n")
+            fh.write("".join(traceback.format_exception(exc)))
+        raise
