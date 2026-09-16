@@ -28,9 +28,900 @@
   },
   {
     "provider": "yfinance",
+    "ticker": "ABBV",
+    "asset_ticker": "ABBV",
+    "name": "AbbVie",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "ABT",
+    "asset_ticker": "ABT",
+    "name": "Abbott Laboratories",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "ACN",
+    "asset_ticker": "ACN",
+    "name": "Accenture",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "ADBE",
+    "asset_ticker": "ADBE",
+    "name": "Adobe Inc.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AMAT",
+    "asset_ticker": "AMAT",
+    "name": "Applied Materials",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AMD",
+    "asset_ticker": "AMD",
+    "name": "Advanced Micro Devices",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AMGN",
+    "asset_ticker": "AMGN",
+    "name": "Amgen",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AMT",
+    "asset_ticker": "AMT",
+    "name": "American Tower",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AMZN",
+    "asset_ticker": "AMZN",
+    "name": "Amazon",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AVGO",
+    "asset_ticker": "AVGO",
+    "name": "Broadcom",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "AXP",
+    "asset_ticker": "AXP",
+    "name": "American Express",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BA",
+    "asset_ticker": "BA",
+    "name": "Boeing",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BAC",
+    "asset_ticker": "BAC",
+    "name": "Bank of America",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BKNG",
+    "asset_ticker": "BKNG",
+    "name": "Booking Holdings",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BLK",
+    "asset_ticker": "BLK",
+    "name": "BlackRock",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BMY",
+    "asset_ticker": "BMY",
+    "name": "Bristol Myers Squibb",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BNY",
+    "asset_ticker": "BNY",
+    "name": "BNY Mellon",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "BRK-B",
+    "asset_ticker": "BRK-B",
+    "name": "Berkshire Hathaway (Class B)",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "C",
+    "asset_ticker": "C",
+    "name": "Citigroup",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CAT",
+    "asset_ticker": "CAT",
+    "name": "Caterpillar Inc.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CL",
+    "asset_ticker": "CL",
+    "name": "Colgate-Palmolive",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CMCSA",
+    "asset_ticker": "CMCSA",
+    "name": "Comcast",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "COF",
+    "asset_ticker": "COF",
+    "name": "Capital One",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "COP",
+    "asset_ticker": "COP",
+    "name": "ConocoPhillips",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "COST",
+    "asset_ticker": "COST",
+    "name": "Costco",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CRM",
+    "asset_ticker": "CRM",
+    "name": "Salesforce",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CSCO",
+    "asset_ticker": "CSCO",
+    "name": "Cisco",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CVS",
+    "asset_ticker": "CVS",
+    "name": "CVS Health",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "CVX",
+    "asset_ticker": "CVX",
+    "name": "Chevron Corporation",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "DE",
+    "asset_ticker": "DE",
+    "name": "Deere & Company",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "DHR",
+    "asset_ticker": "DHR",
+    "name": "Danaher Corporation",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "DIS",
+    "asset_ticker": "DIS",
+    "name": "Walt Disney Company",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "DUK",
+    "asset_ticker": "DUK",
+    "name": "Duke Energy",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "EMR",
+    "asset_ticker": "EMR",
+    "name": "Emerson Electric",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "FDX",
+    "asset_ticker": "FDX",
+    "name": "FedEx",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GD",
+    "asset_ticker": "GD",
+    "name": "General Dynamics",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GE",
+    "asset_ticker": "GE",
+    "name": "GE Aerospace",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GEV",
+    "asset_ticker": "GEV",
+    "name": "GE Vernova",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GILD",
+    "asset_ticker": "GILD",
+    "name": "Gilead Sciences",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GM",
+    "asset_ticker": "GM",
+    "name": "General Motors",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GOOG",
+    "asset_ticker": "GOOG",
+    "name": "Alphabet Inc. (Class C)",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GOOGL",
+    "asset_ticker": "GOOGL",
+    "name": "Alphabet Inc. (Class A)",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "GS",
+    "asset_ticker": "GS",
+    "name": "Goldman Sachs",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "HD",
+    "asset_ticker": "HD",
+    "name": "Home Depot",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "HON",
+    "asset_ticker": "HON",
+    "name": "Honeywell International",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "IBM",
+    "asset_ticker": "IBM",
+    "name": "IBM",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "INTC",
+    "asset_ticker": "INTC",
+    "name": "Intel",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "INTU",
+    "asset_ticker": "INTU",
+    "name": "Intuit",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "ISRG",
+    "asset_ticker": "ISRG",
+    "name": "Intuitive Surgical",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "JNJ",
+    "asset_ticker": "JNJ",
+    "name": "Johnson & Johnson",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "JPM",
+    "asset_ticker": "JPM",
+    "name": "JPMorgan Chase",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "KO",
+    "asset_ticker": "KO",
+    "name": "Coca-Cola Company",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "LIN",
+    "asset_ticker": "LIN",
+    "name": "Linde plc",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "LLY",
+    "asset_ticker": "LLY",
+    "name": "Eli Lilly and Company",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "LMT",
+    "asset_ticker": "LMT",
+    "name": "Lockheed Martin",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "LOW",
+    "asset_ticker": "LOW",
+    "name": "Lowe's",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "LRCX",
+    "asset_ticker": "LRCX",
+    "name": "Lam Research",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MA",
+    "asset_ticker": "MA",
+    "name": "Mastercard",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MCD",
+    "asset_ticker": "MCD",
+    "name": "McDonald's",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MDLZ",
+    "asset_ticker": "MDLZ",
+    "name": "Mondelez International",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MDT",
+    "asset_ticker": "MDT",
+    "name": "Medtronic",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "META",
+    "asset_ticker": "META",
+    "name": "Meta Platforms",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MMM",
+    "asset_ticker": "MMM",
+    "name": "3M",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MO",
+    "asset_ticker": "MO",
+    "name": "Altria",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MRK",
+    "asset_ticker": "MRK",
+    "name": "Merck & Co.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MS",
+    "asset_ticker": "MS",
+    "name": "Morgan Stanley",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
     "ticker": "MSFT",
     "asset_ticker": "MSFT",
-    "name": "Microsoft Corp.",
+    "name": "Microsoft",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "MU",
+    "asset_ticker": "MU",
+    "name": "Micron Technology",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "NEE",
+    "asset_ticker": "NEE",
+    "name": "NextEra Energy",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "NFLX",
+    "asset_ticker": "NFLX",
+    "name": "Netflix, Inc.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "NKE",
+    "asset_ticker": "NKE",
+    "name": "Nike, Inc.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "NOW",
+    "asset_ticker": "NOW",
+    "name": "ServiceNow",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "NVDA",
+    "asset_ticker": "NVDA",
+    "name": "Nvidia",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "ORCL",
+    "asset_ticker": "ORCL",
+    "name": "Oracle Corporation",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "PEP",
+    "asset_ticker": "PEP",
+    "name": "PepsiCo",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "PFE",
+    "asset_ticker": "PFE",
+    "name": "Pfizer",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "PG",
+    "asset_ticker": "PG",
+    "name": "Procter & Gamble",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "PLTR",
+    "asset_ticker": "PLTR",
+    "name": "Palantir Technologies",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "PM",
+    "asset_ticker": "PM",
+    "name": "Philip Morris International",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "QCOM",
+    "asset_ticker": "QCOM",
+    "name": "Qualcomm",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "RTX",
+    "asset_ticker": "RTX",
+    "name": "RTX Corporation",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "SBUX",
+    "asset_ticker": "SBUX",
+    "name": "Starbucks",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "SCHW",
+    "asset_ticker": "SCHW",
+    "name": "Charles Schwab Corporation",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "SO",
+    "asset_ticker": "SO",
+    "name": "Southern Company",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "SPG",
+    "asset_ticker": "SPG",
+    "name": "Simon Property Group",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "T",
+    "asset_ticker": "T",
+    "name": "AT&T",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "TMO",
+    "asset_ticker": "TMO",
+    "name": "Thermo Fisher Scientific",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "TMUS",
+    "asset_ticker": "TMUS",
+    "name": "T-Mobile US",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "TSLA",
+    "asset_ticker": "TSLA",
+    "name": "Tesla, Inc.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "TXN",
+    "asset_ticker": "TXN",
+    "name": "Texas Instruments",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "UBER",
+    "asset_ticker": "UBER",
+    "name": "Uber",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "UNH",
+    "asset_ticker": "UNH",
+    "name": "UnitedHealth Group",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "UNP",
+    "asset_ticker": "UNP",
+    "name": "Union Pacific Corporation",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "UPS",
+    "asset_ticker": "UPS",
+    "name": "United Parcel Service",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "USB",
+    "asset_ticker": "USB",
+    "name": "U.S. Bancorp",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "V",
+    "asset_ticker": "V",
+    "name": "Visa Inc.",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "VZ",
+    "asset_ticker": "VZ",
+    "name": "Verizon",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "WFC",
+    "asset_ticker": "WFC",
+    "name": "Wells Fargo",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "WMT",
+    "asset_ticker": "WMT",
+    "name": "Walmart",
+    "asset_class": "stock",
+    "interval": "1d",
+    "start": "2020-01-01"
+  },
+  {
+    "provider": "yfinance",
+    "ticker": "XOM",
+    "asset_ticker": "XOM",
+    "name": "ExxonMobil",
     "asset_class": "stock",
     "interval": "1d",
     "start": "2020-01-01"
