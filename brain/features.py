@@ -41,9 +41,19 @@ FEATURE_COLUMNS_BY_SET = {
 }
 FEATURE_COLUMNS = FEATURE_COLUMNS_TECHNICAL_V1
 
-# Asset-class -> feature-set-name overlay registry. Empty here; sibling changes
-# (e.g. asset-class-profile-overlays) register entries such as {"crypto": "crypto_v1"}.
-FEATURE_SET_OVERLAYS_BY_ASSET_CLASS: dict[str, str] = {}
+# Asset-class -> feature-set-name overlay registry. "crypto" resolves to
+# technical_alpha_v1 (see that feature set's registration below): every
+# column in technical_alpha_v1 (the technical_v2 spine plus the 19
+# Alpha158-inspired factors) is a pure function of OHLCV prices, which every
+# crypto asset has, unlike fundamental_v1 (SEC XBRL filings -- stock-only, no
+# equivalent data exists for a cryptocurrency). This entry only takes effect
+# for a caller that actually resolves a feature set via
+# `feature_set_for_asset_class`/`feature_columns_for_set(..., asset_class=...)`
+# -- as of this change, no production call site does (every training/
+# inference entry point still takes an explicit `feature_set` string), so
+# this registers the POLICY without yet being wired into an automatic
+# per-asset-class default; see tests/test_crypto_feature_set.py.
+FEATURE_SET_OVERLAYS_BY_ASSET_CLASS: dict[str, str] = {"crypto": "technical_alpha_v1"}
 DEFAULT_BASE_FEATURE_SET = "technical_v2"
 
 
@@ -82,6 +92,67 @@ FUNDAMENTAL_OVERLAY_COLUMNS = [
 ]
 FEATURE_COLUMNS_BY_SET["fundamental_v1"] = compose_feature_set(
     "technical_v2", FUNDAMENTAL_OVERLAY_COLUMNS
+)
+
+# technical-alpha (Phase 5): an opt-in overlay of Qlib "Alpha158"-inspired
+# technical factors (price-shape, momentum, rolling volatility, moving-average
+# ratio, volume ratio) -- see brain.technical_factors_v2's module docstring for
+# the exact formulas and the no-look-ahead discipline. As with
+# FUNDAMENTAL_OVERLAY_COLUMNS above, `compose_feature_set` returns a NEW list,
+# so technical_v2's list object is never mutated or aliased. These 19 columns
+# MUST equal set(brain.technical_factors_v2.FACTOR_KEYS) -- asserted by a
+# contract test in tests/test_feature_set_resolution.py. This module
+# intentionally never imports brain.technical_factors_v2 (same acyclic-import
+# reasoning as the fundamental_v1 overlay above), so the two lists are declared
+# independently and kept in sync by the contract test, not by a shared import.
+TECHNICAL_ALPHA_OVERLAY_COLUMNS = [
+    "candle_body_ratio",
+    "candle_range_ratio",
+    "candle_upper_shadow_ratio",
+    "candle_lower_shadow_ratio",
+    "roc_5d",
+    "roc_10d",
+    "roc_20d",
+    "roc_60d",
+    "ret_volatility_5d",
+    "ret_volatility_10d",
+    "ret_volatility_20d",
+    "ret_volatility_60d",
+    "ma_ratio_5d",
+    "ma_ratio_10d",
+    "ma_ratio_20d",
+    "ma_ratio_60d",
+    "volume_ratio_5d",
+    "volume_ratio_10d",
+    "volume_ratio_20d",
+]
+FEATURE_COLUMNS_BY_SET["technical_alpha_v1"] = compose_feature_set(
+    "technical_v2", TECHNICAL_ALPHA_OVERLAY_COLUMNS
+)
+
+# news-sentiment (Phase 6, point 4): an opt-in overlay of two FinBERT-scored,
+# exponentially-decayed news-sentiment factors -- see
+# brain.sentiment_factors's module docstring for the point-in-time
+# (published_at <= cutoff) discipline and the exact window/half-life
+# definition. Composed onto the bare technical_v2 spine, same base
+# fundamental_v1 uses -- not technical_alpha_v1 -- so this feature set stays
+# independent of the technical-alpha materializer (see
+# brain/materialize_sentiment.py's module docstring). Unlike
+# fundamental_v1, there is no stock-only restriction: a news-driven signal
+# is at least as plausible for crypto as it is for stocks. As with the two
+# overlays above, compose_feature_set returns a NEW list, so technical_v2's
+# list object is never mutated or aliased. These two columns MUST equal
+# set(brain.sentiment_factors.FACTOR_KEYS) -- asserted by a contract test in
+# tests/test_feature_set_resolution.py. This module intentionally never
+# imports brain.sentiment_factors (same acyclic-import reasoning as the two
+# overlays above), so the two lists are declared independently and kept in
+# sync by the contract test, not by a shared import.
+SENTIMENT_OVERLAY_COLUMNS = [
+    "sentiment_score_7d",
+    "sentiment_headline_count_7d",
+]
+FEATURE_COLUMNS_BY_SET["sentiment_v1"] = compose_feature_set(
+    "technical_v2", SENTIMENT_OVERLAY_COLUMNS
 )
 
 
