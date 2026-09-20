@@ -21,6 +21,16 @@ class BacktestConfig:
     fee_bps: float = 5.0
     slippage_bps: float = 5.0
     allow_short: bool = True
+    # Bars per year used to annualize `_sharpe_like`. Defaults to ~252 (NYSE
+    # trading days/year), correct for the stock universe every existing
+    # caller trains on. A 24/7 market (e.g. crypto, one daily bar every
+    # calendar day via BinanceProvider) trades ~365 bars/year, not 252 --
+    # left at the stock default here since no caller yet threads asset_class
+    # into which BacktestConfig gets built (feature_set has the same
+    # single-config-per-job shape; see brain.features.
+    # FEATURE_SET_OVERLAYS_BY_ASSET_CLASS). A caller that DOES know the
+    # asset class can pass periods_per_year=365 explicitly today.
+    periods_per_year: int = 252
 
     @property
     def round_trip_cost(self) -> float:
@@ -281,7 +291,7 @@ def _metrics_from_trades(trades: pd.DataFrame, config: BacktestConfig) -> dict:
         "win_rate": _nullable_float((returns > 0).mean()),
         "average_net_return": _nullable_float(returns.mean()),
         "profit_factor": None if losses == 0 else float(gains / abs(losses)),
-        "sharpe_like": _sharpe_like(returns),
+        "sharpe_like": _sharpe_like(returns, periods_per_year=config.periods_per_year),
         "fee_bps": config.fee_bps,
         "slippage_bps": config.slippage_bps,
         "position_size": config.position_size,
@@ -309,11 +319,11 @@ def _empty_metrics(config: BacktestConfig) -> dict:
     }
 
 
-def _sharpe_like(returns: pd.Series) -> float | None:
+def _sharpe_like(returns: pd.Series, periods_per_year: int = 252) -> float | None:
     std = returns.std()
     if pd.isna(std) or std == 0:
         return None
-    return float((returns.mean() / std) * np.sqrt(252))
+    return float((returns.mean() / std) * np.sqrt(periods_per_year))
 
 
 def _nullable_float(value) -> float | None:
