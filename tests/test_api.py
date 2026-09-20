@@ -23,11 +23,13 @@ class FakeRepository:
         prices: pd.DataFrame | None = None,
         prediction_feedback: pd.DataFrame | None = None,
         risk_profile: dict | None = None,
+        analyst_consensus: dict | None = None,
     ) -> None:
         self.prediction = prediction
         self.prices = prices if prices is not None else make_prices()
         self.prediction_feedback = prediction_feedback
         self.risk_profile = risk_profile
+        self.analyst_consensus = analyst_consensus
         self.feedback_kwargs: dict | None = None
         self.backtest_kwargs: dict | None = None
         self.paper_run_kwargs: dict | None = None
@@ -226,6 +228,9 @@ class FakeRepository:
                 }
             ]
         )
+
+    def get_latest_analyst_consensus(self, asset_id: str) -> dict | None:
+        return self.analyst_consensus
 
     def get_scoped_risk_profile(self, scope_type: str, scope_value: str = "") -> dict | None:
         self.profile_lookup_kwargs = {"scope_type": scope_type, "scope_value": scope_value}
@@ -747,6 +752,76 @@ def test_backtest_history_endpoint_returns_empty_demo_history() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_analyst_consensus_endpoint_returns_latest_snapshot() -> None:
+    repository = FakeRepository(
+        analyst_consensus={
+            "source": "yfinance",
+            "recommendation_key": "strong_buy",
+            "recommendation_mean": 1.4,
+            "analyst_count": 55,
+            "strong_buy": 35,
+            "buy": 15,
+            "hold": 5,
+            "sell": 0,
+            "strong_sell": 0,
+            "target_mean": 260.0,
+            "target_median": 255.0,
+            "target_high": 320.0,
+            "target_low": 200.0,
+            "fetched_at": "2026-09-01T00:00:00+00:00",
+        }
+    )
+    override_repository(repository)
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/AAPL")
+
+    clear_overrides()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ticker"] == "AAPL"
+    assert payload["recommendation_key"] == "strong_buy"
+    assert payload["analyst_count"] == 55
+    assert payload["target_mean"] == 260.0
+    assert payload["fetched_at"] == "2026-09-01T00:00:00+00:00"
+
+
+def test_analyst_consensus_endpoint_returns_null_when_no_snapshot_yet() -> None:
+    override_repository(FakeRepository(analyst_consensus=None))
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/AAPL")
+
+    clear_overrides()
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+def test_analyst_consensus_endpoint_returns_demo_data() -> None:
+    app.dependency_overrides[get_repository] = lambda: None
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/AAPL")
+
+    clear_overrides()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ticker"] == "AAPL"
+    assert payload["source"] == "demo"
+
+
+def test_analyst_consensus_endpoint_returns_unavailable_when_demo_is_disabled() -> None:
+    app.dependency_overrides[get_repository] = lambda: None
+    override_config(AppConfig(environment="production", allow_demo_fallback=False))
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/BTC-USD")
+
+    clear_overrides()
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Fuente de datos no disponible y modo demo desactivado"
 
 
 def test_paper_trading_endpoint_simulates_prediction_stream() -> None:

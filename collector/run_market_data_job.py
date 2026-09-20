@@ -28,6 +28,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stop-loss", type=float, default=0.015)
     parser.add_argument("--limit", type=int, help="Optional max number of price rows for materialization")
     parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument(
+        "--collect-analyst-consensus",
+        action="store_true",
+        help="Also fetch and persist Wall Street analyst consensus (yfinance only)",
+    )
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--out", help="Optional JSON summary path")
     return parser.parse_args()
@@ -58,6 +63,7 @@ def main() -> None:
             materialize=not args.skip_materialization,
             materialize_tickers=parse_csv(args.tickers) if args.tickers else None,
             continue_on_error=not args.fail_fast,
+            collect_analyst_consensus=args.collect_analyst_consensus,
         )
 
     if args.out:

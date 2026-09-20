@@ -27,10 +27,12 @@ def run_market_data_job(
     materialize: bool = True,
     materialize_tickers: list[str] | None = None,
     continue_on_error: bool = True,
+    collect_analyst_consensus: bool = False,
 ) -> dict[str, Any]:
     started_at = datetime.now(tz=UTC)
     collection_results = []
     materialization_results = []
+    analyst_consensus_results = []
     errors = []
 
     selected_assets = filter_assets(assets, materialize_tickers)
@@ -47,6 +49,38 @@ def run_market_data_job(
                 collection_results.append(asdict(result))
             except Exception as error:
                 errors.append({"stage": "collection", "ticker": asset.asset_ticker, "error": str(error)})
+                if not continue_on_error:
+                    raise
+
+    # Analyst consensus (Wall Street ratings + price targets) is its own opt-in
+    # stage, separate from price collection above: it's currently yfinance-only
+    # (collector/providers/yfinance_provider.py) and yfinance's Yahoo scrape is
+    # fragile per-ticker (missing recommendations, no current-period rows, etc.),
+    # so it gets its own try/except-per-ticker loop rather than piggybacking on
+    # `collect_asset`. Defaults to off so existing callers (and their cadence
+    # expectations) are unaffected; opt in with `collect_analyst_consensus=True`.
+    if collect_analyst_consensus:
+        for asset in selected_assets:
+            try:
+                provider = provider_factory(asset.provider)
+                consensus = provider.fetch_analyst_consensus(asset.ticker)
+                asset_id = repository.get_or_create_asset(
+                    ticker=asset.asset_ticker,
+                    name=asset.name,
+                    asset_class=asset.asset_class,
+                )
+                repository.upsert_analyst_consensus_snapshot(asset_id, consensus)
+                analyst_consensus_results.append(
+                    {
+                        "ticker": asset.asset_ticker,
+                        "recommendation_key": consensus.recommendation_key,
+                        "analyst_count": consensus.analyst_count,
+                    }
+                )
+            except Exception as error:
+                errors.append(
+                    {"stage": "analyst_consensus", "ticker": asset.asset_ticker, "error": str(error)}
+                )
                 if not continue_on_error:
                     raise
 
@@ -101,6 +135,11 @@ def run_market_data_job(
             else 0,
             "succeeded": len(materialization_results),
             "results": materialization_results,
+        },
+        "analyst_consensus": {
+            "attempted": len(selected_assets) if collect_analyst_consensus else 0,
+            "succeeded": len(analyst_consensus_results),
+            "results": analyst_consensus_results,
         },
         "failed": len(errors),
         "errors": errors,

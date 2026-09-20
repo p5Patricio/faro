@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from collector.local_repository import LocalPostgresRepository
+from collector.providers.base import AnalystConsensus
 
 
 # -- Threat matrix: SQL composition (task 3.1, RED before local_repository.py existed) --
@@ -749,3 +750,122 @@ def test_get_fundamental_facts_applies_as_of_filed_date_in_sql(
     assert as_of["filed_date"].tolist() == [date(2023, 2, 15)]
     assert float(as_of.loc[0, "value"]) == 100.0
     assert len(full) == 2  # without a cutoff both filings are visible
+
+
+# -- Analyst consensus --------------------------------------------------------
+
+
+def _analyst_consensus(
+    ticker: str = "AAPL",
+    *,
+    source: str = "yfinance",
+    recommendation_key: str = "buy",
+    recommendation_mean: float = 2.1,
+    analyst_count: int = 40,
+    strong_buy: int = 15,
+    buy: int = 18,
+    hold: int = 6,
+    sell: int = 1,
+    strong_sell: int = 0,
+    target_mean: float = 250.0,
+    target_median: float = 245.0,
+    target_high: float = 300.0,
+    target_low: float = 200.0,
+) -> AnalystConsensus:
+    return AnalystConsensus(
+        ticker=ticker,
+        source=source,
+        recommendation_key=recommendation_key,
+        recommendation_mean=recommendation_mean,
+        analyst_count=analyst_count,
+        strong_buy=strong_buy,
+        buy=buy,
+        hold=hold,
+        sell=sell,
+        strong_sell=strong_sell,
+        target_mean=target_mean,
+        target_median=target_median,
+        target_high=target_high,
+        target_low=target_low,
+    )
+
+
+def test_upsert_analyst_consensus_snapshot_creates_new_row_per_fetch(
+    repository: LocalPostgresRepository,
+    db_connection,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+
+    repository.upsert_analyst_consensus_snapshot(
+        asset_id, _analyst_consensus(recommendation_key="hold"), fetched_at="2026-08-01T00:00:00+00:00"
+    )
+    # A later fetch is a NEW row -- ratings change over time (C1-style history).
+    repository.upsert_analyst_consensus_snapshot(
+        asset_id, _analyst_consensus(recommendation_key="strong_buy"), fetched_at="2026-09-01T00:00:00+00:00"
+    )
+
+    with db_connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM analyst_consensus_snapshots WHERE asset_id = %s", (asset_id,)
+        )
+        (row_count,) = cur.fetchone()
+        cur.execute(
+            "SELECT recommendation_key FROM analyst_consensus_snapshots "
+            "WHERE asset_id = %s AND fetched_at = %s",
+            (asset_id, "2026-08-01T00:00:00+00:00"),
+        )
+        (original_key,) = cur.fetchone()
+
+    assert row_count == 2  # both fetches took the INSERT branch, not UPDATE
+    assert original_key == "hold"  # the earlier snapshot is byte-unchanged
+
+
+def test_upsert_analyst_consensus_snapshot_is_idempotent_on_same_fetch(
+    repository: LocalPostgresRepository,
+    db_connection,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    fetched_at = "2026-08-01T00:00:00+00:00"
+
+    first = repository.upsert_analyst_consensus_snapshot(
+        asset_id, _analyst_consensus(analyst_count=40), fetched_at=fetched_at
+    )
+    second = repository.upsert_analyst_consensus_snapshot(
+        asset_id, _analyst_consensus(analyst_count=40), fetched_at=fetched_at
+    )
+
+    assert first == 1
+    assert second == 1  # returns the submitted count, not the affected count
+
+    with db_connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM analyst_consensus_snapshots WHERE asset_id = %s", (asset_id,)
+        )
+        (total,) = cur.fetchone()
+
+    assert total == 1  # re-ingesting the same (asset_id, fetched_at) key is a no-op
+
+
+def test_get_latest_analyst_consensus_returns_most_recent_snapshot(
+    repository: LocalPostgresRepository,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    repository.upsert_analyst_consensus_snapshot(
+        asset_id, _analyst_consensus(recommendation_key="hold"), fetched_at="2026-08-01T00:00:00+00:00"
+    )
+    repository.upsert_analyst_consensus_snapshot(
+        asset_id, _analyst_consensus(recommendation_key="strong_buy"), fetched_at="2026-09-01T00:00:00+00:00"
+    )
+
+    latest = repository.get_latest_analyst_consensus(asset_id)
+
+    assert latest is not None
+    assert latest["recommendation_key"] == "strong_buy"
+
+
+def test_get_latest_analyst_consensus_returns_none_without_snapshots(
+    repository: LocalPostgresRepository,
+) -> None:
+    asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+
+    assert repository.get_latest_analyst_consensus(asset_id) is None
