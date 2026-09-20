@@ -16,6 +16,16 @@ python-dotenv==1.2.2
 requests==2.33.1
 psycopg[binary]==3.3.4
 psycopg-pool==3.3.1
+PyPortfolioOpt==1.6.0
+
+# FinBERT sentiment scoring (brain/sentiment_factors.py). Heavy and OPTIONAL
+# for the test suite: transformers/torch are imported lazily, inside
+# brain.sentiment_factors._default_finbert_scorer, never at module import
+# time, so a plain `pytest` run never pays this cost and never needs these
+# two packages importable at all -- only genuine production scoring
+# (brain/materialize_sentiment.py, ops/materialize_sentiment_batch.py) does.
+transformers==4.57.1
+torch==2.9.0
 
 # --- test / dev ---
 pytest==9.0.3
