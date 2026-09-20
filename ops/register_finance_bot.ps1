@@ -32,10 +32,11 @@
 $ErrorActionPreference = 'Stop'
 
 $RepoRoot  = Split-Path -Parent $PSScriptRoot
-$VbsScript = Join-Path $RepoRoot 'ops\run_finance_bot_hidden.vbs'
+$Script    = Join-Path $RepoRoot 'ops\run_finance_bot.ps1'
+$HiddenVbs = Join-Path $RepoRoot 'ops\run_hidden.vbs'
 
-if (-not (Test-Path $VbsScript)) {
-    throw "Cannot find $VbsScript - run this from the repo's ops/ folder."
+if (-not (Test-Path $Script)) {
+    throw "Cannot find $Script - run this from the repo's ops/ folder."
 }
 
 Write-Host "Registering Faro\FinanceBotSync for $env:USERNAME (repo root: $RepoRoot)"
@@ -45,22 +46,20 @@ Write-Host "Registering Faro\FinanceBotSync for $env:USERNAME (repo root: $RepoR
 # re-running this script is idempotent. schtasks is an external exe -- its
 # failures do NOT throw -- so $LASTEXITCODE is checked explicitly below.
 #
-# The action runs ops/run_finance_bot_hidden.vbs via wscript.exe, NOT a
-# raw `cmd /c ...` (the original bug: no way to suppress cmd's own
-# console, flashing a terminal every 15 minutes) NOR
-# `powershell -WindowStyle Hidden -File ...` directly (tried next: still
-# briefly flashes a console before hiding it, a known conhost quirk).
-# WScript.Shell.Run with window style 0, inside that .vbs, is what
-# actually never creates a visible window at all. A single quoted .vbs
-# path also sidesteps the nested-quoting schtasks.exe mangles when /TR
-# itself contains a quoted -Command string.
+# Action routes through ops/run_hidden.vbs (wscript.exe) instead of a raw
+# `cmd /c ...` (the original bug: no way to suppress cmd's own console,
+# flashing a terminal every 15 minutes) or `powershell -WindowStyle
+# Hidden -File ...` directly (tried next: still briefly flashes a console
+# before hiding it, a known conhost quirk) -- see run_hidden.vbs's own
+# header comment. Two separately-quoted paths, no nested quoting for
+# schtasks.exe's own /TR parsing to mangle.
 schtasks /Create `
     /TN "Faro\FinanceBotSync" `
     /SC MINUTE `
     /MO 15 `
     /RL LIMITED `
     /F `
-    /TR "wscript.exe `"$VbsScript`""
+    /TR "wscript.exe `"$HiddenVbs`" `"$Script`""
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""

@@ -22,11 +22,20 @@
     Run this script yourself, interactively, from an elevated or normal
     PowerShell prompt. It is not invoked automatically by anything in this
     repository or by CI.
+
+    Both actions route through ops/run_hidden.vbs (wscript.exe) rather than
+    a raw `cmd /c ...` action, which has no way to suppress its own console
+    window -- confirmed live (a terminal flashing open at every firing) on
+    Faro\FinanceBotSync before that launcher existed. See run_hidden.vbs's
+    own header comment.
 #>
 
 $ErrorActionPreference = "Stop"
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
+$RepoRoot  = Split-Path -Parent $PSScriptRoot
+$HiddenVbs = Join-Path $RepoRoot 'ops\run_hidden.vbs'
+$DailyJob  = Join-Path $RepoRoot 'ops\run_daily_operational_cycle.ps1'
+$WeeklyJob = Join-Path $RepoRoot 'ops\run_weekly_retraining_cycle.ps1'
 
 Write-Host "Registering Faro Task Scheduler jobs (repo root: $RepoRoot)"
 
@@ -37,9 +46,11 @@ schtasks /Create `
     /ST 06:20 `
     /RL LIMITED `
     /F `
-    /TR "cmd /c cd /d `"$RepoRoot`" && py -3.14 -m ops.run_local_scheduler --job full"
+    /TR "wscript.exe `"$HiddenVbs`" `"$DailyJob`""
 
-# Weekly retraining cycle: adds brain.run_retraining_job, Sunday 06:40.
+# Weekly retraining cycle: fundamental_v1 + technical_alpha_v1 + sentiment_v1
+# materialization, fundamental_v1 retrain, then the technical_v2 full_retrain
+# cycle -- see ops/weekly_retrain_all.ps1's own docstring. Sunday 06:40.
 schtasks /Create `
     /TN "Faro\WeeklyRetrainingCycle" `
     /SC WEEKLY `
@@ -47,7 +58,7 @@ schtasks /Create `
     /ST 06:40 `
     /RL LIMITED `
     /F `
-    /TR "cmd /c cd /d `"$RepoRoot`" && py -3.14 -m ops.run_local_scheduler --job full_retrain"
+    /TR "wscript.exe `"$HiddenVbs`" `"$WeeklyJob`""
 
 Write-Host ""
 Write-Host "Registered. Verify with:"

@@ -21,7 +21,9 @@
 .NOTES
     Run this yourself, once, from a normal PowerShell prompt. Nothing in the
     repo or CI invokes it. The task runs as the current user, LIMITED (no
-    elevation), hidden window.
+    elevation), truly hidden window (see ops/run_hidden.vbs -- a plain
+    `powershell -WindowStyle Hidden` action still briefly flashes a console
+    before hiding it, confirmed live against Faro\FinanceBotSync).
 
     Before the frontend can reach the API, set this in the root .env:
         VITE_API_BASE_URL=http://localhost:47318/api
@@ -29,8 +31,9 @@
 
 $ErrorActionPreference = 'Stop'
 
-$RepoRoot = Split-Path -Parent $PSScriptRoot
-$Script   = Join-Path $RepoRoot 'ops\run_local_app.ps1'
+$RepoRoot   = Split-Path -Parent $PSScriptRoot
+$Script     = Join-Path $RepoRoot 'ops\run_local_app.ps1'
+$HiddenVbs  = Join-Path $RepoRoot 'ops\run_hidden.vbs'
 
 if (-not (Test-Path $Script)) {
     throw "Cannot find $Script - run this from the repo's ops/ folder."
@@ -44,13 +47,18 @@ Write-Host "Registering Faro\LocalAppServers for $env:USERNAME (repo root: $Repo
 # prompt. /RL LIMITED (no elevation at run time), /F overwrites an existing
 # task so re-running is idempotent. schtasks is an external exe -- its
 # failures do NOT throw -- so $LASTEXITCODE is checked explicitly below.
+#
+# Action routes through ops/run_hidden.vbs (wscript.exe) rather than
+# invoking powershell -WindowStyle Hidden directly: see its own header
+# comment for why. Two separately-quoted paths, no nested quoting for
+# schtasks.exe's own /TR parsing to mangle.
 schtasks /Create `
     /TN "Faro\LocalAppServers" `
     /SC ONLOGON `
     /RU "$env:USERNAME" `
     /RL LIMITED `
     /F `
-    /TR "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$Script`""
+    /TR "wscript.exe `"$HiddenVbs`" `"$Script`""
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host ""
@@ -59,7 +67,7 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "PowerShell (right-click -> Run as administrator), or create a"
     Write-Host "top-level task instead of one under the Faro\ folder:"
     Write-Host "  schtasks /Create /TN FaroLocalAppServers /SC ONLOGON /RU `"$env:USERNAME`" /RL LIMITED /F ``"
-    Write-Host "    /TR `"powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \`"$Script\`"`""
+    Write-Host "    /TR `"wscript.exe \`"$HiddenVbs\`" \`"$Script\`"`""
     exit 1
 }
 
