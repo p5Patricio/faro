@@ -51,13 +51,15 @@ def _headlines(rows: list[dict]) -> pd.DataFrame:
 
 
 def test_module_import_never_requires_transformers_or_torch():
-    """Sanity precondition for every other laziness assertion in this file:
-    this dev/CI environment genuinely does not have transformers/torch
-    installed, so `import brain.sentiment_factors` succeeding at all (it
-    already did, above, to collect this file) is itself proof the module
-    never imports them at the top level."""
-    assert importlib.util.find_spec("transformers") is None
-    assert importlib.util.find_spec("torch") is None
+    """Proof the laziness contract holds regardless of whether transformers/
+    torch happen to be installed in this environment: `requirements.txt`
+    lists both (so a real CI install, unlike an ad hoc sandbox, DOES have
+    them on `sys.path` -- `importlib.util.find_spec` would find them there),
+    but merely collecting/importing this test file, and every injected-
+    scorer test above it, must never actually IMPORT either package. Their
+    absence from `sys.modules` -- checked here, before any test in this file
+    has run a real (non-injected) `score_headlines` call -- is the real
+    laziness signal; whether the package is installed at all is not."""
     assert "transformers" not in sys.modules
     assert "torch" not in sys.modules
 
