@@ -17,6 +17,37 @@
   --color-cobalt: #4472e6;    /* structure, interactive, focus */
   --color-beam: #f2b33a;      /* the beam -- brand accent */
   --color-cream: #f3e7c8;     /* warm highlight text */
+
+  /* -- Finance redesign tokens (approved mockup) -- additive only, the
+     seven tokens above stay byte-identical. -- */
+  --color-surface-2: #16213f; /* one step up from --color-surface -- nested/elevated rows, no border needed */
+
+  --color-ink: #eef1fb;
+  --color-ink-secondary: #aab3cf;
+  --color-ink-muted: #6c7699;
+
+  /* Categorical (validated: node scripts/validate_palette.js against this
+     exact --color-surface, dark mode, 8 slots -- all checks pass). Fixed
+     order, never cycled. */
+  --color-cat-vivienda: #3987e5;
+  --color-cat-alimentacion: #d9772f;
+  --color-cat-transporte: #199e70;
+  --color-cat-servicios: #c98500;
+  --color-cat-salud: #d55181;
+  --color-cat-educacion: #4caf5a;
+  --color-cat-personales: #9085e9;
+  --color-cat-entretenimiento: #e66767;
+  --color-cat-ropa: #5a9bd8;      /* slot 1 reused -- never adjacent to Vivienda in the rendered order */
+  --color-cat-ahorro: var(--color-beam); /* the "goal" bucket deliberately borrows the brand beam */
+
+  /* Status -- reserved for state (overspent, due-soon, etc.), never a
+     category identity color. */
+  --color-status-good: #35b06a;
+  --color-status-warning: #e0a336;
+  --color-status-critical: #e0575a;
+
+  /* Fraunces, restrained: hero figures, insight sentence, section H1s only. */
+  --font-display: 'Fraunces', Georgia, serif;
 }
 
 :root {
@@ -27,5 +58,9 @@ body {
   background-color: var(--color-canvas);
   color: #e6ecf7;
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Archivo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.font-display {
+  font-optical-sizing: auto;
 }

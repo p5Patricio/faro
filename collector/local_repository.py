@@ -4,7 +4,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pandas as pd
@@ -16,6 +16,8 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg.types.numeric import FloatLoader
 from psycopg_pool import ConnectionPool
+
+from collector.providers.base import AnalystConsensus
 
 
 class _UUIDStrLoader(Loader):
@@ -88,6 +90,30 @@ FUNDAMENTAL_FACT_KEY: tuple[str, ...] = (
     "fiscal_period",
     "filed_date",
 )
+
+# Analyst consensus history (db/migrations/0010_analyst_consensus.sql). Ratings
+# and price targets drift every few days, so this is an append-only time series
+# keyed by (asset_id, fetched_at) -- the same restatement philosophy as
+# FUNDAMENTAL_FACT_KEY above: a new reading is a new row, never an overwrite of
+# the last one.
+ANALYST_CONSENSUS_COLUMNS: tuple[str, ...] = (
+    "asset_id",
+    "fetched_at",
+    "source",
+    "recommendation_key",
+    "recommendation_mean",
+    "analyst_count",
+    "strong_buy",
+    "buy",
+    "hold",
+    "sell",
+    "strong_sell",
+    "target_mean",
+    "target_median",
+    "target_high",
+    "target_low",
+)
+ANALYST_CONSENSUS_KEY: tuple[str, ...] = ("asset_id", "fetched_at")
 
 
 @dataclass
@@ -264,6 +290,35 @@ class LocalPostgresRepository:
             cur.execute(query, params)
             rows = cur.fetchall()
         return pd.DataFrame(rows)
+
+    def get_latest_price_pairs(self, asset_ids: list[str]) -> pd.DataFrame:
+        """Latest close and the prior close for each of ``asset_ids``, in ONE
+        query via a window function.
+
+        Built for batch daily %-change computation across many assets at
+        once -- e.g. the market heatmap (``api/routers/heatmap.py``), which
+        needs a price + change_pct for ~100 tickers per request and would
+        otherwise cost ~100 round trips through `get_prices`. Returns at most
+        2 rows per asset (today's close and, when one exists, the prior
+        close), ordered by asset_id then descending timestamp.
+        """
+        if not asset_ids:
+            return pd.DataFrame(columns=["asset_id", "timestamp", "close"])
+        query = """
+            SELECT asset_id, timestamp, close
+            FROM (
+                SELECT asset_id, timestamp, close,
+                       row_number() OVER (PARTITION BY asset_id ORDER BY timestamp DESC) AS rn
+                FROM prices
+                WHERE asset_id = ANY(%s)
+            ) ranked
+            WHERE rn <= 2
+            ORDER BY asset_id, timestamp DESC
+        """
+        with self._cursor() as cur:
+            cur.execute(query, (list(asset_ids),))
+            rows = cur.fetchall()
+        return pd.DataFrame(rows, columns=["asset_id", "timestamp", "close"])
 
     def get_features(
         self,
@@ -487,6 +542,59 @@ class LocalPostgresRepository:
         if not rows:
             return pd.DataFrame(columns=columns)
         return pd.DataFrame(rows, columns=columns)
+
+    def upsert_analyst_consensus_snapshot(
+        self,
+        asset_id: str,
+        consensus: AnalystConsensus,
+        fetched_at: datetime | None = None,
+    ) -> int:
+        """Persist one analyst-consensus reading as a new history row.
+
+        Keyed by ``(asset_id, fetched_at)`` (``ANALYST_CONSENSUS_KEY``): a later
+        reading is a new row, never an update of the last one -- the same
+        restatement philosophy ``upsert_fundamental_facts`` documents. Re-submitting
+        the same ``(asset_id, fetched_at)`` pair (e.g. a retried ingestion step)
+        hits ON CONFLICT and rewrites the non-key columns to identical values --
+        a no-op.
+        """
+        row = {
+            "asset_id": asset_id,
+            "fetched_at": fetched_at or datetime.now(tz=UTC),
+            "source": consensus.source,
+            "recommendation_key": consensus.recommendation_key,
+            "recommendation_mean": consensus.recommendation_mean,
+            "analyst_count": consensus.analyst_count,
+            "strong_buy": consensus.strong_buy,
+            "buy": consensus.buy,
+            "hold": consensus.hold,
+            "sell": consensus.sell,
+            "strong_sell": consensus.strong_sell,
+            "target_mean": consensus.target_mean,
+            "target_median": consensus.target_median,
+            "target_high": consensus.target_high,
+            "target_low": consensus.target_low,
+        }
+        return self._upsert_batch(
+            "analyst_consensus_snapshots", [row], ANALYST_CONSENSUS_KEY
+        )
+
+    def get_latest_analyst_consensus(self, asset_id: str) -> dict[str, Any] | None:
+        """Most recent analyst-consensus snapshot for one asset, or ``None``.
+
+        Uses ``analyst_consensus_snapshots_latest_idx`` (``asset_id, fetched_at
+        desc``) so this always serves the newest row without sorting the full
+        history.
+        """
+        query = (
+            "SELECT source, recommendation_key, recommendation_mean, analyst_count, "
+            "strong_buy, buy, hold, sell, strong_sell, target_mean, target_median, "
+            "target_high, target_low, fetched_at FROM analyst_consensus_snapshots "
+            "WHERE asset_id = %s ORDER BY fetched_at DESC LIMIT 1"
+        )
+        with self._cursor() as cur:
+            cur.execute(query, (asset_id,))
+            return cur.fetchone()
 
     # -- Model runs / predictions --------------------------------------------
 
@@ -1191,6 +1299,418 @@ class LocalPostgresRepository:
             cur.execute("SELECT to_regclass(%s) IS NOT NULL AS relation_exists", (name,))
             row = cur.fetchone()
         return bool(row["relation_exists"])
+
+    # -- Personal finance (Telegram inbound ingestion, db/migrations/0008) --
+
+    def get_finance_categories(self) -> list[dict[str, Any]]:
+        """Active categories, for ``ops/finance_bot.py``'s free-text matcher
+        AND ``api/routers/finance.py``'s ``GET /categories`` (which also
+        needs ``emoji`` for display -- the bot never used it, easy to miss).
+        list[dict], matching the convention already used for other small
+        reference/lookup tables (``get_assets``, ``get_active_notification_rules``)
+        rather than the DataFrame shape used for time-series reads."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, slug, name, kind, budget_bucket, emoji FROM finance_categories "
+                "WHERE is_active ORDER BY slug ASC"
+            )
+            return cur.fetchall()
+
+    def get_finance_accounts(self) -> list[dict[str, Any]]:
+        """Active accounts, for ``ops/finance_bot.py``'s account-word matcher
+        and default-account fallback."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, name, account_type, currency FROM finance_accounts "
+                "WHERE is_active ORDER BY name ASC"
+            )
+            return cur.fetchall()
+
+    def get_finance_sync_cursor(self, source: str) -> int | None:
+        """The current high-water mark for ``source`` -- ``max`` over
+        non-failed batches only, so a crashed pull never advances it (the
+        partial index this mirrors is defined in 0008)."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT max(cursor_update_id) AS cursor_update_id FROM finance_sync_batches "
+                "WHERE source = %s AND status <> 'failed'",
+                (source,),
+            )
+            row = cur.fetchone()
+        return row["cursor_update_id"] if row else None
+
+    def upsert_finance_transactions(self, rows: list[dict[str, Any]]) -> int:
+        """Thin wrapper over ``_upsert_batch``: ``client_id`` is the
+        idempotency key (deterministically derived by the caller from the
+        Telegram ``update_id``), so replaying a batch upserts instead of
+        duplicating."""
+        return self._upsert_batch("finance_transactions", rows, conflict_cols=("client_id",))
+
+    def insert_finance_sync_batch(
+        self,
+        *,
+        source: str,
+        cursor_update_id: int | None,
+        received_count: int,
+        applied_count: int,
+        rejected_count: int,
+        status: str,
+        error_reason: str | None = None,
+        details: dict[str, Any] | None = None,
+        started_at: str | datetime,
+        finished_at: str | datetime | None = None,
+    ) -> None:
+        """One audit row per poll -- the audit log IS the cursor (see 0008's
+        comment on ``finance_sync_batches``)."""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO finance_sync_batches
+                    (source, cursor_update_id, received_count, applied_count, rejected_count,
+                     status, error_reason, details, started_at, finished_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    source,
+                    cursor_update_id,
+                    received_count,
+                    applied_count,
+                    rejected_count,
+                    status,
+                    error_reason,
+                    Jsonb(_json_safe(details or {})),
+                    _timestamp_or_none(started_at),
+                    _timestamp_or_none(finished_at),
+                ),
+            )
+
+    # -- Personal finance (dashboard reads/writes, db/migrations/0009) ------
+
+    def _upsert_by_id(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
+        """Update-by-id when the caller supplies one (an edit), else INSERT a
+        fresh row. This is the shape for tables with no natural business key
+        besides the surrogate ``id`` (recurring bills, goals) -- unlike
+        ``client_id`` for transactions or the partial-unique-index pair for
+        budgets, there's nothing else to conflict on. Every column present in
+        ``row`` is overwritten on update, matching a UI that always submits
+        the whole record."""
+        payload = dict(row)
+        record_id = payload.pop("id", None)
+        columns = list(payload.keys())
+
+        with self._cursor() as cur:
+            if record_id:
+                updates_sql = sql.SQL(", ").join(
+                    sql.SQL("{column} = {placeholder}").format(
+                        column=sql.Identifier(column), placeholder=sql.Placeholder()
+                    )
+                    for column in columns
+                )
+                query = sql.SQL(
+                    "UPDATE {table} SET {updates}, updated_at = now() WHERE id = {placeholder} RETURNING *"
+                ).format(table=sql.Identifier(table), updates=updates_sql, placeholder=sql.Placeholder())
+                cur.execute(query, (*payload.values(), record_id))
+                updated = cur.fetchone()
+                if updated is None:
+                    raise LocalPostgresError(f"{table} row not found: {record_id}")
+                return updated
+
+            insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)
+            placeholders_sql = sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+            query = sql.SQL(
+                "INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING *"
+            ).format(table=sql.Identifier(table), cols=insert_cols_sql, placeholders=placeholders_sql)
+            cur.execute(query, tuple(payload.values()))
+            return cur.fetchone()
+
+    def get_finance_transactions(
+        self,
+        *,
+        month: str | None = None,
+        category_id: str | None = None,
+        account_id: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """The ledger feed for the dashboard's transaction list. Always
+        excludes tombstoned rows -- a soft-deleted transaction (``deleted_at``
+        set) is gone from every normal read, mirroring 0008's partial
+        indexes. ``month`` is ``"YYYY-MM"``; the half-open range
+        (``>= month-01`` and ``< next month-01``) is what lets Postgres use
+        ``finance_transactions_occurred_idx`` instead of a function index on
+        ``date_trunc``."""
+        conditions = ["deleted_at IS NULL"]
+        params: list[Any] = []
+        if month:
+            month_start = f"{month}-01"
+            conditions.append("occurred_at >= %s::date AND occurred_at < (%s::date + interval '1 month')")
+            params.extend([month_start, month_start])
+        if category_id:
+            conditions.append("category_id = %s")
+            params.append(category_id)
+        if account_id:
+            conditions.append("account_id = %s")
+            params.append(account_id)
+        where_clause = " AND ".join(conditions)
+        query = f"SELECT * FROM finance_transactions WHERE {where_clause} ORDER BY occurred_at DESC LIMIT %s"
+        params.append(limit)
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+    def upsert_finance_transaction(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Single-row wrapper over ``upsert_finance_transactions``'s batch
+        upsert, for the dashboard's one-row-at-a-time PUT. Re-reads the row
+        afterward because ``_upsert_batch`` returns only a count, matching
+        this file's read-after-write convention elsewhere (e.g.
+        ``upsert_risk_profile``'s ``RETURNING *``)."""
+        self.upsert_finance_transactions([row])
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM finance_transactions WHERE client_id = %s",
+                (row["client_id"],),
+            )
+            return cur.fetchone()
+
+    def get_finance_budgets(self, *, month: str | None = None) -> list[dict[str, Any]]:
+        """Effective budget per category for a calendar month, joined to its
+        live actual spend. ``effective_budgets`` picks the dated row
+        (``period_month`` = that month) over the standing row
+        (``period_month IS NULL``) via ``DISTINCT ON``'s tie-break --
+        mirroring the two partial unique indexes 0008 defines for exactly
+        this dated-overrides-standing relationship. ``actual_cents`` is
+        summed at read time, never cached, same principle as net worth
+        totals below.
+
+        ``month`` defaults to the current calendar month: "how am I doing on
+        budget" is meaningless for an unspecified month.
+        """
+        month = month or date.today().strftime("%Y-%m")
+        month_start = f"{month}-01"
+
+        query = """
+            WITH effective_budgets AS (
+                SELECT DISTINCT ON (category_id) *
+                FROM finance_budgets
+                WHERE period_month = %s::date OR period_month IS NULL
+                ORDER BY category_id, (period_month IS NOT NULL) DESC
+            ),
+            month_spend AS (
+                SELECT category_id, SUM(amount_cents) AS actual_cents
+                FROM finance_transactions
+                WHERE kind = 'expense'
+                  AND deleted_at IS NULL
+                  AND occurred_at >= %s::date
+                  AND occurred_at < (%s::date + interval '1 month')
+                GROUP BY category_id
+            )
+            SELECT
+                eb.category_id,
+                c.name AS category_name,
+                c.budget_bucket AS budget_bucket,
+                eb.limit_cents,
+                eb.percent_of_income,
+                COALESCE(ms.actual_cents, 0) AS actual_cents
+            FROM effective_budgets eb
+            JOIN finance_categories c ON c.id = eb.category_id
+            LEFT JOIN month_spend ms ON ms.category_id = eb.category_id
+            ORDER BY c.name ASC
+        """
+        with self._cursor() as cur:
+            cur.execute(query, (month_start, month_start, month_start))
+            return cur.fetchall()
+
+    def upsert_finance_budget(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Upsert a budget row, targeting whichever partial unique index
+        (0008's dated-row-vs-standing-row split) matches ``period_month``.
+        ``_upsert_batch``'s single ``ON CONFLICT`` target can't express a
+        partial index, so this is hand-written, same reason
+        ``upsert_risk_profile`` above is hand-written."""
+        payload = dict(row)
+        period_month = payload.get("period_month")
+        columns = list(payload.keys())
+        update_cols = [column for column in columns if column not in ("category_id", "period_month")]
+
+        insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)
+        placeholders_sql = sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+        updates_sql = sql.SQL(", ").join(
+            sql.SQL("{column} = EXCLUDED.{column}").format(column=sql.Identifier(column))
+            for column in update_cols
+        )
+        conflict_target = (
+            sql.SQL("(category_id) WHERE period_month IS NULL")
+            if period_month is None
+            else sql.SQL("(category_id, period_month) WHERE period_month IS NOT NULL")
+        )
+        query = sql.SQL(
+            "INSERT INTO finance_budgets ({cols}) VALUES ({placeholders}) "
+            "ON CONFLICT {conflict} DO UPDATE SET {updates}, updated_at = now() "
+            "RETURNING *"
+        ).format(
+            cols=insert_cols_sql,
+            placeholders=placeholders_sql,
+            conflict=conflict_target,
+            updates=updates_sql,
+        )
+        params = tuple(payload[column] for column in columns)
+        with self._cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchone()
+
+    def get_finance_net_worth_snapshots(self, *, limit: int = 24) -> list[dict[str, Any]]:
+        """Snapshots with totals computed at read time via a filtered
+        aggregate over ``finance_net_worth_items`` -- 0008 deliberately does
+        not store totals on the snapshot row (see its comment), so this is
+        the one place that formula lives."""
+        query = """
+            SELECT
+                s.id,
+                s.snapshot_date,
+                s.notes,
+                s.created_at,
+                COALESCE(SUM(i.amount_cents) FILTER (WHERE i.is_asset), 0) AS total_assets_cents,
+                COALESCE(SUM(i.amount_cents) FILTER (WHERE NOT i.is_asset), 0) AS total_liabilities_cents,
+                COALESCE(SUM(i.amount_cents) FILTER (WHERE i.is_asset), 0)
+                    - COALESCE(SUM(i.amount_cents) FILTER (WHERE NOT i.is_asset), 0) AS net_worth_cents
+            FROM finance_net_worth_snapshots s
+            LEFT JOIN finance_net_worth_items i ON i.snapshot_id = s.id
+            GROUP BY s.id
+            ORDER BY s.snapshot_date DESC
+            LIMIT %s
+        """
+        with self._cursor() as cur:
+            cur.execute(query, (limit,))
+            snapshots = cur.fetchall()
+        if not snapshots:
+            return []
+
+        snapshot_ids = [row["id"] for row in snapshots]
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM finance_net_worth_items WHERE snapshot_id = ANY(%s) "
+                "ORDER BY snapshot_id, is_asset DESC, label ASC",
+                (snapshot_ids,),
+            )
+            items = cur.fetchall()
+
+        items_by_snapshot: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            items_by_snapshot.setdefault(item["snapshot_id"], []).append(item)
+        for row in snapshots:
+            row["items"] = items_by_snapshot.get(row["id"], [])
+        return snapshots
+
+    def upsert_finance_net_worth_snapshot(
+        self,
+        *,
+        snapshot_date: str,
+        notes: str | None,
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Upsert one snapshot and REPLACE its item list wholesale, all
+        inside one transaction: a single ``_cursor()`` call spans every
+        statement here, and the pool commits or rolls back that whole block
+        as a unit (see ``_cursor()``'s docstring). Replacing rather than
+        diffing items is deliberately simple -- the dashboard always submits
+        the full worksheet, matching the book's paper-form workflow, not a
+        line-item editor."""
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO finance_net_worth_snapshots (snapshot_date, notes)
+                VALUES (%s, %s)
+                ON CONFLICT (snapshot_date) DO UPDATE SET notes = EXCLUDED.notes
+                RETURNING id, snapshot_date, notes, created_at
+                """,
+                (snapshot_date, notes),
+            )
+            snapshot = cur.fetchone()
+            snapshot_id = snapshot["id"]
+
+            cur.execute("DELETE FROM finance_net_worth_items WHERE snapshot_id = %s", (snapshot_id,))
+
+            prepared_items: list[dict[str, Any]] = []
+            for item in items:
+                cur.execute(
+                    """
+                    INSERT INTO finance_net_worth_items
+                        (snapshot_id, is_asset, label, item_type, amount_cents, currency)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (
+                        snapshot_id,
+                        item["is_asset"],
+                        item["label"],
+                        item.get("item_type", "other"),
+                        item["amount_cents"],
+                        item["currency"],
+                    ),
+                )
+                prepared_items.append(cur.fetchone())
+
+        total_assets_cents = sum(item["amount_cents"] for item in prepared_items if item["is_asset"])
+        total_liabilities_cents = sum(item["amount_cents"] for item in prepared_items if not item["is_asset"])
+        return {
+            **snapshot,
+            "items": prepared_items,
+            "total_assets_cents": total_assets_cents,
+            "total_liabilities_cents": total_liabilities_cents,
+            "net_worth_cents": total_assets_cents - total_liabilities_cents,
+        }
+
+    def get_finance_recurring_bills(self, *, include_inactive: bool = False) -> list[dict[str, Any]]:
+        """Bills joined to their next PENDING occurrence via a ``LATERAL``
+        join (equivalent to the ``min(due_date) ... where status = 'pending'``
+        read described in 0008's comment on
+        ``finance_recurring_bill_payments_pending_idx``, but also carries
+        that occurrence's status alongside its date)."""
+        where_clause = "" if include_inactive else "WHERE b.is_active"
+        query = f"""
+            SELECT
+                b.*,
+                next_payment.due_date AS next_due_date,
+                next_payment.status AS next_status
+            FROM finance_recurring_bills b
+            LEFT JOIN LATERAL (
+                SELECT due_date, status
+                FROM finance_recurring_bill_payments
+                WHERE bill_id = b.id AND status = 'pending'
+                ORDER BY due_date ASC
+                LIMIT 1
+            ) next_payment ON true
+            {where_clause}
+            ORDER BY b.name ASC
+        """
+        with self._cursor() as cur:
+            cur.execute(query)
+            return cur.fetchall()
+
+    def upsert_finance_recurring_bill(self, row: dict[str, Any]) -> dict[str, Any]:
+        return self._upsert_by_id("finance_recurring_bills", row)
+
+    def upsert_finance_recurring_bill_payment(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Upsert one occurrence by its natural key (``bill_id``,
+        ``due_date``) -- the unique index this targets is
+        ``finance_recurring_bill_payments_occurrence_key`` from 0008."""
+        self._upsert_batch(
+            "finance_recurring_bill_payments", [row], conflict_cols=("bill_id", "due_date")
+        )
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date = %s",
+                (row["bill_id"], row["due_date"]),
+            )
+            return cur.fetchone()
+
+    def get_finance_goals(self) -> list[dict[str, Any]]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM finance_goals ORDER BY is_achieved ASC, target_date ASC NULLS LAST"
+            )
+            return cur.fetchall()
+
+    def upsert_finance_goal(self, row: dict[str, Any]) -> dict[str, Any]:
+        return self._upsert_by_id("finance_goals", row)
 
 
 def _json_value(value: Any) -> Any:

@@ -105,6 +105,25 @@ class RiskProfilePayload(BaseModel):
     take_profit: float = Field(default=0.04, ge=0, le=5)
     allow_short: bool = True
 
+
+class AnalystConsensusResponse(BaseModel):
+    ticker: str
+    source: str
+    recommendation_key: str
+    recommendation_mean: float
+    analyst_count: int
+    strong_buy: int
+    buy: int
+    hold: int
+    sell: int
+    strong_sell: int
+    target_mean: float
+    target_median: float
+    target_high: float
+    target_low: float
+    fetched_at: str | None = None
+
+
 def get_repository() -> LocalPostgresRepository | None:
     if _POOL is None:
         return None
@@ -113,6 +132,25 @@ def get_repository() -> LocalPostgresRepository | None:
 
 def get_app_config() -> AppConfig:
     return APP_CONFIG
+
+
+# Deferred import: api/routers/finance.py imports get_repository from this
+# module, so importing it any earlier (before get_repository is defined
+# above) would be a circular-import failure at module load time. Always
+# enter through `api.main` (as every existing test in this repo already
+# does) rather than importing api.routers.finance directly first.
+from api.routers.finance import router as finance_router  # noqa: E402
+
+app.include_router(finance_router, prefix="/api/finance")
+
+# Same deferred-import reasoning as finance_router above: api/routers/heatmap.py
+# imports get_repository/get_app_config from this module. Mounted at prefix
+# "/api" (not "/api/heatmap") because that router's own route is already
+# "/heatmap" -- it's a single endpoint, not a sub-resource collection like
+# finance's -- so this combination yields exactly `GET /api/heatmap`.
+from api.routers.heatmap import router as heatmap_router  # noqa: E402
+
+app.include_router(heatmap_router, prefix="/api")
 
 
 @app.get("/")
@@ -432,6 +470,30 @@ def get_backtest_history(
         require_demo_ticker(ticker, config)
 
     return []
+
+
+@app.get("/api/analyst-consensus/{ticker}", response_model=AnalystConsensusResponse | None)
+def get_analyst_consensus(
+    ticker: str,
+    repository: LocalPostgresRepository | None = Depends(get_repository),
+    config: AppConfig = Depends(get_app_config),
+):
+    if repository is None:
+        require_demo_ticker(ticker, config)
+        return demo_analyst_consensus(ticker)
+
+    try:
+        asset_id = repository.get_asset_id(ticker)
+        snapshot = repository.get_latest_analyst_consensus(asset_id)
+        return format_analyst_consensus(ticker, snapshot) if snapshot else None
+    except ValueError:
+        if not should_use_demo_ticker(ticker, config):
+            raise HTTPException(status_code=404, detail="Activo no encontrado") from None
+    except RuntimeError as error:
+        log_repo_error(error, ticker=ticker)
+        require_demo_ticker(ticker, config)
+
+    return demo_analyst_consensus(ticker)
 
 
 @app.get("/api/paper-trading/{ticker}")
@@ -798,6 +860,26 @@ def format_backtest_history_row(backtest: dict) -> dict:
     }
 
 
+def format_analyst_consensus(ticker: str, snapshot: dict) -> dict:
+    return {
+        "ticker": ticker.upper(),
+        "source": snapshot.get("source"),
+        "recommendation_key": snapshot.get("recommendation_key"),
+        "recommendation_mean": snapshot.get("recommendation_mean"),
+        "analyst_count": snapshot.get("analyst_count"),
+        "strong_buy": snapshot.get("strong_buy"),
+        "buy": snapshot.get("buy"),
+        "hold": snapshot.get("hold"),
+        "sell": snapshot.get("sell"),
+        "strong_sell": snapshot.get("strong_sell"),
+        "target_mean": snapshot.get("target_mean"),
+        "target_median": snapshot.get("target_median"),
+        "target_high": snapshot.get("target_high"),
+        "target_low": snapshot.get("target_low"),
+        "fetched_at": _isoformat_value(snapshot.get("fetched_at")),
+    }
+
+
 def format_feedback_report(report) -> dict:
     return {
         "summary": report.summary,
@@ -1146,6 +1228,63 @@ def demo_prices(ticker: str, limit: int = 100) -> list[dict]:
         )
 
     return list(reversed(rows[-limit:]))
+
+
+def demo_analyst_consensus(ticker: str) -> dict:
+    normalized = ticker.upper()
+    profiles = {
+        "AAPL": {
+            "recommendation_key": "buy",
+            "recommendation_mean": 2.1,
+            "analyst_count": 42,
+            "strong_buy": 15,
+            "buy": 18,
+            "hold": 8,
+            "sell": 1,
+            "strong_sell": 0,
+            "target_mean": 255.0,
+            "target_median": 250.0,
+            "target_high": 300.0,
+            "target_low": 200.0,
+        },
+        "MSFT": {
+            "recommendation_key": "strong_buy",
+            "recommendation_mean": 1.6,
+            "analyst_count": 50,
+            "strong_buy": 30,
+            "buy": 17,
+            "hold": 3,
+            "sell": 0,
+            "strong_sell": 0,
+            "target_mean": 560.0,
+            "target_median": 555.0,
+            "target_high": 620.0,
+            "target_low": 480.0,
+        },
+    }
+    profile = profiles.get(
+        normalized,
+        {
+            "recommendation_key": "hold",
+            "recommendation_mean": 3.0,
+            "analyst_count": 12,
+            "strong_buy": 1,
+            "buy": 3,
+            "hold": 6,
+            "sell": 2,
+            "strong_sell": 0,
+            "target_mean": 100.0,
+            "target_median": 98.0,
+            "target_high": 130.0,
+            "target_low": 80.0,
+        },
+    )
+    return {
+        "ticker": normalized,
+        "source": "demo",
+        "fetched_at": datetime.now(tz=UTC).isoformat(),
+        **profile,
+    }
 
 
 if __name__ == "__main__":

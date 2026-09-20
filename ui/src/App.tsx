@@ -21,6 +21,7 @@ import {
   SlidersHorizontal,
   TrendingDown,
   TrendingUp,
+  Users,
 } from 'lucide-react';
 import type { PricePoint } from './components/FinancialChart';
 import { AssetSwitcher, Watchlist } from './components/AssetSwitcher.tsx';
@@ -35,13 +36,21 @@ import { Drawer } from './components/ui/Drawer.tsx';
 import { Popover } from './components/ui/Popover.tsx';
 import { DataTable } from './components/ui/DataTable.tsx';
 import { InfoLabel } from './components/ui/Tooltip.tsx';
+import { API_BASE_URL } from './lib/apiBase.ts';
+import { FinanceDashboard } from './features/finance/FinanceDashboard.tsx';
 
-const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000/api').replace(/\/$/, '');
 const FinancialChart = lazy(() =>
   import('./components/FinancialChart').then((module) => ({ default: module.FinancialChart })),
 );
 const EquityCurveChart = lazy(() =>
   import('./components/EquityCurveChart').then((module) => ({ default: module.EquityCurveChart })),
+);
+// echarts is a large dependency (~1MB) -- code-split it behind the same
+// lazy+Suspense pattern as the two chart components above, so it only
+// loads once someone actually opens the "Mapa de calor" view instead of
+// bloating every visitor's initial bundle.
+const HeatmapDashboard = lazy(() =>
+  import('./features/heatmap/HeatmapDashboard.tsx').then((module) => ({ default: module.HeatmapDashboard })),
 );
 
 type Signal = 'BUY' | 'SELL' | 'HOLD' | string;
@@ -103,6 +112,24 @@ interface AnalysisResponse {
   timestamp: string;
   source?: 'prediction' | 'fallback_indicators' | 'demo_indicators' | string;
   analysis: Analysis;
+}
+
+interface AnalystConsensusResponse {
+  ticker: string;
+  source: string;
+  recommendation_key: string;
+  recommendation_mean: number;
+  analyst_count: number;
+  strong_buy: number;
+  buy: number;
+  hold: number;
+  sell: number;
+  strong_sell: number;
+  target_mean: number;
+  target_median: number;
+  target_high: number;
+  target_low: number;
+  fetched_at?: string | null;
 }
 
 interface PredictionAuditRow {
@@ -292,11 +319,21 @@ const DEFAULT_RISK_PROFILE: RiskProfile = {
   allow_short: true,
 };
 
+type AppView = 'markets' | 'heatmap' | 'finance';
+
+const VIEW_OPTIONS: SegmentOption<AppView>[] = [
+  { value: 'markets', label: 'Mercados' },
+  { value: 'heatmap', label: 'Mapa de calor' },
+  { value: 'finance', label: 'Finanzas' },
+];
+
 function App() {
+  const [view, setView] = useState<AppView>('markets');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [selectedTicker, setSelectedTicker] = useState('');
   const [prices, setPrices] = useState<PricePoint[]>([]);
   const [analysisResponse, setAnalysisResponse] = useState<AnalysisResponse | null>(null);
+  const [analystConsensus, setAnalystConsensus] = useState<AnalystConsensusResponse | null>(null);
   const [predictionHistory, setPredictionHistory] = useState<PredictionAuditRow[]>([]);
   const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummaryResponse | null>(null);
   const [backtests, setBacktests] = useState<BacktestSummaryRow[]>([]);
@@ -388,6 +425,7 @@ function App() {
       const [
         pricesData,
         analysisData,
+        analystConsensusData,
         historyData,
         feedbackData,
         alertsData,
@@ -397,6 +435,7 @@ function App() {
       ] = await Promise.all([
         get<PricePoint[]>('prices', `${API_BASE_URL}/prices/${ticker}?limit=240`, []),
         get<AnalysisResponse | null>('analysis', `${API_BASE_URL}/analysis/${ticker}`, null),
+        get<AnalystConsensusResponse | null>('analystConsensus', `${API_BASE_URL}/analyst-consensus/${ticker}`, null),
         get<PredictionAuditRow[]>('history', `${API_BASE_URL}/predictions/${ticker}?limit=8`, []),
         get<FeedbackSummaryResponse | null>('feedback', `${API_BASE_URL}/feedback/${ticker}?limit=250`, null),
         get<OperationalAlertsResponse | null>('alerts', `${API_BASE_URL}/alerts/${ticker}`, null),
@@ -406,6 +445,7 @@ function App() {
       ]);
       setPrices(pricesData);
       setAnalysisResponse(analysisData);
+      setAnalystConsensus(analystConsensusData);
       setPredictionHistory(historyData);
       setFeedbackSummary(feedbackData);
       setOperationalAlerts(alertsData);
@@ -591,6 +631,7 @@ function App() {
         {priceChart}
         <div className="space-y-5">
           <ModelPanel analysis={analysis} />
+          <AnalystConsensusPanel consensus={analystConsensus} failed={failedSections.has('analystConsensus')} />
           <RiskPanel analysis={analysis} onEdit={() => setRiskDrawerOpen(true)} />
         </div>
       </div>
@@ -693,6 +734,17 @@ function App() {
       </header>
 
       <main id="main" aria-label="Panel de decisión" className="mx-auto max-w-6xl space-y-5 px-4 py-5 md:px-6">
+        <SegmentedControl
+          label="Vista"
+          idPrefix="vista"
+          value={view}
+          onChange={setView}
+          options={VIEW_OPTIONS}
+          className="max-w-xs"
+        />
+
+        {view === 'markets' && (
+          <>
         <SourceRibbon source={analysisResponse?.source} />
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -758,6 +810,16 @@ function App() {
             </div>
           </div>
         )}
+          </>
+        )}
+
+        {view === 'heatmap' && (
+          <Suspense fallback={<ChartLoadingState height={560} />}>
+            <HeatmapDashboard />
+          </Suspense>
+        )}
+
+        {view === 'finance' && <FinanceDashboard />}
       </main>
 
       <Drawer
@@ -1401,6 +1463,96 @@ function ModelPanel({ analysis }: { analysis: Analysis | null }) {
       </div>
     </section>
   );
+}
+
+function AnalystConsensusPanel({
+  consensus,
+  failed,
+}: {
+  consensus: AnalystConsensusResponse | null;
+  failed?: boolean;
+}) {
+  return (
+    <section className="rounded-lg border border-hairline/70 bg-surface p-4">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Users aria-hidden="true" className="h-4 w-4 text-cobalt" />
+          <h2 className="text-sm font-medium text-slate-100">Consenso de analistas</h2>
+        </div>
+        {consensus ? (
+          <span className={`rounded-md px-2 py-1 text-xs ${recommendationTone(consensus.recommendation_key)}`}>
+            {recommendationLabel(consensus.recommendation_key)}
+          </span>
+        ) : null}
+      </div>
+
+      {failed ? (
+        <EmptyState
+          variant="error"
+          icon={<AlertTriangle aria-hidden="true" className="h-6 w-6" />}
+          title="No se pudo cargar el consenso de analistas"
+        />
+      ) : !consensus ? (
+        <EmptyState
+          icon={<Users aria-hidden="true" className="h-6 w-6" />}
+          title="Sin consenso de analistas"
+          hint="Todavía no hay una lectura de Wall Street guardada para este activo."
+        />
+      ) : (
+        <div className="space-y-4">
+          <div className="grid grid-cols-3 gap-3">
+            <SmallMetric label="Analistas" value={formatCount(consensus.analyst_count)} />
+            <SmallMetric label="Objetivo medio" value={formatCurrencyOrNA(consensus.target_mean)} />
+            <SmallMetric
+              label="Rango"
+              value={`${formatCurrencyOrNA(consensus.target_low)} - ${formatCurrencyOrNA(consensus.target_high)}`}
+            />
+          </div>
+
+          <div className="grid grid-cols-5 gap-2 text-center">
+            <RatingBucket label="Compra fuerte" value={consensus.strong_buy} tone="text-emerald-300" />
+            <RatingBucket label="Compra" value={consensus.buy} tone="text-emerald-200" />
+            <RatingBucket label="Mantener" value={consensus.hold} tone="text-slate-300" />
+            <RatingBucket label="Venta" value={consensus.sell} tone="text-red-200" />
+            <RatingBucket label="Venta fuerte" value={consensus.strong_sell} tone="text-red-300" />
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function RatingBucket({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <div className="rounded-lg border border-hairline/70 bg-inset p-2">
+      <p className={`text-sm font-semibold tabular-nums ${tone}`}>{value}</p>
+      <p className="mt-1 text-[10px] leading-tight text-slate-500">{label}</p>
+    </div>
+  );
+}
+
+function recommendationLabel(key: string): string {
+  const labels: Record<string, string> = {
+    strong_buy: 'Compra fuerte',
+    buy: 'Compra',
+    hold: 'Mantener',
+    sell: 'Venta',
+    strong_sell: 'Venta fuerte',
+    underperform: 'Bajo rendimiento',
+    outperform: 'Sobre rendimiento',
+  };
+  return labels[key?.toLowerCase?.() ?? ''] ?? key ?? 'N/D';
+}
+
+function recommendationTone(key: string): string {
+  const normalized = key?.toLowerCase?.() ?? '';
+  if (normalized === 'strong_buy' || normalized === 'buy' || normalized === 'outperform') {
+    return 'bg-emerald-300/10 text-emerald-200';
+  }
+  if (normalized === 'strong_sell' || normalized === 'sell' || normalized === 'underperform') {
+    return 'bg-red-300/10 text-red-200';
+  }
+  return 'bg-slate-800 text-slate-300';
 }
 
 function BacktestPanel({ rows, failed }: { rows: BacktestSummaryRow[]; failed?: boolean }) {
