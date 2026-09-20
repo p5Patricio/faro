@@ -16,3 +16,12 @@ models/
 reports/
 artifacts/
 supabase/.temp/
+
+# Local AI-tooling cache/config -- vendored skill packages, session lock
+# files, per-machine IDE launch config. Not application source.
+.agents/
+.claude/
+.benchmarks/
+.ruff_cache/
+skills-lock.json
+.atl/.skill-registry.cache.json
