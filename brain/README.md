@@ -131,7 +131,7 @@ Este ranking no reemplaza una revision humana: sirve como compuerta automatica p
 Para comparar varios modelos, scopes y umbrales de confianza en una sola corrida:
 
 ```powershell
-python -m brain.evaluate_candidate_matrix_from_supabase --ticker BTC-USD --feature-set technical_v2 --label-method triple_barrier --horizon 5 --models logistic_regression,random_forest,extra_trees --confidence-thresholds 0.55,0.60,0.65,0.70 --scopes local,asset_class,global --min-total-return 0.05 --min-profit-factor 1.2 --max-drawdown-floor -0.20 --min-active-trades 20 --drawdown-penalty 1.2 --out reports/btc_candidate_matrix.json
+python -m brain.evaluate_candidate_matrix --ticker BTC-USD --feature-set technical_v2 --label-method triple_barrier --horizon 5 --models logistic_regression,random_forest,extra_trees --confidence-thresholds 0.55,0.60,0.65,0.70 --scopes local,asset_class,global --min-total-return 0.05 --min-profit-factor 1.2 --max-drawdown-floor -0.20 --min-active-trades 20 --drawdown-penalty 1.2 --out reports/btc_candidate_matrix.json
 ```
 
 La salida contiene:
@@ -156,16 +156,10 @@ Este comando:
 2. reconstruye el dataset segun su `scope`;
 3. entrena el modelo final con todos los labels disponibles;
 4. guarda el artefacto `.joblib` en `models/`;
-5. registra el `model_run` en Supabase con `candidate_id`, metricas y assets usados;
+5. registra el `model_run` en la base de datos local con `candidate_id`, metricas y assets usados;
 6. genera la prediccion mas reciente para el activo objetivo.
 
-Para que un scheduler remoto como GitHub Actions pueda ejecutar inferencia, sube el artefacto promovido a Supabase Storage y actualiza `model_runs.artifact_uri`:
-
-```powershell
-python -m brain.upload_model_artifact --model-name extra_trees --model-version promoted_smoke_20260706
-```
-
-El comando crea o usa el bucket privado `model-artifacts`, sube el `.joblib` local y deja el `artifact_uri` con formato `supabase://model-artifacts/models/<archivo>.joblib`. La inferencia sigue soportando rutas locales para desarrollo.
+El entrenamiento, la inferencia y el scheduler local comparten el mismo sistema de archivos, asi que el artefacto `.joblib` queda disponible de inmediato bajo `models/` sin ningun paso de carga adicional: `brain.artifacts.store_model_artifact` normaliza cualquier ruta entrenada hacia `models/` y `resolve_model_artifact` la resuelve para inferencia.
 
 Para promover un candidato especifico:
 

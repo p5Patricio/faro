@@ -4,11 +4,13 @@ import argparse
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
+import psycopg
+
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.providers import HistoricalPriceRequest, get_provider
 from collector.providers.base import PriceProvider
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
 
 
 @dataclass(frozen=True)
@@ -61,13 +63,39 @@ DEFAULT_ASSETS = [
 ProviderFactory = Callable[[str], PriceProvider]
 
 
+def expand_universe_document(raw: dict[str, Any]) -> list[AssetCollectionConfig]:
+    """Expand a universe snapshot document's ``defaults`` + ``members`` into one
+    `AssetCollectionConfig` per member. Kept in `main.py`, not `collector/universe.py`,
+    so the `universe` <-> `AssetCollectionConfig` dependency stays one-way."""
+    defaults = raw.get("defaults", {})
+    provider = defaults.get("provider", "yfinance")
+    asset_class = defaults.get("asset_class", "stock")
+    interval = defaults.get("interval", "1d")
+    start = defaults.get("start")
+
+    return [
+        AssetCollectionConfig(
+            provider=provider,
+            ticker=member["ticker"],
+            asset_ticker=member["ticker"],
+            name=member["name"],
+            asset_class=asset_class,
+            interval=interval,
+            start=start,
+        )
+        for member in raw.get("members", [])
+    ]
+
+
 def load_asset_configs(path: str | None = None) -> list[AssetCollectionConfig]:
     if not path:
         return DEFAULT_ASSETS
 
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    if isinstance(raw, dict):
+        return expand_universe_document(raw)
     if not isinstance(raw, list):
-        raise ValueError("assets file must contain a JSON array")
+        raise ValueError("assets file must contain a JSON array or a universe document")
 
     return [AssetCollectionConfig(**item) for item in raw]
 
@@ -94,7 +122,7 @@ def apply_date_overrides(
 
 def collect_asset(
     asset: AssetCollectionConfig,
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     provider_factory: ProviderFactory = get_provider,
     batch_size: int = 500,
 ) -> AssetCollectionResult:
@@ -122,7 +150,7 @@ def collect_asset(
 
 def run_collection(
     assets: list[AssetCollectionConfig],
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     provider_factory: ProviderFactory = get_provider,
     batch_size: int = 500,
 ) -> list[AssetCollectionResult]:
@@ -140,7 +168,7 @@ def run_collection(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Collect configured assets into Supabase")
+    parser = argparse.ArgumentParser(description="Collect configured assets into local Postgres")
     parser.add_argument("--assets-file", help="JSON file with asset collection configs")
     parser.add_argument("--start", help="Override start date for all assets")
     parser.add_argument("--end", help="Override end date for all assets")
@@ -155,8 +183,9 @@ def main() -> None:
         start=args.start,
         end=args.end,
     )
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    results = run_collection(assets, repository, batch_size=args.batch_size)
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        results = run_collection(assets, repository, batch_size=args.batch_size)
 
     print(json.dumps([asdict(result) for result in results], indent=2))
 

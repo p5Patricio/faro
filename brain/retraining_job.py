@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from brain.artifacts import DEFAULT_MODEL_ARTIFACT_BUCKET, upload_supabase_artifact
+from brain.artifacts import store_model_artifact
 from brain.backtesting import BacktestConfig
-from brain.candidate_matrix import load_candidate_datasets_from_supabase, run_candidate_matrix
+from brain.candidate_matrix import load_candidate_datasets, run_candidate_matrix
 from brain.features import feature_columns_for_set
 from brain.inference_job import is_promoted_model_run, target_ticker_for_model_run
 from brain.models import available_model_names
@@ -15,7 +15,7 @@ from brain.promotion import default_promotion_version, promote_candidate_from_re
 from brain.risk import RiskPolicy
 from brain.scoped_evaluation import SCOPES
 from brain.selection import PromotionCriteria
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 @dataclass(frozen=True)
@@ -26,6 +26,9 @@ class RetrainingJobConfig:
     model_names: list[str] = field(default_factory=available_model_names)
     confidence_thresholds: list[float] = field(default_factory=lambda: [0.55, 0.60, 0.65, 0.70])
     scopes: list[str] = field(default_factory=lambda: ["local", "asset_class", "global"])
+    default_targets: list[str] | None = None
+    max_auto_targets: int = 8
+    max_global_scope_assets: int = 12
     splits: int = 5
     test_size: int | None = None
     embargo_rows: int | None = None
@@ -50,8 +53,6 @@ class RetrainingJobConfig:
     stop_loss: float = 0.02
     take_profit: float = 0.04
     upload_artifacts: bool = True
-    artifact_bucket: str = DEFAULT_MODEL_ARTIFACT_BUCKET
-    create_artifact_bucket: bool = True
     model_dir: str = "models"
     continue_on_error: bool = True
     require_incumbent_improvement: bool = True
@@ -60,8 +61,7 @@ class RetrainingJobConfig:
 
 
 def run_retraining_job(
-    repository: SupabaseRepository,
-    supabase_config: SupabaseConfig,
+    repository: LocalPostgresRepository,
     tickers: list[str] | None = None,
     config: RetrainingJobConfig | None = None,
 ) -> dict[str, Any]:
@@ -74,7 +74,7 @@ def run_retraining_job(
         max_drawdown_floor=job_config.max_drawdown_floor,
         min_active_trades=job_config.min_active_trades,
     )
-    datasets, skipped_assets = load_candidate_datasets_from_supabase(
+    datasets, skipped_assets = load_candidate_datasets(
         repository,
         feature_set=job_config.feature_set,
         label_method=job_config.label_method,
@@ -83,7 +83,12 @@ def run_retraining_job(
         limit=job_config.limit,
         min_rows=job_config.min_rows,
     )
-    selected_tickers = resolve_target_tickers(datasets, tickers)
+    selected_tickers = resolve_target_tickers(
+        datasets,
+        tickers,
+        default_targets=job_config.default_targets,
+        max_auto_targets=job_config.max_auto_targets,
+    )
 
     results: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -115,7 +120,6 @@ def run_retraining_job(
             incumbent = find_incumbent_model_run(
                 repository,
                 ticker=ticker,
-                feature_set=job_config.feature_set,
                 label_method=job_config.label_method,
                 horizon=job_config.horizon,
                 limit=job_config.incumbent_lookup_limit,
@@ -164,18 +168,10 @@ def run_retraining_job(
                 ),
             )
 
-            remote_artifact_uri = None
+            stored_artifact_uri = promotion.artifact_uri
             if job_config.upload_artifacts and promotion.model_run_id:
-                remote_artifact_uri = str(
-                    upload_supabase_artifact(
-                        promotion.artifact_uri,
-                        config=supabase_config,
-                        bucket=job_config.artifact_bucket,
-                        object_path=f"models/{Path(promotion.artifact_uri).name}",
-                        create_bucket=job_config.create_artifact_bucket,
-                    )
-                )
-                repository.update_model_run_artifact_uri(promotion.model_run_id, remote_artifact_uri)
+                stored_artifact_uri = store_model_artifact(promotion.artifact_uri)
+                repository.update_model_run_artifact_uri(promotion.model_run_id, stored_artifact_uri)
 
             results.append(
                 {
@@ -188,7 +184,7 @@ def run_retraining_job(
                     "min_confidence": candidate.get("min_confidence"),
                     "objective_score": candidate.get("objective_score"),
                     "local_artifact_uri": promotion.artifact_uri,
-                    "artifact_uri": remote_artifact_uri or promotion.artifact_uri,
+                    "artifact_uri": stored_artifact_uri,
                     "prediction_loaded": bool(promotion.prediction),
                     "ranking_count": len(report.get("ranking") or []),
                     "incumbent_comparison": incumbent_comparison,
@@ -243,6 +239,7 @@ def build_candidate_report(
         drawdown_penalty=config.drawdown_penalty,
         include_details=False,
         continue_on_error=config.continue_on_error,
+        max_scope_assets=config.max_global_scope_assets,
     )
     return {
         "ticker": ticker.upper(),
@@ -267,12 +264,30 @@ def build_candidate_report(
     }
 
 
-def resolve_target_tickers(datasets, tickers: list[str] | None) -> list[str]:
+def resolve_target_tickers(
+    datasets,
+    tickers: list[str] | None,
+    *,
+    default_targets: list[str] | None = None,
+    max_auto_targets: int | None = None,
+) -> list[str]:
     available = {item.ticker.upper() for item in datasets}
-    if not tickers:
-        return sorted(available)
-    requested = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
-    return [ticker for ticker in requested if ticker in available]
+    if tickers:
+        requested = [ticker.strip().upper() for ticker in tickers if ticker.strip()]
+        return [ticker for ticker in requested if ticker in available]
+    if default_targets:
+        requested = [ticker.strip().upper() for ticker in default_targets if ticker.strip()]
+        return [ticker for ticker in requested if ticker in available]
+
+    resolved = sorted(available)
+    if max_auto_targets is not None and len(resolved) > max_auto_targets:
+        raise ValueError(
+            f"{len(resolved)} assets have a stored dataset, exceeding max_auto_targets="
+            f"{max_auto_targets}. Widening the ingested universe must not silently widen "
+            "the default retraining-target list: pass an explicit --tickers list, provide "
+            "a narrower --targets-file, or raise --max-auto-targets deliberately."
+        )
+    return resolved
 
 
 def build_model_version(ticker: str) -> str:
@@ -289,21 +304,27 @@ def build_artifact_path(ticker: str, candidate: dict[str, Any], report: dict[str
 
 
 def find_incumbent_model_run(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     *,
     ticker: str,
-    feature_set: str,
     label_method: str,
     horizon: int,
     limit: int = 100,
 ) -> dict[str, Any] | None:
+    """The current best promoted model for this ticker, compared ACROSS all
+    feature sets. A `fundamental_v1` candidate competes against the model
+    actually serving the ticker (usually `technical_v2`), not only against a
+    previous `fundamental_v1` run -- so a new feature set is adopted only
+    when it genuinely beats the incumbent's `objective_score` (fundamental-
+    analysis proposal.md, Product Decision 2: best score wins, per-ticker
+    adoption is automatic). `label_method` and `horizon` must still match:
+    comparing a 5-day model against a 10-day one is not apples to apples.
+    """
     model_runs = repository.get_model_runs(limit=limit, ascending=False)
     for model_run in model_runs:
         if not is_promoted_model_run(model_run):
             continue
         if target_ticker_for_model_run(model_run, required=False) != ticker.upper():
-            continue
-        if model_run.get("feature_set") != feature_set:
             continue
         if model_run.get("label_method") != label_method:
             continue
@@ -363,6 +384,9 @@ def summarize_config(config: RetrainingJobConfig) -> dict[str, Any]:
         "models": config.model_names,
         "confidence_thresholds": config.confidence_thresholds,
         "scopes": config.scopes,
+        "default_targets": config.default_targets,
+        "max_auto_targets": config.max_auto_targets,
+        "max_global_scope_assets": config.max_global_scope_assets,
         "splits": config.splits,
         "min_rows": config.min_rows,
         "min_total_return": config.min_total_return,
@@ -370,7 +394,6 @@ def summarize_config(config: RetrainingJobConfig) -> dict[str, Any]:
         "max_drawdown_floor": config.max_drawdown_floor,
         "min_active_trades": config.min_active_trades,
         "upload_artifacts": config.upload_artifacts,
-        "artifact_bucket": config.artifact_bucket,
         "require_incumbent_improvement": config.require_incumbent_improvement,
         "min_objective_improvement": config.min_objective_improvement,
         "incumbent_lookup_limit": config.incumbent_lookup_limit,

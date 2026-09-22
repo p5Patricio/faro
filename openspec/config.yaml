@@ -1,10 +1,10 @@
 schema: spec-driven
 
 context: |
-  Tech stack: Python FastAPI backend, Supabase Postgres/Storage, React/Vite frontend, GitHub Actions jobs.
+  Tech stack: Python FastAPI backend, local PostgreSQL (Supabase removed), React/Vite frontend, local operational jobs orchestrated by Windows Task Scheduler.
   Architecture: collector ingests market data, brain trains/evaluates/predicts, API serves dashboard data, UI renders operational console.
-  Testing: pytest for Python, npm lint/build for frontend, operational workflow for Supabase-connected jobs.
-  Style: small Python modules, explicit CLI scripts, Markdown operational docs, SQL migrations under supabase/migrations.
+  Testing: pytest for Python (against a real local Postgres), npm lint/build/test (vitest) for frontend, ops.run_local_scheduler for the recurring operational cycle.
+  Style: small Python modules, explicit CLI scripts, Markdown operational docs, SQL migrations under db/migrations.
 
 testing:
   strict_tdd: false

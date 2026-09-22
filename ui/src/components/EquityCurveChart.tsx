@@ -68,8 +68,8 @@ export function EquityCurveChart({ data, height = 260 }: EquityCurveChartProps) 
 
     const chart = createChart(chartContainerRef.current, {
       layout: {
-        background: { type: ColorType.Solid, color: '#181b1a' },
-        textColor: '#d4d4d8',
+        background: { type: ColorType.Solid, color: '#111b34' },
+        textColor: '#cbd5e1',
       },
       grid: {
         vertLines: { color: 'rgba(255,255,255,0.05)' },
@@ -87,9 +87,9 @@ export function EquityCurveChart({ data, height = 260 }: EquityCurveChartProps) 
     });
 
     const series = chart.addSeries(AreaSeries, {
-      lineColor: '#6ee7b7',
-      topColor: 'rgba(110, 231, 183, 0.28)',
-      bottomColor: 'rgba(110, 231, 183, 0.02)',
+      lineColor: '#4472e6',
+      topColor: 'rgba(68, 114, 230, 0.26)',
+      bottomColor: 'rgba(68, 114, 230, 0.02)',
       priceFormat: {
         type: 'price',
         precision: 2,
@@ -119,7 +119,7 @@ export function EquityCurveChart({ data, height = 260 }: EquityCurveChartProps) 
   if (chartData.length === 0) {
     return (
       <div
-        className="flex items-center justify-center rounded-lg border border-dashed border-white/10 text-sm text-zinc-500"
+        className="flex items-center justify-center rounded-lg border border-dashed border-hairline/70 text-sm text-slate-500"
         style={{ height }}
       >
         Sin curva de equity

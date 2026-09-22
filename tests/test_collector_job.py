@@ -12,13 +12,17 @@ from collector.main import (
 )
 from collector.market_data_job import filter_assets, run_market_data_job
 from collector.providers import HistoricalPriceRequest
+from collector.providers.base import AnalystConsensus
 
 
 class FakeProvider:
     name = "fake"
 
-    def __init__(self) -> None:
+    def __init__(self, analyst_consensus: AnalystConsensus | None = None, fail_analyst_consensus: bool = False) -> None:
         self.requests: list[HistoricalPriceRequest] = []
+        self.analyst_consensus = analyst_consensus
+        self.fail_analyst_consensus = fail_analyst_consensus
+        self.analyst_consensus_requests: list[str] = []
 
     def fetch_prices(self, request: HistoricalPriceRequest) -> pd.DataFrame:
         self.requests.append(request)
@@ -35,6 +39,27 @@ class FakeProvider:
             }
         )
 
+    def fetch_analyst_consensus(self, ticker: str) -> AnalystConsensus:
+        self.analyst_consensus_requests.append(ticker)
+        if self.fail_analyst_consensus:
+            raise ValueError(f"no analyst recommendations for {ticker}")
+        return self.analyst_consensus or AnalystConsensus(
+            ticker=ticker,
+            source="fake",
+            recommendation_key="buy",
+            recommendation_mean=2.0,
+            analyst_count=10,
+            strong_buy=5,
+            buy=3,
+            hold=2,
+            sell=0,
+            strong_sell=0,
+            target_mean=150.0,
+            target_median=148.0,
+            target_high=180.0,
+            target_low=120.0,
+        )
+
 
 class FakeRepository:
     def __init__(self) -> None:
@@ -43,10 +68,15 @@ class FakeRepository:
         self.price_lookup: dict[str, pd.DataFrame] = {}
         self.features_loaded: list[dict] = []
         self.labels_loaded: list[dict] = []
+        self.analyst_consensus_snapshots: list[dict] = []
 
     def get_or_create_asset(self, ticker: str, name: str | None = None, asset_class: str | None = None) -> str:
         self.assets.append({"ticker": ticker, "name": name, "asset_class": asset_class})
         return f"asset-{ticker}"
+
+    def upsert_analyst_consensus_snapshot(self, asset_id: str, consensus: AnalystConsensus) -> int:
+        self.analyst_consensus_snapshots.append({"asset_id": asset_id, "consensus": consensus})
+        return 1
 
     def upsert_prices(self, asset_id: str, prices: pd.DataFrame, batch_size: int = 500) -> int:
         self.upserts.append({"asset_id": asset_id, "prices": prices, "batch_size": batch_size})
@@ -226,3 +256,69 @@ def test_run_market_data_job_records_materialization_errors() -> None:
     assert result["materialization"]["attempted"] == 1
     assert result["failed"] == 1
     assert result["errors"][0]["stage"] == "materialization"
+
+
+def test_run_market_data_job_skips_analyst_consensus_by_default() -> None:
+    provider = FakeProvider()
+    repository = FakeRepository()
+    assets = [
+        AssetCollectionConfig(provider="fake", ticker="AAPL", asset_ticker="AAPL", name="Apple Inc.", asset_class="stock")
+    ]
+
+    result = run_market_data_job(
+        repository=repository,  # type: ignore[arg-type]
+        assets=assets,
+        provider_factory=lambda _: provider,
+        materialize=False,
+    )
+
+    assert result["analyst_consensus"]["attempted"] == 0
+    assert provider.analyst_consensus_requests == []
+    assert repository.analyst_consensus_snapshots == []
+
+
+def test_run_market_data_job_collects_analyst_consensus_when_enabled() -> None:
+    provider = FakeProvider()
+    repository = FakeRepository()
+    assets = [
+        AssetCollectionConfig(provider="fake", ticker="AAPL", asset_ticker="AAPL", name="Apple Inc.", asset_class="stock")
+    ]
+
+    result = run_market_data_job(
+        repository=repository,  # type: ignore[arg-type]
+        assets=assets,
+        provider_factory=lambda _: provider,
+        materialize=False,
+        collect_analyst_consensus=True,
+    )
+
+    assert result["analyst_consensus"]["attempted"] == 1
+    assert result["analyst_consensus"]["succeeded"] == 1
+    assert result["failed"] == 0
+    assert provider.analyst_consensus_requests == ["AAPL"]
+    assert repository.analyst_consensus_snapshots[0]["asset_id"] == "asset-AAPL"
+
+
+def test_run_market_data_job_records_analyst_consensus_errors_without_aborting_other_tickers() -> None:
+    provider = FakeProvider(fail_analyst_consensus=True)
+    repository = FakeRepository()
+    assets = [
+        AssetCollectionConfig(provider="fake", ticker="AAPL", asset_ticker="AAPL", name="Apple Inc.", asset_class="stock"),
+        AssetCollectionConfig(provider="fake", ticker="MSFT", asset_ticker="MSFT", name="Microsoft Corp.", asset_class="stock"),
+    ]
+
+    result = run_market_data_job(
+        repository=repository,  # type: ignore[arg-type]
+        assets=assets,
+        provider_factory=lambda _: provider,
+        materialize=False,
+        collect_analyst_consensus=True,
+    )
+
+    # One ticker's failure is logged and the loop continues to the next ticker
+    # rather than aborting the whole run.
+    assert provider.analyst_consensus_requests == ["AAPL", "MSFT"]
+    assert result["analyst_consensus"]["attempted"] == 2
+    assert result["analyst_consensus"]["succeeded"] == 0
+    assert result["failed"] == 2
+    assert {error["stage"] for error in result["errors"]} == {"analyst_consensus"}

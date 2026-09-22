@@ -3,14 +3,64 @@
 @source "./index.html";
 @source "./src/**/*.{js,ts,jsx,tsx}";
 
+/*
+ * Faro palette -- drawn straight from the lighthouse logo:
+ * a deep navy night, cobalt structure, an amber-gold beam, warm cream light.
+ * Signal colors (BUY green / SELL red) deliberately stay on the financial
+ * convention and are not part of this token set.
+ */
+@theme {
+  --color-canvas: #0a0f1e;    /* page background -- the night sky */
+  --color-surface: #111b34;   /* cards, header, panels */
+  --color-inset: #0c1526;     /* insets, table headers, inputs */
+  --color-hairline: #2b3d68;  /* borders and dividers */
+  --color-cobalt: #4472e6;    /* structure, interactive, focus */
+  --color-beam: #f2b33a;      /* the beam -- brand accent */
+  --color-cream: #f3e7c8;     /* warm highlight text */
+
+  /* -- Finance redesign tokens (approved mockup) -- additive only, the
+     seven tokens above stay byte-identical. -- */
+  --color-surface-2: #16213f; /* one step up from --color-surface -- nested/elevated rows, no border needed */
+
+  --color-ink: #eef1fb;
+  --color-ink-secondary: #aab3cf;
+  --color-ink-muted: #6c7699;
+
+  /* Categorical (validated: node scripts/validate_palette.js against this
+     exact --color-surface, dark mode, 8 slots -- all checks pass). Fixed
+     order, never cycled. */
+  --color-cat-vivienda: #3987e5;
+  --color-cat-alimentacion: #d9772f;
+  --color-cat-transporte: #199e70;
+  --color-cat-servicios: #c98500;
+  --color-cat-salud: #d55181;
+  --color-cat-educacion: #4caf5a;
+  --color-cat-personales: #9085e9;
+  --color-cat-entretenimiento: #e66767;
+  --color-cat-ropa: #5a9bd8;      /* slot 1 reused -- never adjacent to Vivienda in the rendered order */
+  --color-cat-ahorro: var(--color-beam); /* the "goal" bucket deliberately borrows the brand beam */
+
+  /* Status -- reserved for state (overspent, due-soon, etc.), never a
+     category identity color. */
+  --color-status-good: #35b06a;
+  --color-status-warning: #e0a336;
+  --color-status-critical: #e0575a;
+
+  /* Fraunces, restrained: hero figures, insight sentence, section H1s only. */
+  --font-display: 'Fraunces', Georgia, serif;
+}
+
 :root {
-  --background: 222.2 84% 4.9%;
-  --foreground: 210 40% 98%;
+  color-scheme: dark;
 }
 
 body {
-  background-color: #0f172a;
-  color: #f8fafc;
+  background-color: var(--color-canvas);
+  color: #e6ecf7;
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: 'Archivo', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+.font-display {
+  font-optical-sizing: auto;
 }

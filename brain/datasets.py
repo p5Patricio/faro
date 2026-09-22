@@ -59,7 +59,7 @@ def build_dataset_from_materialized(
     labels: pd.DataFrame,
     feature_columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Build a training dataset from Supabase features_daily and labels_daily rows."""
+    """Build a training dataset from materialized features_daily and labels_daily rows."""
     columns = feature_columns or FEATURE_COLUMNS
     if features.empty:
         raise ValueError("No materialized features found")
@@ -82,7 +82,7 @@ def build_feature_frame_from_materialized(
     features: pd.DataFrame,
     feature_columns: list[str] | None = None,
 ) -> pd.DataFrame:
-    """Expand Supabase feature JSON rows into timestamp + feature columns."""
+    """Expand materialized feature JSON rows into timestamp + feature columns."""
     columns = feature_columns or FEATURE_COLUMNS
     if features.empty:
         raise ValueError("No materialized features found")

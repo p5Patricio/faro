@@ -1,7 +1,7 @@
 # Investigacion profesional para modelo predictivo de inversiones
 
 Fecha: 2026-07-05  
-Proyecto: Plataforma IA Inversiones
+Proyecto: Faro
 
 Este documento define una ruta profesional para convertir el MVP actual en una plataforma de senales de inversion con entrenamiento real de modelos, backtesting serio y decisiones `BUY`, `SELL` y `HOLD` orientadas a maximizar ganancias ajustadas por riesgo.
 

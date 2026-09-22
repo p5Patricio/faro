@@ -1,0 +1,56 @@
+change: financial-intelligence-expansion
+status: active
+mode: openspec
+created_at: 2026-08-25
+depends_on:
+  - local-postgres-migration
+preflight:
+  pace: auto
+  artifact_store: openspec
+  delivery_strategy: ask-on-risk
+  review_budget_lines: 400
+  chain_strategy: stacked-to-main
+artifacts:
+  exploration: openspec/changes/financial-intelligence-expansion/exploration.md
+  proposal: openspec/changes/financial-intelligence-expansion/proposal.md
+  design: openspec/changes/financial-intelligence-expansion/design.md
+  tasks: openspec/changes/financial-intelligence-expansion/tasks.md
+decisions:
+  copy_trading: institutional-consensus-tracker-plus-insider-alerts
+  copy_trading_rationale: >-
+    Real-time mirroring is impossible with free public data. SEC 13F is quarterly
+    with a 45-day lag (up to ~135 days stale) and omits short positions entirely.
+    Form 4 insider purchases (T+2 business days) are the only timely signal with
+    academic support.
+  universe: widen-to-sp100
+  universe_rationale: >-
+    Cross-sectional fundamental factors are ranking devices requiring hundreds of
+    names. With 2 stocks there is nothing to rank.
+  fundamentals_source: sec-edgar-xbrl-companyfacts
+  feature_timestamp: filed-date-not-period-end
+  llm_boundary: upstream-extraction-and-downstream-explanation-only
+  telegram_transport: long-polling-thin-requests-client
+  personal_finance_model: hybrid-single-entry-with-transfer-group-id
+proposed_decisions:
+  scope_boundary: split-into-sibling-changes
+  scope_boundary_rationale: >-
+    Awaiting orchestrator/user confirmation. The four areas share no data source,
+    failure mode, or reviewer context, so they become sibling SDD changes. This
+    change is rescoped to the shared foundation (universe widening,
+    asset_identifiers, ingestion_runs, SEC client, feature-set resolution seam)
+    and acts as the charter carrying constraints C1-C4 into the siblings.
+  proposed_siblings:
+    - telegram-notifications
+    - fundamental-analysis
+    - institutional-consensus
+    - personal-finance
+    - asset-class-profile-overlays
+    - gemini-optional-assist
+progress:
+  explore: complete
+  proposal: complete
+  specs: complete
+  design: complete
+  tasks: complete
+  apply: complete
+  verify: complete

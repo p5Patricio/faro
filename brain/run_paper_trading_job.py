@@ -4,9 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.paper_trading import PaperTradingConfig
 from brain.paper_trading_job import run_paper_trading_job
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,23 +30,24 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    payload = run_paper_trading_job(
-        repository=repository,
-        tickers=_parse_tickers(args.tickers),
-        model_name=args.model_name,
-        model_version=args.model_version,
-        limit=args.limit,
-        config=PaperTradingConfig(
-            initial_capital=args.initial_capital,
-            default_position_size=args.default_position_size,
-            fee_bps=args.fee_bps,
-            slippage_bps=args.slippage_bps,
-            allow_short=not args.no_short,
-        ),
-        persist_empty=args.persist_empty,
-        continue_on_error=not args.fail_fast,
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        payload = run_paper_trading_job(
+            repository=repository,
+            tickers=_parse_tickers(args.tickers),
+            model_name=args.model_name,
+            model_version=args.model_version,
+            limit=args.limit,
+            config=PaperTradingConfig(
+                initial_capital=args.initial_capital,
+                default_position_size=args.default_position_size,
+                fee_bps=args.fee_bps,
+                slippage_bps=args.slippage_bps,
+                allow_short=not args.no_short,
+            ),
+            persist_empty=args.persist_empty,
+            continue_on_error=not args.fail_fast,
+        )
 
     if args.out:
         out = Path(args.out)

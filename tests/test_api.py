@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import inspect
+
 import pandas as pd
 from fastapi.testclient import TestClient
-from requests import RequestException
 
 from app_config import AppConfig
-from api.main import app, get_app_config, get_repository
+from api.main import app, get_app_config, get_operational_alerts, get_repository, get_universe
+from collector.local_repository import LocalPostgresRepository
+from ops.notification_rules import (
+    DEFAULT_MAX_PRICE_AGE_HOURS,
+    DEFAULT_MIN_ACCURACY,
+    DEFAULT_MIN_FEEDBACK_SAMPLES,
+    DEFAULT_MIN_MEAN_OUTCOME_RETURN,
+)
 
 
 class FakeRepository:
@@ -15,11 +23,13 @@ class FakeRepository:
         prices: pd.DataFrame | None = None,
         prediction_feedback: pd.DataFrame | None = None,
         risk_profile: dict | None = None,
+        analyst_consensus: dict | None = None,
     ) -> None:
         self.prediction = prediction
         self.prices = prices if prices is not None else make_prices()
         self.prediction_feedback = prediction_feedback
         self.risk_profile = risk_profile
+        self.analyst_consensus = analyst_consensus
         self.feedback_kwargs: dict | None = None
         self.backtest_kwargs: dict | None = None
         self.paper_run_kwargs: dict | None = None
@@ -219,43 +229,31 @@ class FakeRepository:
             ]
         )
 
-    def get_auth_user(self, access_token: str) -> dict:
-        if access_token == "bad-token":
-            raise RequestException("invalid token")
-        return {"id": "user-1", "email": "user@example.com"}
+    def get_latest_analyst_consensus(self, asset_id: str) -> dict | None:
+        return self.analyst_consensus
 
-    def get_default_user_risk_profile(self, user_id: str) -> dict | None:
-        return self.risk_profile
-
-    def get_scoped_user_risk_profile(self, user_id: str, scope_type: str, scope_value: str = "") -> dict | None:
-        self.profile_lookup_kwargs = {"user_id": user_id, "scope_type": scope_type, "scope_value": scope_value}
+    def get_scoped_risk_profile(self, scope_type: str, scope_value: str = "") -> dict | None:
+        self.profile_lookup_kwargs = {"scope_type": scope_type, "scope_value": scope_value}
         if self.risk_profile and self.risk_profile.get("scope_type", "default") == scope_type:
             if self.risk_profile.get("scope_value", "") == scope_value:
                 return self.risk_profile
         return None
 
-    def get_user_risk_profile_for_asset(
+    def get_risk_profile_for_asset(
         self,
-        user_id: str,
         ticker: str | None = None,
         asset_class: str | None = None,
     ) -> dict | None:
-        self.profile_lookup_kwargs = {"user_id": user_id, "ticker": ticker, "asset_class": asset_class}
+        self.profile_lookup_kwargs = {"ticker": ticker, "asset_class": asset_class}
         return self.risk_profile
 
-    def upsert_default_user_risk_profile(self, user_id: str, profile: dict) -> dict:
-        self.upserted_risk_profile = {"user_id": user_id, **profile}
-        return self.upserted_risk_profile
-
-    def upsert_user_risk_profile(
+    def upsert_risk_profile(
         self,
-        user_id: str,
         profile: dict,
         scope_type: str = "default",
         scope_value: str = "",
     ) -> dict:
         self.upserted_risk_profile = {
-            "user_id": user_id,
             "scope_type": scope_type,
             "scope_value": scope_value,
             **profile,
@@ -270,7 +268,7 @@ class PredictionUnavailableRepository(FakeRepository):
         model_name: str | None = None,
         model_version: str | None = None,
     ) -> dict | None:
-        raise RequestException("prediction feedback unavailable")
+        raise RuntimeError("prediction feedback unavailable")
 
 
 def make_prices(rows: int = 120) -> pd.DataFrame:
@@ -311,6 +309,41 @@ def test_assets_endpoint_returns_repository_assets() -> None:
     assert response.json()[0]["ticker"] == "AAPL"
 
 
+def test_universe_endpoint_returns_real_snapshot_disclosure() -> None:
+    """Req: Survivorship Bias Disclosure. `GET /api/universe` reads the checked-in
+    `config/universe.sp100.json` snapshot and returns its disclosure block --
+    deliberately not added to `GET /api/assets` (design's explicit decision)."""
+    client = TestClient(app)
+
+    response = client.get("/api/universe")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["snapshot_date"] == "2025-09-22"
+    assert payload["source"]
+    assert payload["membership_bias"]
+    assert payload["member_count"] == 101
+
+
+def test_universe_endpoint_never_accepts_a_request_supplied_path() -> None:
+    """Closes task 5.3's non-matrix security requirement for this call site too:
+    the universe file path is always the `DEFAULT_UNIVERSE_FILE` module constant,
+    never a query parameter or other request-derived value."""
+    assert inspect.signature(get_universe).parameters == {}
+
+
+def test_universe_endpoint_degrades_to_incomplete_marker_when_file_missing(monkeypatch) -> None:
+    monkeypatch.setattr("api.main.DEFAULT_UNIVERSE_FILE", "config/does-not-exist.json")
+    client = TestClient(app)
+
+    response = client.get("/api/universe")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "universe": {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}
+    }
+
+
 def test_health_endpoint_reports_ready_api_without_schema_check() -> None:
     override_repository(FakeRepository())
     client = TestClient(app)
@@ -322,11 +355,11 @@ def test_health_endpoint_reports_ready_api_without_schema_check() -> None:
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["checks"]["api"]["status"] == "ok"
-    assert payload["checks"]["supabase"]["status"] == "ok"
+    assert payload["checks"]["database"]["status"] == "ok"
     assert "schema" not in payload["checks"]
 
 
-def test_health_endpoint_reports_degraded_without_supabase() -> None:
+def test_health_endpoint_reports_degraded_without_database() -> None:
     app.dependency_overrides[get_repository] = lambda: None
     client = TestClient(app)
 
@@ -336,8 +369,8 @@ def test_health_endpoint_reports_degraded_without_supabase() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "degraded"
-    assert payload["checks"]["supabase"]["status"] == "unavailable"
-    assert payload["checks"]["schema"]["reason"] == "supabase_unavailable"
+    assert payload["checks"]["database"]["status"] == "unavailable"
+    assert payload["checks"]["schema"]["reason"] == "database_unavailable"
 
 
 def test_analysis_endpoint_prefers_latest_prediction() -> None:
@@ -405,7 +438,7 @@ def test_analysis_endpoint_applies_authenticated_risk_profile() -> None:
     override_repository(repository)
     client = TestClient(app)
 
-    response = client.get("/api/analysis/AAPL", headers={"Authorization": "Bearer good-token"})
+    response = client.get("/api/analysis/AAPL")
 
     clear_overrides()
     assert response.status_code == 200
@@ -418,7 +451,7 @@ def test_analysis_endpoint_applies_authenticated_risk_profile() -> None:
     assert payload["analysis"]["risk"]["profile_name"] == "conservador"
     assert payload["analysis"]["risk"]["profile_scope"] == "default"
     assert payload["analysis"]["risk"]["profile_scope_value"] == ""
-    assert repository.profile_lookup_kwargs == {"user_id": "user-1", "ticker": "AAPL", "asset_class": "stock"}
+    assert repository.profile_lookup_kwargs == {"ticker": "AAPL", "asset_class": "stock"}
     assert set(payload["analysis"]["risk"]["blocked_reasons"]) == {
         "confidence_below_trade_threshold",
         "expected_risk_above_limit",
@@ -576,6 +609,18 @@ def test_feedback_summary_endpoint_returns_empty_demo_report() -> None:
     assert response.json()["summary"]["evaluated_predictions"] == 0
 
 
+def test_operational_alerts_endpoint_defaults_match_notification_rules_constants() -> None:
+    """Req: Degradation Thresholds Share One Default Source. The endpoint's
+    `Query(default=...)` values must be the exact `ops.notification_rules`
+    constants (a compile-time import), never a duplicated literal, so the two
+    can never silently drift."""
+    parameters = inspect.signature(get_operational_alerts).parameters
+    assert parameters["max_price_age_hours"].default.default == DEFAULT_MAX_PRICE_AGE_HOURS
+    assert parameters["min_feedback_samples"].default.default == DEFAULT_MIN_FEEDBACK_SAMPLES
+    assert parameters["min_accuracy"].default.default == DEFAULT_MIN_ACCURACY
+    assert parameters["min_mean_outcome_return"].default.default == DEFAULT_MIN_MEAN_OUTCOME_RETURN
+
+
 def test_operational_alerts_endpoint_returns_ok_when_thresholds_pass() -> None:
     repository = FakeRepository(
         prediction={
@@ -707,6 +752,76 @@ def test_backtest_history_endpoint_returns_empty_demo_history() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert response.json() == []
+
+
+def test_analyst_consensus_endpoint_returns_latest_snapshot() -> None:
+    repository = FakeRepository(
+        analyst_consensus={
+            "source": "yfinance",
+            "recommendation_key": "strong_buy",
+            "recommendation_mean": 1.4,
+            "analyst_count": 55,
+            "strong_buy": 35,
+            "buy": 15,
+            "hold": 5,
+            "sell": 0,
+            "strong_sell": 0,
+            "target_mean": 260.0,
+            "target_median": 255.0,
+            "target_high": 320.0,
+            "target_low": 200.0,
+            "fetched_at": "2026-09-01T00:00:00+00:00",
+        }
+    )
+    override_repository(repository)
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/AAPL")
+
+    clear_overrides()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ticker"] == "AAPL"
+    assert payload["recommendation_key"] == "strong_buy"
+    assert payload["analyst_count"] == 55
+    assert payload["target_mean"] == 260.0
+    assert payload["fetched_at"] == "2026-09-01T00:00:00+00:00"
+
+
+def test_analyst_consensus_endpoint_returns_null_when_no_snapshot_yet() -> None:
+    override_repository(FakeRepository(analyst_consensus=None))
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/AAPL")
+
+    clear_overrides()
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+def test_analyst_consensus_endpoint_returns_demo_data() -> None:
+    app.dependency_overrides[get_repository] = lambda: None
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/AAPL")
+
+    clear_overrides()
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ticker"] == "AAPL"
+    assert payload["source"] == "demo"
+
+
+def test_analyst_consensus_endpoint_returns_unavailable_when_demo_is_disabled() -> None:
+    app.dependency_overrides[get_repository] = lambda: None
+    override_config(AppConfig(environment="production", allow_demo_fallback=False))
+    client = TestClient(app)
+
+    response = client.get("/api/analyst-consensus/BTC-USD")
+
+    clear_overrides()
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Fuente de datos no disponible y modo demo desactivado"
 
 
 def test_paper_trading_endpoint_simulates_prediction_stream() -> None:
@@ -901,35 +1016,6 @@ def test_risk_profile_endpoint_returns_default_without_auth() -> None:
     assert payload["profile"]["allow_short"] is True
 
 
-def test_risk_profile_endpoint_returns_authenticated_profile() -> None:
-    override_repository(
-        FakeRepository(
-            risk_profile={
-                "name": "conservador",
-                "max_position_size": 0.03,
-                "min_confidence_to_trade": 0.72,
-                "max_expected_risk": 0.02,
-                "stop_loss": 0.01,
-                "take_profit": 0.025,
-                "allow_short": False,
-            }
-        )
-    )
-    client = TestClient(app)
-
-    response = client.get("/api/risk-profile", headers={"Authorization": "Bearer good-token"})
-
-    clear_overrides()
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["source"] == "user"
-    assert payload["profile"]["name"] == "conservador"
-    assert payload["profile"]["scope_type"] == "default"
-    assert payload["profile"]["scope_value"] == ""
-    assert payload["profile"]["max_position_size"] == 0.03
-    assert payload["profile"]["allow_short"] is False
-
-
 def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     repository = FakeRepository(
         risk_profile={
@@ -947,10 +1033,7 @@ def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     override_repository(repository)
     client = TestClient(app)
 
-    response = client.get(
-        "/api/risk-profile?scope_type=asset_class&scope_value=Crypto",
-        headers={"Authorization": "Bearer good-token"},
-    )
+    response = client.get("/api/risk-profile?scope_type=asset_class&scope_value=Crypto")
 
     clear_overrides()
     assert response.status_code == 200
@@ -959,20 +1042,19 @@ def test_risk_profile_endpoint_returns_scoped_profile() -> None:
     assert payload["profile"]["scope_type"] == "asset_class"
     assert payload["profile"]["scope_value"] == "crypto"
     assert repository.profile_lookup_kwargs == {
-        "user_id": "user-1",
         "scope_type": "asset_class",
         "scope_value": "crypto",
     }
 
 
-def test_risk_profile_update_requires_auth() -> None:
-    override_repository(FakeRepository())
+def test_risk_profile_endpoint_rejects_invalid_scope_type() -> None:
+    app.dependency_overrides[get_repository] = lambda: None
     client = TestClient(app)
 
-    response = client.put("/api/risk-profile", json={"max_position_size": 0.04})
+    response = client.get("/api/risk-profile?scope_type=bogus")
 
     clear_overrides()
-    assert response.status_code == 401
+    assert response.status_code == 422
 
 
 def test_risk_profile_update_persists_authenticated_profile() -> None:
@@ -982,7 +1064,6 @@ def test_risk_profile_update_persists_authenticated_profile() -> None:
 
     response = client.put(
         "/api/risk-profile",
-        headers={"Authorization": "Bearer good-token"},
         json={
             "name": "agresivo",
             "max_position_size": 0.15,
@@ -997,7 +1078,6 @@ def test_risk_profile_update_persists_authenticated_profile() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert repository.upserted_risk_profile == {
-        "user_id": "user-1",
         "scope_type": "default",
         "scope_value": "",
         "name": "agresivo",
@@ -1018,7 +1098,6 @@ def test_risk_profile_update_persists_ticker_scope() -> None:
 
     response = client.put(
         "/api/risk-profile",
-        headers={"Authorization": "Bearer good-token"},
         json={
             "name": "btc",
             "scope_type": "ticker",
@@ -1035,7 +1114,6 @@ def test_risk_profile_update_persists_ticker_scope() -> None:
     clear_overrides()
     assert response.status_code == 200
     assert repository.upserted_risk_profile == {
-        "user_id": "user-1",
         "scope_type": "ticker",
         "scope_value": "BTC-USD",
         "name": "btc",
@@ -1049,11 +1127,21 @@ def test_risk_profile_update_persists_ticker_scope() -> None:
     assert response.json()["profile"]["scope_value"] == "BTC-USD"
 
 
-def test_risk_profile_endpoint_rejects_invalid_token() -> None:
-    override_repository(FakeRepository())
+def test_health_endpoint_schema_check_succeeds_against_real_database(
+    repository: LocalPostgresRepository,
+) -> None:
+    """End-to-end regression for the interim gap flagged in apply-progress.md:
+    `/api/health?include_schema=true` must call `check_relations` with a real
+    `LocalPostgresRepository` (not a Fake) so `relation_exists` actually runs
+    against a migrated database, with no `AttributeError`."""
+    override_repository(repository)
     client = TestClient(app)
 
-    response = client.get("/api/risk-profile", headers={"Authorization": "Bearer bad-token"})
+    response = client.get("/api/health?include_schema=true")
 
     clear_overrides()
-    assert response.status_code == 401
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["checks"]["database"]["status"] == "ok"
+    assert payload["checks"]["schema"]["status"] == "ok"
+    assert payload["checks"]["schema"]["missing"] == []

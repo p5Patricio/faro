@@ -26,6 +26,24 @@ class HistoricalPriceRequest:
     end: str | None = None
 
 
+@dataclass(frozen=True)
+class AnalystConsensus:
+    ticker: str
+    source: str
+    recommendation_key: str
+    recommendation_mean: float
+    analyst_count: int
+    strong_buy: int
+    buy: int
+    hold: int
+    sell: int
+    strong_sell: int
+    target_mean: float
+    target_median: float
+    target_high: float
+    target_low: float
+
+
 class PriceProvider(Protocol):
     name: str
 

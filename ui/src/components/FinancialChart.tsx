@@ -1,5 +1,13 @@
 import { useEffect, useRef } from 'react';
-import { AreaSeries, ColorType, createChart, type IChartApi } from 'lightweight-charts';
+import {
+  AreaSeries,
+  ColorType,
+  createChart,
+  createSeriesMarkers,
+  type IChartApi,
+  type SeriesMarker,
+  type Time,
+} from 'lightweight-charts';
 
 export interface PricePoint {
   timestamp: string;
@@ -10,8 +18,15 @@ export interface PricePoint {
   volume?: number | string;
 }
 
+export interface ChartSignal {
+  timestamp?: string;
+  action: string;
+}
+
 interface ChartProps {
   data: PricePoint[];
+  /** BUY / SELL decisions to overlay as markers (HOLD is ignored). */
+  signals?: ChartSignal[];
   colors?: {
     backgroundColor?: string;
     lineColor?: string;
@@ -23,12 +38,14 @@ interface ChartProps {
 
 export function FinancialChart({
   data,
+  signals = [],
   colors: {
-    backgroundColor = '#181b1a',
-    lineColor = '#6ee7b7',
-    textColor = '#d4d4d8',
-    areaTopColor = 'rgba(110, 231, 183, 0.28)',
-    areaBottomColor = 'rgba(110, 231, 183, 0.02)',
+    // Faro palette: navy surface, amber-gold price line (the lighthouse beam).
+    backgroundColor = '#111b34',
+    lineColor = '#f2b33a',
+    textColor = '#cbd5e1',
+    areaTopColor = 'rgba(242, 179, 58, 0.24)',
+    areaBottomColor = 'rgba(242, 179, 58, 0.02)',
   } = {},
 }: ChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -71,6 +88,22 @@ export function FinancialChart({
       .sort((a, b) => a.time.localeCompare(b.time));
 
     series.setData(formattedData);
+
+    const markers: SeriesMarker<Time>[] = signals
+      .filter((s) => s.timestamp && (s.action === 'BUY' || s.action === 'SELL'))
+      .map((s) => {
+        const sell = s.action === 'SELL';
+        return {
+          time: (s.timestamp as string).split('T')[0] as Time,
+          position: sell ? 'aboveBar' : 'belowBar',
+          color: sell ? '#fda4af' : '#6ee7b7',
+          shape: sell ? 'arrowDown' : 'arrowUp',
+          text: s.action,
+        } satisfies SeriesMarker<Time>;
+      })
+      .sort((a, b) => String(a.time).localeCompare(String(b.time)));
+    if (markers.length > 0) createSeriesMarkers(series, markers);
+
     chart.timeScale().fitContent();
     chartRef.current = chart;
 
@@ -85,7 +118,7 @@ export function FinancialChart({
       window.removeEventListener('resize', handleResize);
       chart.remove();
     };
-  }, [data, backgroundColor, lineColor, textColor, areaTopColor, areaBottomColor]);
+  }, [data, signals, backgroundColor, lineColor, textColor, areaTopColor, areaBottomColor]);
 
   return <div ref={chartContainerRef} className="h-[420px] w-full" />;
 }

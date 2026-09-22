@@ -1,0 +1,24 @@
+change: professional-improvements-foundation
+status: archived
+mode: openspec
+created_at: 2026-07-12
+archived_at: 2026-09-02
+preflight:
+  pace: auto
+  artifact_store: hybrid
+  delivery_strategy: auto-chain
+  review_budget_lines: 400
+artifacts:
+  proposal: openspec/changes/professional-improvements-foundation/proposal.md
+  specs:
+    - openspec/changes/professional-improvements-foundation/specs/professional-operations/spec.md
+  design: openspec/changes/professional-improvements-foundation/design.md
+  tasks: openspec/changes/professional-improvements-foundation/tasks.md
+progress:
+  proposal: complete
+  specs: complete
+  design: complete
+  tasks: complete
+  apply: complete
+  verify: complete
+  archive: complete

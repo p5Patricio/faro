@@ -4,9 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.main import apply_date_overrides, load_asset_configs
 from collector.market_data_job import run_market_data_job
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,6 +28,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stop-loss", type=float, default=0.015)
     parser.add_argument("--limit", type=int, help="Optional max number of price rows for materialization")
     parser.add_argument("--batch-size", type=int, default=500)
+    parser.add_argument(
+        "--collect-analyst-consensus",
+        action="store_true",
+        help="Also fetch and persist Wall Street analyst consensus (yfinance only)",
+    )
     parser.add_argument("--fail-fast", action="store_true")
     parser.add_argument("--out", help="Optional JSON summary path")
     return parser.parse_args()
@@ -38,24 +45,26 @@ def main() -> None:
         start=args.start,
         end=args.end,
     )
-    repository = SupabaseRepository(SupabaseConfig.from_env())
-    payload = run_market_data_job(
-        repository=repository,
-        assets=assets,
-        feature_sets=parse_csv(args.feature_sets),
-        label_method=args.label_method,
-        horizon=args.horizon,
-        buy_threshold=args.buy_threshold,
-        sell_threshold=args.sell_threshold,
-        profit_take=args.profit_take,
-        stop_loss=args.stop_loss,
-        limit=args.limit,
-        batch_size=args.batch_size,
-        collect_prices=not args.skip_collection,
-        materialize=not args.skip_materialization,
-        materialize_tickers=parse_csv(args.tickers) if args.tickers else None,
-        continue_on_error=not args.fail_fast,
-    )
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        payload = run_market_data_job(
+            repository=repository,
+            assets=assets,
+            feature_sets=parse_csv(args.feature_sets),
+            label_method=args.label_method,
+            horizon=args.horizon,
+            buy_threshold=args.buy_threshold,
+            sell_threshold=args.sell_threshold,
+            profit_take=args.profit_take,
+            stop_loss=args.stop_loss,
+            limit=args.limit,
+            batch_size=args.batch_size,
+            collect_prices=not args.skip_collection,
+            materialize=not args.skip_materialization,
+            materialize_tickers=parse_csv(args.tickers) if args.tickers else None,
+            continue_on_error=not args.fail_fast,
+            collect_analyst_consensus=args.collect_analyst_consensus,
+        )
 
     if args.out:
         out = Path(args.out)

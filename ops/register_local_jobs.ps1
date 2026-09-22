@@ -1,0 +1,78 @@
+<#
+.SYNOPSIS
+    Register the two Windows Task Scheduler tasks that replace the retired
+    ".github/workflows/operational-jobs.yml" GitHub Actions cron.
+
+.DESCRIPTION
+    Creates:
+      - "Faro\DailyOperationalCycle"  -- daily at 06:20, `--job full`
+        (mirrors the retired workflow's `cron: "20 6 * * *"`)
+      - "Faro\WeeklyRetrainingCycle"  -- weekly Sunday at 06:40,
+        `--job full_retrain` (mirrors `cron: "40 6 * * 0"`)
+
+    This script only *registers the schtasks*. It does NOT set
+    LOCAL_DATABASE_URL, TEST_DATABASE_URL, or TELEGRAM_BOT_TOKEN/CHAT_ID --
+    those must already be present in your own user/machine environment (or
+    a `.env` file `python-dotenv` will load) before either task runs.
+    NEVER hardcode a database password or bot token into this script or
+    into the registered task's command line: `schtasks /Query ... /V` and
+    the Task Scheduler UI both show the full command line in plain text.
+
+.NOTES
+    Run this script yourself, interactively, from an elevated or normal
+    PowerShell prompt. It is not invoked automatically by anything in this
+    repository or by CI.
+
+    Both actions route through ops/run_hidden.vbs (wscript.exe) rather than
+    a raw `cmd /c ...` action, which has no way to suppress its own console
+    window -- confirmed live (a terminal flashing open at every firing) on
+    Faro\FinanceBotSync before that launcher existed. See run_hidden.vbs's
+    own header comment.
+#>
+
+$ErrorActionPreference = "Stop"
+
+$RepoRoot  = Split-Path -Parent $PSScriptRoot
+$HiddenVbs = Join-Path $RepoRoot 'ops\run_hidden.vbs'
+$DailyJob  = Join-Path $RepoRoot 'ops\run_daily_operational_cycle.ps1'
+$WeeklyJob = Join-Path $RepoRoot 'ops\run_weekly_retraining_cycle.ps1'
+
+Write-Host "Registering Faro Task Scheduler jobs (repo root: $RepoRoot)"
+
+# Daily operational cycle: market data -> inference -> paper trading, 06:20.
+schtasks /Create `
+    /TN "Faro\DailyOperationalCycle" `
+    /SC DAILY `
+    /ST 06:20 `
+    /RL LIMITED `
+    /F `
+    /TR "wscript.exe `"$HiddenVbs`" `"$DailyJob`""
+
+# Weekly retraining cycle: fundamental_v1 + technical_alpha_v1 + sentiment_v1
+# materialization, fundamental_v1 retrain, then the technical_v2 full_retrain
+# cycle -- see ops/weekly_retrain_all.ps1's own docstring. Sunday 06:40.
+schtasks /Create `
+    /TN "Faro\WeeklyRetrainingCycle" `
+    /SC WEEKLY `
+    /D SUN `
+    /ST 06:40 `
+    /RL LIMITED `
+    /F `
+    /TR "wscript.exe `"$HiddenVbs`" `"$WeeklyJob`""
+
+Write-Host ""
+Write-Host "Registered. Verify with:"
+Write-Host "  schtasks /Query /TN `"Faro\DailyOperationalCycle`" /V /FO LIST"
+Write-Host "  schtasks /Query /TN `"Faro\WeeklyRetrainingCycle`" /V /FO LIST"
+Write-Host ""
+Write-Host "Smoke-test a run on demand with:"
+Write-Host "  schtasks /Run /TN `"Faro\DailyOperationalCycle`""
+Write-Host ""
+Write-Host "Remove either task with:"
+Write-Host "  schtasks /Delete /TN `"Faro\DailyOperationalCycle`" /F"
+Write-Host "  schtasks /Delete /TN `"Faro\WeeklyRetrainingCycle`" /F"
+Write-Host ""
+Write-Host "Both tasks run as the current user (/RL LIMITED, no elevation)." `
+    "If they must run while you are logged off, re-run schtasks /Create with" `
+    "an added '/RU `"%USERNAME%`" /RP *' (interactively prompts for your" `
+    "Windows password -- never store it in this script)."

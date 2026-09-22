@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from brain.backtesting import BacktestConfig, run_prediction_backtest
 from brain.backtesting import run_confidence_threshold_sweep, run_walk_forward_model_backtest
@@ -18,13 +19,21 @@ from brain.inference_job import (
     target_ticker_for_model_run,
 )
 from brain.labeling import BUY, HOLD, SELL, fixed_horizon_labels, triple_barrier_labels
+from brain.materialize_fundamentals import FundamentalMaterializationConfig, materialize_asset_fundamentals
 from brain.models import available_model_names, create_model, walk_forward_evaluate
 from brain.promotion import build_promoted_training_frame, select_candidate
 from brain.risk import RiskPolicy, apply_risk_policy
-from brain.retraining_job import RetrainingJobConfig, compare_candidate_to_incumbent, run_retraining_job
-from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest
+from brain.retraining_job import (
+    RetrainingJobConfig,
+    compare_candidate_to_incumbent,
+    resolve_target_tickers,
+    run_retraining_job,
+)
+from brain.run_retraining_job import DEFAULT_UNIVERSE_FILE, load_universe_disclosure
+from brain.scoped_evaluation import AssetDataset, run_scoped_walk_forward_backtest, select_scope_datasets
 from brain.selection import PromotionCriteria, evaluate_promotion, rank_candidate_summaries, score_candidate
-from collector.supabase_repository import SupabaseConfig
+from collector.fundamentals import CONCEPT_CHAINS
+from collector.universe import load_universe_document, universe_disclosure
 
 
 def make_prices(rows: int = 120) -> pd.DataFrame:
@@ -416,6 +425,108 @@ def test_run_scoped_walk_forward_backtest_compares_training_scopes() -> None:
     assert set(global_result.predictions["scope"]) == {"global"}
 
 
+def make_fake_dataset(ticker: str, rows: int, asset_class: str = "stock") -> AssetDataset:
+    return AssetDataset(
+        asset_id=f"asset-{ticker.lower()}",
+        ticker=ticker,
+        asset_class=asset_class,
+        dataset=pd.DataFrame({"value": range(rows)}),
+    )
+
+
+def test_select_scope_datasets_caps_global_scope_deterministically() -> None:
+    target = make_fake_dataset("AAA", rows=50)
+    peers = [make_fake_dataset(f"PEER{index:02d}", rows=100 + index) for index in range(39)]
+    datasets = [target, *peers]
+    assert len(datasets) == 40
+
+    first_run = select_scope_datasets(datasets, "AAA", "global", max_scope_assets=12)
+    second_run = select_scope_datasets(list(reversed(datasets)), "AAA", "global", max_scope_assets=12)
+
+    assert len(first_run) == 12
+    assert first_run[0].ticker == "AAA"
+    assert [item.ticker for item in first_run] == [item.ticker for item in second_run]
+
+    expected_rest = sorted(peers, key=lambda item: (-len(item.dataset), item.ticker))[:11]
+    assert [item.ticker for item in first_run[1:]] == [item.ticker for item in expected_rest]
+
+
+def test_select_scope_datasets_below_cap_is_unaffected() -> None:
+    target = make_fake_dataset("AAA", rows=50)
+    peers = [make_fake_dataset(f"PEER{index:02d}", rows=10) for index in range(3)]
+    datasets = [target, *peers]
+
+    selected = select_scope_datasets(datasets, "AAA", "global", max_scope_assets=12)
+
+    assert selected == datasets
+
+
+def test_resolve_target_tickers_raises_over_cap_with_no_tickers_or_default_targets() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    with pytest.raises(ValueError, match="max_auto_targets"):
+        resolve_target_tickers(datasets, None, max_auto_targets=8)
+
+
+def test_resolve_target_tickers_uses_default_targets_when_no_tickers_given() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    resolved = resolve_target_tickers(
+        datasets, None, default_targets=["TKR001", "TKR050", "MISSING"], max_auto_targets=8
+    )
+
+    assert resolved == ["TKR001", "TKR050"]
+
+
+def test_resolve_target_tickers_explicit_tickers_override_policy() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    resolved = resolve_target_tickers(
+        datasets, ["tkr002", "missing"], default_targets=["TKR001"], max_auto_targets=8
+    )
+
+    assert resolved == ["TKR002"]
+
+
+def test_resolve_target_tickers_within_cap_falls_back_to_sorted_available() -> None:
+    datasets = [make_fake_dataset(ticker, rows=1) for ticker in ["MSFT", "AAPL", "BTC-USD", "ETH-USD"]]
+
+    resolved = resolve_target_tickers(datasets, None, max_auto_targets=8)
+
+    assert resolved == ["AAPL", "BTC-USD", "ETH-USD", "MSFT"]
+
+
+def test_resolve_target_tickers_uncapped_preserves_two_positional_arg_behavior() -> None:
+    datasets = [make_fake_dataset(f"TKR{index:03d}", rows=1) for index in range(100)]
+
+    # existing 2-positional-arg call sites never pass max_auto_targets/default_targets --
+    # behavior must stay exactly today's `sorted(available)`, no matter the count.
+    resolved = resolve_target_tickers(datasets, None)
+
+    assert resolved == sorted(item.ticker for item in datasets)
+
+
+def test_load_universe_disclosure_embeds_universe_disclosure_for_real_snapshot() -> None:
+    """Req: Survivorship Bias Disclosure -- confirms `brain/run_retraining_job.py`'s
+    `main()` (`payload["universe"] = load_universe_disclosure(DEFAULT_UNIVERSE_FILE)`)
+    embeds `universe_disclosure(doc)` verbatim under the JSON report's `"universe"`
+    key for the real checked-in `config/universe.sp100.json` snapshot (spec
+    "Backtest report discloses snapshot bias")."""
+    disclosure = load_universe_disclosure(DEFAULT_UNIVERSE_FILE)
+
+    assert disclosure == universe_disclosure(load_universe_document(DEFAULT_UNIVERSE_FILE))
+    assert disclosure["snapshot_date"] == "2025-09-22"
+    assert disclosure["member_count"] == 101
+
+
+def test_load_universe_disclosure_degrades_to_incomplete_marker_when_missing(tmp_path) -> None:
+    """Spec "Missing snapshot date blocks disclosure-bearing output" -- a missing
+    universe file must never silently omit the `"universe"` key."""
+    disclosure = load_universe_disclosure(str(tmp_path / "does-not-exist.json"))
+
+    assert disclosure == {"disclosure_status": "incomplete", "reason": "no_universe_snapshot"}
+
+
 def test_candidate_selection_scores_return_after_risk() -> None:
     strong = {
         "scope": "global",
@@ -581,6 +692,55 @@ def test_load_promoted_model_runs_filters_unpromoted_runs() -> None:
     assert min_confidence_for_model_run(promoted) == 0.65
 
 
+def test_load_promoted_model_runs_keeps_only_newest_per_ticker() -> None:
+    # get_model_runs returns newest-first; the older AAPL run is a different
+    # feature set but the same ticker, so only the newest one serves.
+    newer_aapl = {
+        "id": "run-new",
+        "model_name": "extra_trees",
+        "model_version": "v2",
+        "feature_set": "fundamental_v1",
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "AAPL"},
+    }
+    older_aapl = {
+        "id": "run-old",
+        "model_name": "extra_trees",
+        "model_version": "v1",
+        "feature_set": "technical_v2",
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "AAPL"},
+    }
+    msft = {
+        "id": "run-msft",
+        "model_name": "random_forest",
+        "model_version": "v1",
+        "feature_set": "technical_v2",
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "MSFT"},
+    }
+    repository = FakeModelRunRepository([newer_aapl, older_aapl, msft])
+
+    selected, skipped = load_promoted_model_runs(repository, limit=50)
+
+    assert [run["id"] for run in selected] == ["run-new", "run-msft"]
+    superseded = [entry["model_run_id"] for entry in skipped if entry["reason"] == "superseded_by_newer_promotion"]
+    assert superseded == ["run-old"]
+
+
+class FakeInferenceRepository:
+    """Minimal repository stub for `run_latest_inference_job`'s previous-action
+    read (Req: Signal Alerts Fire Only on Action Transition)."""
+
+    def __init__(self, previous_predictions: dict[str, dict | None] | None = None) -> None:
+        self.previous_predictions = previous_predictions or {}
+        self.get_latest_prediction_calls: list[tuple] = []
+
+    def get_asset_id(self, ticker: str) -> str:
+        return f"asset-{ticker}"
+
+    def get_latest_prediction(self, asset_id, model_name=None, model_version=None):
+        self.get_latest_prediction_calls.append((asset_id, model_name, model_version))
+        return self.previous_predictions.get(asset_id)
+
+
 def test_run_latest_inference_job_records_success_and_errors(monkeypatch, tmp_path) -> None:
     good_artifact = tmp_path / "good.joblib"
     good_artifact.write_text("placeholder", encoding="utf-8")
@@ -613,14 +773,47 @@ def test_run_latest_inference_job_records_success_and_errors(monkeypatch, tmp_pa
 
     monkeypatch.setattr("brain.inference_job.generate_latest_prediction", fake_generate_latest_prediction)
 
-    result = run_latest_inference_job(object(), model_runs)
+    repository = FakeInferenceRepository(previous_predictions={"asset-BTC-USD": {"predicted_action": "HOLD"}})
+    result = run_latest_inference_job(repository, model_runs)
 
     assert result["attempted"] == 2
     assert result["succeeded"] == 1
     assert result["failed"] == 1
     assert result["results"][0]["ticker"] == "BTC-USD"
     assert result["results"][0]["latest_prediction"]["confidence"] == 0.65
+    assert result["results"][0]["previous_action"] == "HOLD"
     assert "artifact_not_found" in result["errors"][0]["error"]
+    assert repository.get_latest_prediction_calls == [("asset-BTC-USD", "extra_trees", None)]
+
+
+def test_run_latest_inference_job_first_ever_prediction_has_no_previous_action(monkeypatch, tmp_path) -> None:
+    good_artifact = tmp_path / "good.joblib"
+    good_artifact.write_text("placeholder", encoding="utf-8")
+    model_runs = [
+        {
+            "id": "run-1",
+            "model_name": "extra_trees",
+            "model_version": "v1",
+            "feature_set": "technical_v2",
+            "artifact_uri": str(good_artifact),
+            "params": {"source": "candidate_matrix_promotion", "target_ticker": "BTC-USD", "min_confidence": 0.65},
+        },
+    ]
+
+    monkeypatch.setattr("brain.inference_job.joblib.load", lambda path: object())
+
+    def fake_generate_latest_prediction(**kwargs):
+        return {
+            "predictions_loaded": 1,
+            "predictions": [{"action": "BUY", "confidence": kwargs["min_confidence"]}],
+        }
+
+    monkeypatch.setattr("brain.inference_job.generate_latest_prediction", fake_generate_latest_prediction)
+
+    repository = FakeInferenceRepository(previous_predictions={})
+    result = run_latest_inference_job(repository, model_runs)
+
+    assert result["results"][0]["previous_action"] is None
 
 
 def test_select_candidate_uses_top_promotable_rank() -> None:
@@ -726,7 +919,7 @@ def test_run_retraining_job_promotes_and_uploads_candidate(monkeypatch, tmp_path
     }
     artifact_path = tmp_path / "model.joblib"
 
-    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
     monkeypatch.setattr(
         "brain.retraining_job.run_candidate_matrix",
         lambda *args, **kwargs: {"results": [], "ranking": [candidate], "errors": []},
@@ -746,14 +939,13 @@ def test_run_retraining_job_promotes_and_uploads_candidate(monkeypatch, tmp_path
 
     monkeypatch.setattr("brain.retraining_job.promote_candidate_from_report", fake_promote_candidate_from_report)
     monkeypatch.setattr(
-        "brain.retraining_job.upload_supabase_artifact",
-        lambda *args, **kwargs: "supabase://model-artifacts/models/model.joblib",
+        "brain.retraining_job.store_model_artifact",
+        lambda *args, **kwargs: "models/model.joblib",
     )
     repository = FakeRetrainingRepository()
 
     result = run_retraining_job(
         repository=repository,
-        supabase_config=SupabaseConfig(url="https://example.supabase.co", key="key"),
         tickers=["BTC-USD"],
         config=RetrainingJobConfig(
             model_names=["extra_trees"],
@@ -768,9 +960,9 @@ def test_run_retraining_job_promotes_and_uploads_candidate(monkeypatch, tmp_path
     assert result["succeeded"] == 1
     assert result["failed"] == 0
     assert result["results"][0]["model_run_id"] == "run-1"
-    assert result["results"][0]["artifact_uri"] == "supabase://model-artifacts/models/model.joblib"
+    assert result["results"][0]["artifact_uri"] == "models/model.joblib"
     assert result["results"][0]["incumbent_comparison"]["reason"] == "no_incumbent"
-    assert repository.updated_artifacts == [("run-1", "supabase://model-artifacts/models/model.joblib")]
+    assert repository.updated_artifacts == [("run-1", "models/model.joblib")]
 
 
 def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monkeypatch) -> None:
@@ -800,7 +992,7 @@ def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monk
         "metrics": {"promotion": {"candidate": {"candidate_id": "old", "objective_score": 0.50}}},
     }
 
-    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
     monkeypatch.setattr(
         "brain.retraining_job.run_candidate_matrix",
         lambda *args, **kwargs: {"results": [], "ranking": [candidate], "errors": []},
@@ -813,7 +1005,6 @@ def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monk
 
     result = run_retraining_job(
         repository=FakeRetrainingRepository([incumbent]),
-        supabase_config=SupabaseConfig(url="https://example.supabase.co", key="key"),
         tickers=["BTC-USD"],
         config=RetrainingJobConfig(
             model_names=["extra_trees"],
@@ -829,6 +1020,65 @@ def test_run_retraining_job_skips_candidate_that_does_not_improve_incumbent(monk
     assert result["failed"] == 0
     assert result["skipped"][0]["reason"] == "candidate_not_better_than_incumbent"
     assert result["skipped"][0]["incumbent_model_run_id"] == "run-incumbent"
+
+
+def test_incumbent_lookup_compares_across_feature_sets(monkeypatch) -> None:
+    """A fundamental_v1 candidate is measured against the technical_v2 model
+    already serving the ticker, not only against a prior fundamental_v1 run
+    (proposal.md, fundamental-analysis, Product Decision 2)."""
+    target = AssetDataset(
+        asset_id="aapl-id",
+        ticker="AAPL",
+        asset_class="stock",
+        dataset=pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")}),
+    )
+    candidate = {
+        "candidate_id": "AAPL::extra_trees::confidence_0.6500::local",
+        "promotion": {"status": "pass"},
+        "model_name": "extra_trees",
+        "scope": "local",
+        "target_ticker": "AAPL",
+        "min_confidence": 0.65,
+        "objective_score": 0.30,
+    }
+    technical_incumbent = {
+        "id": "run-technical",
+        "model_name": "extra_trees",
+        "model_version": "v1",
+        "feature_set": "technical_v2",
+        "label_method": "triple_barrier",
+        "horizon": 5,
+        "params": {"source": "candidate_matrix_promotion", "target_ticker": "AAPL"},
+        "metrics": {"promotion": {"candidate": {"candidate_id": "old", "objective_score": 0.55}}},
+    }
+
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr(
+        "brain.retraining_job.run_candidate_matrix",
+        lambda *args, **kwargs: {"results": [], "ranking": [candidate], "errors": []},
+    )
+
+    def fail_if_promoted(**kwargs):
+        raise AssertionError("A worse cross-feature-set candidate must not be promoted")
+
+    monkeypatch.setattr("brain.retraining_job.promote_candidate_from_report", fail_if_promoted)
+
+    result = run_retraining_job(
+        repository=FakeRetrainingRepository([technical_incumbent]),
+        tickers=["AAPL"],
+        config=RetrainingJobConfig(
+            model_names=["extra_trees"],
+            confidence_thresholds=[0.65],
+            scopes=["local"],
+            feature_set="fundamental_v1",
+            upload_artifacts=False,
+            min_active_trades=1,
+        ),
+    )
+
+    assert result["succeeded"] == 0
+    assert result["skipped"][0]["reason"] == "candidate_not_better_than_incumbent"
+    assert result["skipped"][0]["incumbent_model_run_id"] == "run-technical"
 
 
 def test_compare_candidate_to_incumbent_allows_real_improvement() -> None:
@@ -854,7 +1104,7 @@ def test_run_retraining_job_skips_when_no_candidate_passes(monkeypatch) -> None:
         dataset=pd.DataFrame({"timestamp": pd.date_range("2024-01-01", periods=3, freq="D", tz="UTC")}),
     )
 
-    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets_from_supabase", lambda *args, **kwargs: ([target], []))
+    monkeypatch.setattr("brain.retraining_job.load_candidate_datasets", lambda *args, **kwargs: ([target], []))
     monkeypatch.setattr(
         "brain.retraining_job.run_candidate_matrix",
         lambda *args, **kwargs: {
@@ -866,7 +1116,6 @@ def test_run_retraining_job_skips_when_no_candidate_passes(monkeypatch) -> None:
 
     result = run_retraining_job(
         repository=FakeRetrainingRepository(),
-        supabase_config=SupabaseConfig(url="https://example.supabase.co", key="key"),
         tickers=["BTC-USD"],
         config=RetrainingJobConfig(
             model_names=["extra_trees"],
@@ -880,6 +1129,145 @@ def test_run_retraining_job_skips_when_no_candidate_passes(monkeypatch) -> None:
     assert result["succeeded"] == 0
     assert result["failed"] == 0
     assert result["skipped"][0]["reason"] == "no_promotable_candidate"
+
+
+def _fundamental_fact_row(
+    logical_concept: str,
+    *,
+    period_end: str,
+    filed_date: str,
+    value: float,
+    fiscal_period: str = "FY",
+    accession: str = "acc-1",
+) -> dict:
+    """Build one raw `fundamental_facts` row via the real `CONCEPT_CHAINS`
+    (the same map `collector.fundamentals.parse_company_facts` and
+    `brain.fundamental_factors._select_as_of` read), so this fixture's tags
+    stay in sync with the production chains instead of duplicating them."""
+    expected_unit, chain = CONCEPT_CHAINS[logical_concept]
+    taxonomy, concept = chain[0]
+    return {
+        "taxonomy": taxonomy,
+        "concept": concept,
+        "unit": expected_unit,
+        "period_end": period_end,
+        "fiscal_year": None,
+        "fiscal_period": fiscal_period,
+        "filed_date": filed_date,
+        "accession": accession,
+        "value": value,
+    }
+
+
+def _two_fiscal_years_of_fundamental_facts() -> list[dict]:
+    """A stock with two clean fiscal years -- all 9 Piotroski signals TRUE,
+    Altman/Novy-Marx both finite. Same hand-built values
+    `tests/test_fundamental_factors.py::_two_year_facts` and
+    `tests/test_fundamental_lookahead.py::_two_year_facts` use (already
+    proven correct at the unit level). `year_one` is filed well before
+    `make_prices`' spine starts -- harmless, since Piotroski is NaN for
+    every row that only has one fiscal year available, so `upsert_features`
+    drops that whole warm-up window anyway regardless of `year_one`'s own
+    Altman resolution. `year_two` is filed ON a date inside the spine (past
+    the 50-day technical warm-up) so Altman's exact-date price lookup
+    (`_price_close_on`, never interpolated) actually resolves once both
+    fiscal years are visible -- this test proves the pipeline WIRING
+    end-to-end (materialize -> retrain), not the C1 lag itself, which
+    Phase 4's dedicated look-ahead suite already covers."""
+    year_one = dict(period_end="2021-12-31", filed_date="2022-02-10")
+    year_two = dict(period_end="2022-12-31", filed_date="2024-03-01")
+    return [
+        _fundamental_fact_row("assets", value=1000.0, **year_one),
+        _fundamental_fact_row("assets_current", value=400.0, **year_one),
+        _fundamental_fact_row("liabilities", value=600.0, **year_one),
+        _fundamental_fact_row("liabilities_current", value=200.0, **year_one),
+        _fundamental_fact_row("equity", value=400.0, **year_one),
+        _fundamental_fact_row("long_term_debt", value=300.0, **year_one),
+        _fundamental_fact_row("net_income", value=50.0, **year_one),
+        _fundamental_fact_row("cfo", value=40.0, **year_one),
+        _fundamental_fact_row("retained_earnings", value=150.0, **year_one),
+        _fundamental_fact_row("operating_income", value=80.0, **year_one),
+        _fundamental_fact_row("revenue", value=900.0, **year_one),
+        _fundamental_fact_row("cost_of_revenue", value=600.0, **year_one),
+        _fundamental_fact_row("shares_outstanding_wavg", value=100.0, **year_one),
+        _fundamental_fact_row("shares_outstanding_mve", value=101.0, **year_one),
+        _fundamental_fact_row("assets", value=1200.0, **year_two),
+        _fundamental_fact_row("assets_current", value=500.0, **year_two),
+        _fundamental_fact_row("liabilities", value=650.0, **year_two),
+        _fundamental_fact_row("liabilities_current", value=220.0, **year_two),
+        _fundamental_fact_row("equity", value=550.0, **year_two),
+        _fundamental_fact_row("long_term_debt", value=280.0, **year_two),
+        _fundamental_fact_row("net_income", value=90.0, **year_two),
+        _fundamental_fact_row("cfo", value=110.0, **year_two),
+        _fundamental_fact_row("retained_earnings", value=200.0, **year_two),
+        _fundamental_fact_row("operating_income", value=130.0, **year_two),
+        _fundamental_fact_row("revenue", value=1100.0, **year_two),
+        _fundamental_fact_row("cost_of_revenue", value=650.0, **year_two),
+        _fundamental_fact_row("shares_outstanding_wavg", value=98.0, **year_two),
+        _fundamental_fact_row("shares_outstanding_mve", value=99.0, **year_two),
+    ]
+
+
+def test_retraining_job_runs_on_fundamental_v1_feature_set(repository, tmp_path) -> None:
+    """Phase 5 acceptance (proposal.md Success Criteria / design.md slice 5):
+    `--feature-set fundamental_v1` materializes and retrains end-to-end on a
+    stock fixture, and a crypto asset in the same run appears in
+    `skipped_assets`, never as an error. Wires `materialize_asset_fundamentals`
+    (Phase 4) into `run_retraining_job` (pre-existing, feature-set-agnostic)
+    for real against the real `repository` fixture -- the first genuinely
+    end-to-end, no-monkeypatch retraining test in this file."""
+    stock_asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
+    repository.get_or_create_asset("btc-usd", asset_class="crypto")
+
+    prices = make_prices(250)
+    repository.upsert_prices(stock_asset_id, prices)
+    repository.upsert_fundamental_facts(
+        [{**row, "asset_id": stock_asset_id} for row in _two_fiscal_years_of_fundamental_facts()]
+    )
+    labels = triple_barrier_labels(prices, horizon=5, profit_take=0.01, stop_loss=0.01)
+    repository.upsert_labels(stock_asset_id, labels, label_method="triple_barrier", horizon=5)
+
+    materialization = materialize_asset_fundamentals(
+        repository, FundamentalMaterializationConfig(ticker="aapl")
+    )
+    assert materialization.skipped_assets == []
+    assert materialization.feature_rows_loaded > 0
+
+    result = run_retraining_job(
+        repository=repository,
+        tickers=["AAPL", "BTC-USD"],
+        config=RetrainingJobConfig(
+            feature_set="fundamental_v1",
+            label_method="triple_barrier",
+            horizon=5,
+            model_names=["logistic_regression"],
+            confidence_thresholds=[0.55],
+            scopes=["local"],
+            splits=3,
+            min_rows=30,
+            min_total_return=-1.0,
+            min_profit_factor=0.0,
+            max_drawdown_floor=-1.0,
+            min_active_trades=1,
+            upload_artifacts=False,
+            model_dir=str(tmp_path),
+        ),
+    )
+
+    # A crypto asset materializes zero fundamental_v1 rows (Phase 4's
+    # stock-only scope gate) and is therefore never even a candidate
+    # dataset -- it surfaces in skipped_assets, never in errors, and is
+    # never resolved as a retraining target.
+    assert result["failed"] == 0
+    assert result["errors"] == []
+    assert result["attempted"] == 1
+    assert result["succeeded"] == 1
+    assert result["results"][0]["ticker"] == "AAPL"
+    assert result["results"][0]["prediction_loaded"] is True
+
+    skipped_tickers = {item["ticker"] for item in result["skipped_assets"]}
+    assert skipped_tickers == {"BTC-USD"}
+    assert result["skipped_assets"][0]["reason"] == "no_materialized_dataset"
 
 
 def test_apply_risk_policy_sizes_confident_trade() -> None:

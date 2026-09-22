@@ -9,14 +9,14 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from brain.candidate_matrix import load_candidate_datasets_from_supabase
+from brain.candidate_matrix import load_candidate_datasets
 from brain.datasets import build_feature_frame_from_materialized
 from brain.features import feature_columns_for_set
 from brain.inference import PredictionPolicy, predict_actions
 from brain.models import get_model_spec, train_final_model
 from brain.risk import RiskPolicy, apply_risk_policy
 from brain.scoped_evaluation import AssetDataset, asset_summaries, find_target_dataset, select_scope_datasets
-from collector.supabase_repository import SupabaseRepository
+from collector.local_repository import LocalPostgresRepository
 
 
 @dataclass(frozen=True)
@@ -77,7 +77,7 @@ def build_promoted_training_frame(
 
 
 def promote_candidate_from_report(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     report: dict[str, Any],
     candidate: dict[str, Any],
     model_version: str,
@@ -98,7 +98,7 @@ def promote_candidate_from_report(
     horizon = int(report["horizon"])
     min_confidence = float(candidate.get("min_confidence") or 0.55)
     feature_columns = feature_columns_for_set(feature_set)
-    datasets, skipped_assets = load_candidate_datasets_from_supabase(
+    datasets, skipped_assets = load_candidate_datasets(
         repository,
         feature_set=feature_set,
         label_method=label_method,
@@ -204,7 +204,7 @@ def build_promotion_metrics(
 
 
 def generate_latest_prediction(
-    repository: SupabaseRepository,
+    repository: LocalPostgresRepository,
     ticker: str,
     model,
     model_run_id: str,

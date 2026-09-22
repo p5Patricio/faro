@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve IA Inversiones. This project handles market data, model artifacts, and deployment secrets, so contributions should be reviewable, reproducible, and careful with credentials.
+Thanks for helping improve Faro. This project handles market data, model artifacts, and deployment secrets, so contributions should be reviewable, reproducible, and careful with credentials.
 
 ## Local Setup
 

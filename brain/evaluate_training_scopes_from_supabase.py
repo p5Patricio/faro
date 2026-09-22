@@ -4,6 +4,8 @@ import argparse
 import json
 from pathlib import Path
 
+import psycopg
+
 from brain.backtesting import BacktestConfig
 from brain.features import feature_columns_for_set
 from brain.inference import PredictionPolicy
@@ -14,7 +16,7 @@ from brain.scoped_evaluation import (
     run_scoped_walk_forward_backtest,
 )
 from brain.selection import PromotionCriteria, rank_candidate_summaries
-from collector.supabase_repository import SupabaseConfig, SupabaseRepository
+from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 
 
 def parse_args() -> argparse.Namespace:
@@ -48,33 +50,35 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    repository = SupabaseRepository(SupabaseConfig.from_env())
     feature_columns = feature_columns_for_set(args.feature_set)
-    assets = repository.get_assets()
     datasets = []
     skipped_assets = []
 
-    for asset in assets:
-        try:
-            item = load_materialized_asset_dataset(
-                repository,
-                asset,
-                feature_set=args.feature_set,
-                label_method=args.label_method,
-                horizon=args.horizon,
-                feature_columns=feature_columns,
-                limit=args.limit,
-            )
-        except ValueError as error:
-            skipped_assets.append({"ticker": asset.get("ticker"), "reason": str(error)})
-            continue
-        if item is None:
-            skipped_assets.append({"ticker": asset.get("ticker"), "reason": "no_materialized_dataset"})
-            continue
-        if len(item.dataset) < args.min_rows:
-            skipped_assets.append({"ticker": item.ticker, "reason": f"rows_below_minimum:{len(item.dataset)}"})
-            continue
-        datasets.append(item)
+    with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
+        repository = LocalPostgresRepository(connection=connection)
+        assets = repository.get_assets()
+
+        for asset in assets:
+            try:
+                item = load_materialized_asset_dataset(
+                    repository,
+                    asset,
+                    feature_set=args.feature_set,
+                    label_method=args.label_method,
+                    horizon=args.horizon,
+                    feature_columns=feature_columns,
+                    limit=args.limit,
+                )
+            except ValueError as error:
+                skipped_assets.append({"ticker": asset.get("ticker"), "reason": str(error)})
+                continue
+            if item is None:
+                skipped_assets.append({"ticker": asset.get("ticker"), "reason": "no_materialized_dataset"})
+                continue
+            if len(item.dataset) < args.min_rows:
+                skipped_assets.append({"ticker": item.ticker, "reason": f"rows_below_minimum:{len(item.dataset)}"})
+                continue
+            datasets.append(item)
 
     scopes = parse_scopes(args.scopes)
     results = []
