@@ -4,18 +4,18 @@
 # `==`, not `>=`. Bump deliberately, then retrain and re-run the suite.
 
 # --- runtime ---
-fastapi==0.136.1
-uvicorn==0.46.0
-pydantic==2.13.3
-yfinance==1.5.1
-numpy==2.4.4
-pandas==3.0.2
-scikit-learn==1.8.0
-joblib==1.5.3
-python-dotenv==1.2.2
-requests==2.33.1
-psycopg[binary]==3.3.4
-psycopg-pool==3.3.1
+fastapi==0.141.1
+uvicorn==0.53.0
+pydantic==2.13.5
+yfinance==1.7.0
+numpy==2.5.3
+pandas==3.0.6
+scikit-learn==1.9.1
+joblib==1.6.0
+python-dotenv==1.2.3
+requests==2.34.2
+psycopg[binary]==3.3.6
+psycopg-pool==3.3.2
 PyPortfolioOpt==1.6.0
 
 # FinBERT sentiment scoring (brain/sentiment_factors.py). Heavy and OPTIONAL
@@ -24,9 +24,9 @@ PyPortfolioOpt==1.6.0
 # time, so a plain `pytest` run never pays this cost and never needs these
 # two packages importable at all -- only genuine production scoring
 # (brain/materialize_sentiment.py, ops/materialize_sentiment_batch.py) does.
-transformers==4.57.1
-torch==2.9.0
+transformers==5.17.0
+torch==2.14.0
 
 # --- test / dev ---
-pytest==9.0.3
+pytest==9.1.1
 httpx==0.28.1
