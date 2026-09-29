@@ -17,7 +17,7 @@ module directly first.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -31,9 +31,20 @@ from brain.finance.analytics import (
     compute_monthly_summary,
     compute_subscription_total,
 )
+from brain.finance.currency import (
+    BASE_CURRENCY,
+    BIGINT_MAX,
+    base_amount_cents,
+    normalize_currency,
+    resolve_fx_and_base,
+)
 from collector.local_repository import LocalPostgresRepository
 
 router = APIRouter()
+
+# Every `*_cents` payload field lands in a `bigint` column: an amount beyond
+# it is a client error (422 from validation), never a database error (503).
+_MAX_CENTS = BIGINT_MAX
 
 
 def _require_repository(repository: LocalPostgresRepository | None) -> LocalPostgresRepository:
@@ -44,6 +55,20 @@ def _require_repository(repository: LocalPostgresRepository | None) -> LocalPost
     return repository
 
 
+def _require_base_currency(currency: str, *, subject: str) -> str:
+    """Bills, goals and budgets are base-currency only in v1: they have no
+    FX-rate column and their totals are summed as plain base cents, so any
+    other currency is refused up front instead of being summed at face value.
+    Returns the normalized (upper-case) code."""
+    normalized = normalize_currency(currency)
+    if normalized != BASE_CURRENCY:
+        raise HTTPException(
+            status_code=422,
+            detail=f"{subject} solo admiten {BASE_CURRENCY} por ahora (se recibió {normalized}).",
+        )
+    return normalized
+
+
 # -- Payload models ----------------------------------------------------------
 
 
@@ -52,21 +77,23 @@ class FinanceTransactionPayload(BaseModel):
     account_id: str
     category_id: str | None = None
     kind: Literal["expense", "income", "transfer"]
-    amount_cents: int = Field(ge=0)
+    amount_cents: int = Field(ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
     occurred_at: str
     merchant: str | None = None
     notes: str | None = None
     source: str = "ui"
     fx_rate_to_base: float | None = None
-    amount_base_cents: int | None = None
+    # No `amount_base_cents`: the base amount is always computed server-side
+    # (see `_apply_transaction_base_amounts`). Pydantic drops unknown keys, so
+    # a client that still sends one is silently ignored, never trusted.
     deleted_at: str | None = None
 
 
 class FinanceBudgetPayload(BaseModel):
     category_id: str
     period_month: str | None = None
-    limit_cents: int = Field(ge=0)
+    limit_cents: int = Field(ge=0, le=_MAX_CENTS)
     percent_of_income: float | None = Field(default=None, ge=0, le=100)
     currency: str = Field(min_length=3, max_length=3)
 
@@ -75,8 +102,9 @@ class FinanceNetWorthItemPayload(BaseModel):
     is_asset: bool
     label: str
     item_type: str = "other"
-    amount_cents: int = Field(ge=0)
+    amount_cents: int = Field(ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
+    fx_rate_to_base: float | None = None
 
 
 class FinanceNetWorthSnapshotPayload(BaseModel):
@@ -90,7 +118,7 @@ class FinanceRecurringBillPayload(BaseModel):
     name: str
     category_id: str | None = None
     account_id: str | None = None
-    amount_cents: int = Field(ge=0)
+    amount_cents: int = Field(ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
     frequency: Literal[
         "weekly", "biweekly", "monthly", "bimonthly", "quarterly", "semiannual", "annual"
@@ -111,8 +139,8 @@ class FinanceRecurringBillPaymentPayload(BaseModel):
 class FinanceGoalPayload(BaseModel):
     id: str | None = None
     name: str
-    target_amount_cents: int = Field(gt=0)
-    current_amount_cents: int = Field(default=0, ge=0)
+    target_amount_cents: int = Field(gt=0, le=_MAX_CENTS)
+    current_amount_cents: int = Field(default=0, ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
     target_date: str | None = None
     purpose_note: str | None = None
@@ -160,6 +188,59 @@ def get_transactions(
         raise HTTPException(status_code=503, detail="No se pudieron obtener las transacciones") from None
 
 
+def _fx_required_detail(currency: str) -> str:
+    return (
+        f"Una transacción en {currency} necesita un tipo de cambio a {BASE_CURRENCY} mayor que cero, "
+        f"y su monto convertido no puede exceder el límite permitido."
+    )
+
+
+def _apply_transaction_base_amounts(
+    row: dict[str, Any], *, account: dict[str, Any] | None, existing: dict[str, Any] | None
+) -> None:
+    """Validate ``row``'s currency against its account and set the
+    materialized ``fx_rate_to_base`` / ``amount_base_cents`` on ``row``.
+
+    Rules (decision D1): the transaction's currency must be its account's;
+    the base currency always gets rate 1; a foreign currency needs a
+    positive rate. The base amount is computed here, never taken from the
+    client.
+
+    ``row`` only holds the fields the client sent (``exclude_unset``), and
+    ``amount_cents`` / ``currency`` are always among them. So "the edit does
+    not touch the money" is decided by comparing them with the stored row: a
+    foreign-currency edit that leaves amount and currency unchanged and sends
+    no rate (a notes edit, a soft-delete) leaves the stored rate and base
+    amount untouched instead of failing or clobbering them. An amount-only
+    edit reuses the stored rate; a new row must carry its own.
+    """
+    if account is None:
+        raise HTTPException(status_code=422, detail="La cuenta indicada no existe.")
+    currency = row["currency"]
+    account_currency = normalize_currency(account["currency"])
+    if currency != account_currency:
+        raise HTTPException(
+            status_code=422,
+            detail=f"La moneda de la transacción ({currency}) debe ser la de la cuenta ({account_currency}).",
+        )
+
+    fx_rate = row.get("fx_rate_to_base")
+    if currency != BASE_CURRENCY and fx_rate is None and existing is not None:
+        if normalize_currency(existing["currency"]) == currency:
+            if existing["amount_cents"] == row["amount_cents"]:
+                row.pop("fx_rate_to_base", None)
+                return
+            fx_rate = existing.get("fx_rate_to_base")
+
+    try:
+        stored_rate, base_cents = resolve_fx_and_base(row["amount_cents"], currency, fx_rate)
+    except (ValueError, ArithmeticError):
+        # decimal.InvalidOperation is an ArithmeticError, not a ValueError.
+        raise HTTPException(status_code=422, detail=_fx_required_detail(currency)) from None
+    row["fx_rate_to_base"] = stored_rate
+    row["amount_base_cents"] = base_cents
+
+
 @router.put("/transactions")
 def put_transaction(
     payload: FinanceTransactionPayload,
@@ -173,7 +254,11 @@ def put_transaction(
     # sets `deleted_at`, never an implicit side effect of an unrelated edit.
     row = payload.model_dump(exclude_unset=True)
     row.setdefault("source", "ui")
+    row["currency"] = normalize_currency(row["currency"])
     try:
+        account = repository.get_finance_account(row["account_id"])
+        existing = repository.get_finance_transaction_by_client_id(row["client_id"])
+        _apply_transaction_base_amounts(row, account=account, existing=existing)
         return repository.upsert_finance_transaction(row)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar la transaccion") from None
@@ -200,8 +285,10 @@ def put_budget(
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     repository = _require_repository(repository)
+    row = payload.model_dump()
+    row["currency"] = _require_base_currency(row["currency"], subject="Los presupuestos")
     try:
-        return repository.upsert_finance_budget(payload.model_dump())
+        return repository.upsert_finance_budget(row)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el presupuesto") from None
 
@@ -221,17 +308,41 @@ def get_net_worth(
         raise HTTPException(status_code=503, detail="No se pudieron obtener los patrimonios") from None
 
 
+def _resolve_net_worth_item(item: FinanceNetWorthItemPayload) -> dict[str, Any]:
+    """One worksheet line with its materialized base amount. The base
+    currency gets rate 1; a foreign currency must bring a positive rate
+    (422 naming the offending line, so a mixed worksheet is never summed at
+    face value)."""
+    data = item.model_dump()
+    data["currency"] = normalize_currency(data["currency"])
+    try:
+        data["fx_rate_to_base"], data["amount_base_cents"] = resolve_fx_and_base(
+            data["amount_cents"], data["currency"], data["fx_rate_to_base"]
+        )
+    except (ValueError, ArithmeticError):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"El concepto «{data['label']}» está en {data['currency']}: "
+                f"indica un tipo de cambio a {BASE_CURRENCY} mayor que cero "
+                f"y un monto que no exceda el límite."
+            ),
+        ) from None
+    return data
+
+
 @router.put("/net-worth")
 def put_net_worth(
     payload: FinanceNetWorthSnapshotPayload,
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     repository = _require_repository(repository)
+    items = [_resolve_net_worth_item(item) for item in payload.items]
     try:
         return repository.upsert_finance_net_worth_snapshot(
             snapshot_date=payload.snapshot_date,
             notes=payload.notes,
-            items=[item.model_dump() for item in payload.items],
+            items=items,
         )
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el patrimonio") from None
@@ -258,8 +369,10 @@ def put_recurring_bill(
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     repository = _require_repository(repository)
+    row = payload.model_dump()
+    row["currency"] = _require_base_currency(row["currency"], subject="Los pagos recurrentes")
     try:
-        return repository.upsert_finance_recurring_bill(payload.model_dump())
+        return repository.upsert_finance_recurring_bill(row)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el pago recurrente") from None
 
@@ -301,8 +414,10 @@ def put_goal(
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     repository = _require_repository(repository)
+    row = payload.model_dump()
+    row["currency"] = _require_base_currency(row["currency"], subject="Las metas")
     try:
-        return repository.upsert_finance_goal(payload.model_dump())
+        return repository.upsert_finance_goal(row)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar la meta") from None
 
@@ -390,11 +505,14 @@ def get_summary(
         # Only each bill's NEXT scheduled occurrence feeds the forecast --
         # 0008's own design has the app generate one pending row at a time
         # per bill, so this is normally the complete near-term picture.
-        pending_bill_payments = [
-            {"due_date": bill["next_due_date"], "amount_cents": bill["amount_cents"]}
-            for bill in recurring_bills
-            if bill.get("next_due_date") is not None
-        ]
+        # Amounts go in as BASE cents; a bill that cannot be converted
+        # (legacy non-base row) is left out, same as in the subscription total.
+        pending_bill_payments: list[dict[str, Any]] = []
+        for bill in recurring_bills:
+            bill_base_cents = base_amount_cents(bill)
+            if bill.get("next_due_date") is None or bill_base_cents is None:
+                continue
+            pending_bill_payments.append({"due_date": bill["next_due_date"], "amount_cents": bill_base_cents})
         cash_flow_forecast = compute_cash_flow_forecast(pending_bill_payments, avg_income_cents, horizon_days=30)
 
         combined_sufficient = net_worth_sufficient and history_sufficient

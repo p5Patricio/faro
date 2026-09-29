@@ -4,7 +4,7 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonLines } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents, formatShortDate } from '../lib/format.ts';
+import { BASE_CURRENCY, SELECTABLE_CURRENCIES, formatCents, formatShortDate } from '../lib/format.ts';
 import { putNetWorthSnapshot } from '../hooks/useFinanceApi.ts';
 import type { NetWorthItem, NetWorthSnapshot } from '../types.ts';
 
@@ -19,7 +19,6 @@ interface NetWorthPanelProps {
 export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPanelProps) {
   const latest = snapshots[0];
   const previous = snapshots[1];
-  const latestCurrency = latest?.items[0]?.currency ?? DEFAULT_CURRENCY;
   const delta = latest && previous ? latest.net_worth_cents - previous.net_worth_cents : null;
 
   return (
@@ -46,8 +45,9 @@ export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPa
                 <h3 className="text-[13px] font-semibold tracking-wide text-ink-secondary">
                   Tendencia · últimos {snapshots.length} {snapshots.length === 1 ? 'corte' : 'cortes'}
                 </h3>
+                {/* Snapshot totals are sums of BASE amounts, whatever currencies the items are in. */}
                 <p className="font-display mt-2 text-[32px] leading-none tabular-nums text-ink [text-box:trim-both_cap_alphabetic]">
-                  {formatCents(latest.net_worth_cents, latestCurrency)}
+                  {formatCents(latest.net_worth_cents, BASE_CURRENCY)}
                 </p>
                 {delta != null && previous ? (
                   <p
@@ -56,7 +56,7 @@ export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPa
                       delta >= 0 ? 'text-status-good' : 'text-status-critical',
                     )}
                   >
-                    {delta >= 0 ? '↑' : '↓'} {formatCents(Math.abs(delta), latestCurrency)} vs.{' '}
+                    {delta >= 0 ? '↑' : '↓'} {formatCents(Math.abs(delta), BASE_CURRENCY)} vs.{' '}
                     {formatMonthName(previous.snapshot_date)}
                   </p>
                 ) : null}
@@ -88,12 +88,18 @@ export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPa
 }
 
 function NetWorthItemRow({ item }: { item: NetWorthItem }) {
+  const isForeign = item.currency !== BASE_CURRENCY;
   return (
     <div className="flex items-center justify-between gap-3 border-b border-hairline/60 py-2 text-sm last:border-b-0">
       <span className={item.is_asset ? 'text-ink' : 'text-status-critical'}>{item.label}</span>
-      <span className={cn('font-medium tabular-nums', item.is_asset ? 'text-ink' : 'text-status-critical')}>
+      <span className={cn('text-right font-medium tabular-nums', item.is_asset ? 'text-ink' : 'text-status-critical')}>
         {item.is_asset ? '' : '–'}
         {formatCents(Math.abs(item.amount_cents), item.currency)}
+        {isForeign && item.amount_base_cents != null ? (
+          <span className="block text-xs font-normal text-ink-muted">
+            ≈ {formatCents(Math.abs(item.amount_base_cents), BASE_CURRENCY)}
+          </span>
+        ) : null}
       </span>
     </div>
   );
@@ -184,6 +190,8 @@ interface DraftItem {
   item_type: string;
   amount: string;
   currency: string;
+  // Rate to the base currency; only used (and required) when `currency` is not the base.
+  fx: string;
 }
 
 function newDraftItem(isAsset: boolean): DraftItem {
@@ -193,7 +201,8 @@ function newDraftItem(isAsset: boolean): DraftItem {
     label: '',
     item_type: 'other',
     amount: '',
-    currency: DEFAULT_CURRENCY,
+    currency: BASE_CURRENCY,
+    fx: '',
   };
 }
 
@@ -215,19 +224,23 @@ function NetWorthForm({ onSaved }: { onSaved: () => void }) {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const validItems: NetWorthItem[] = items
-      .filter((item) => item.label.trim() && item.amount)
-      .map((item) => ({
-        is_asset: item.is_asset,
-        label: item.label.trim(),
-        item_type: item.item_type.trim() || 'other',
-        amount_cents: Math.round(Number(item.amount) * 100),
-        currency: item.currency,
-      }));
-    if (validItems.length === 0) {
+    const filledItems = items.filter((item) => item.label.trim() && item.amount);
+    if (filledItems.length === 0) {
       setStatus('Agregá al menos un concepto con monto.');
       return;
     }
+    if (filledItems.some((item) => item.currency !== BASE_CURRENCY && !(Number(item.fx) > 0))) {
+      setStatus(`Ingresa el tipo de cambio a ${BASE_CURRENCY} de cada concepto en otra moneda.`);
+      return;
+    }
+    const validItems: NetWorthItem[] = filledItems.map((item) => ({
+      is_asset: item.is_asset,
+      label: item.label.trim(),
+      item_type: item.item_type.trim() || 'other',
+      amount_cents: Math.round(Number(item.amount) * 100),
+      currency: item.currency,
+      ...(item.currency !== BASE_CURRENCY ? { fx_rate_to_base: Number(item.fx) } : {}),
+    }));
     setSaving(true);
     setStatus(null);
     try {
@@ -269,54 +282,74 @@ function NetWorthForm({ onSaved }: { onSaved: () => void }) {
 
       <div className="space-y-2">
         {items.map((item) => (
-          <div key={item.key} className="grid grid-cols-1 gap-2 rounded-lg border border-hairline p-2 sm:grid-cols-[auto_1fr_auto_auto_auto_auto]">
-            <select
-              value={item.is_asset ? 'asset' : 'liability'}
-              onChange={(event) => updateItem(item.key, { is_asset: event.target.value === 'asset' })}
-              className="h-9 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
-            >
-              <option value="asset">Activo</option>
-              <option value="liability">Pasivo</option>
-            </select>
-            <input
-              type="text"
-              placeholder="Concepto (ej. Cuenta de ahorro)"
-              value={item.label}
-              onChange={(event) => updateItem(item.key, { label: event.target.value })}
-              className="h-9 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
-            />
-            <input
-              type="text"
-              placeholder="Categoría"
-              value={item.item_type}
-              onChange={(event) => updateItem(item.key, { item_type: event.target.value })}
-              className="h-9 w-28 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
-            />
-            <input
-              type="number"
-              step="0.01"
-              placeholder="Monto"
-              value={item.amount}
-              onChange={(event) => updateItem(item.key, { amount: event.target.value })}
-              className="h-9 w-28 rounded-lg border border-hairline bg-canvas px-2 text-right text-sm text-ink outline-none focus:border-cobalt/40"
-            />
-            <input
-              type="text"
-              maxLength={3}
-              minLength={3}
-              value={item.currency}
-              onChange={(event) => updateItem(item.key, { currency: event.target.value.toUpperCase() })}
-              className="h-9 w-16 rounded-lg border border-hairline bg-canvas px-2 text-center text-sm uppercase text-ink outline-none focus:border-cobalt/40"
-            />
-            <button
-              type="button"
-              onClick={() => removeItem(item.key)}
-              disabled={items.length <= 1}
-              className="inline-flex h-9 items-center justify-center rounded-lg border border-hairline px-2 text-ink-muted transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
-              aria-label="Quitar concepto"
-            >
-              <Trash2 aria-hidden="true" className="h-4 w-4" />
-            </button>
+          <div key={item.key} className="space-y-2 rounded-lg border border-hairline p-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[auto_1fr_auto_auto_auto_auto]">
+              <select
+                value={item.is_asset ? 'asset' : 'liability'}
+                onChange={(event) => updateItem(item.key, { is_asset: event.target.value === 'asset' })}
+                className="h-9 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
+              >
+                <option value="asset">Activo</option>
+                <option value="liability">Pasivo</option>
+              </select>
+              <input
+                type="text"
+                placeholder="Concepto (ej. Cuenta de ahorro)"
+                value={item.label}
+                onChange={(event) => updateItem(item.key, { label: event.target.value })}
+                className="h-9 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
+              />
+              <input
+                type="text"
+                placeholder="Categoría"
+                value={item.item_type}
+                onChange={(event) => updateItem(item.key, { item_type: event.target.value })}
+                className="h-9 w-28 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
+              />
+              <input
+                type="number"
+                step="0.01"
+                placeholder="Monto"
+                value={item.amount}
+                onChange={(event) => updateItem(item.key, { amount: event.target.value })}
+                className="h-9 w-28 rounded-lg border border-hairline bg-canvas px-2 text-right text-sm text-ink outline-none focus:border-cobalt/40"
+              />
+              <select
+                aria-label="Moneda"
+                value={item.currency}
+                onChange={(event) => updateItem(item.key, { currency: event.target.value })}
+                className="h-9 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
+              >
+                {SELECTABLE_CURRENCIES.map((code) => (
+                  <option key={code} value={code}>
+                    {code}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => removeItem(item.key)}
+                disabled={items.length <= 1}
+                className="inline-flex h-9 items-center justify-center rounded-lg border border-hairline px-2 text-ink-muted transition hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="Quitar concepto"
+              >
+                <Trash2 aria-hidden="true" className="h-4 w-4" />
+              </button>
+            </div>
+            {item.currency !== BASE_CURRENCY ? (
+              <label className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
+                Tipo de cambio a {BASE_CURRENCY} (1 {item.currency} = ? {BASE_CURRENCY})
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  value={item.fx}
+                  onChange={(event) => updateItem(item.key, { fx: event.target.value })}
+                  className="h-9 w-32 rounded-lg border border-hairline bg-canvas px-2 text-right text-sm text-ink outline-none focus:border-cobalt/40"
+                />
+              </label>
+            ) : null}
           </div>
         ))}
       </div>

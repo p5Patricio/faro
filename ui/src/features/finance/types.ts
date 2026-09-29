@@ -33,6 +33,10 @@ export interface FinanceTransaction {
   kind: FinanceCategoryKind;
   amount_cents: number;
   currency: string;
+  // Rate to the base currency and the resulting base amount. Both are null
+  // on a foreign-currency row written before base amounts existed.
+  fx_rate_to_base?: number | null;
+  amount_base_cents?: number | null;
   occurred_at: string;
   merchant?: string | null;
   notes?: string | null;
@@ -47,6 +51,9 @@ export interface TransactionPayload {
   kind: FinanceCategoryKind;
   amount_cents: number;
   currency: string;
+  // Required by the API when `currency` is not the base currency; the base
+  // amount is always computed server-side and never sent.
+  fx_rate_to_base?: number;
   occurred_at: string;
   merchant?: string;
   notes?: string;
@@ -84,6 +91,10 @@ export interface NetWorthItem {
   item_type: string;
   amount_cents: number;
   currency: string;
+  // Sent for a foreign-currency item (required there); returned with the
+  // computed base amount. Snapshot totals are sums of the base amounts.
+  fx_rate_to_base?: number | null;
+  amount_base_cents?: number | null;
 }
 
 export interface NetWorthSnapshot {
@@ -196,6 +207,9 @@ export interface MonthlySummary {
     deseo: MonthlyBucketSummary;
     ahorro_inversion: MonthlyBucketSummary;
   };
+  // Income/expense rows left out of every figure above because they are in a
+  // foreign currency with no FX rate. Optional: absent means none.
+  unconverted_transactions?: number;
 }
 
 export interface NetWorthSummary {
@@ -237,6 +251,7 @@ export interface SubscriptionsSummary {
   annual_total_cents: number;
   monthly_average_cents: number;
   bills: SubscriptionBillSummary[];
+  unconverted_bills?: number;
 }
 
 export interface CashFlowForecastSummary {

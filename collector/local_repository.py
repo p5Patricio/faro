@@ -17,6 +17,7 @@ from psycopg.types.json import Jsonb
 from psycopg.types.numeric import FloatLoader
 from psycopg_pool import ConnectionPool
 
+from brain.finance.currency import BASE_CURRENCY, base_amount_cents
 from collector.providers.base import AnalystConsensus
 
 
@@ -1326,6 +1327,17 @@ class LocalPostgresRepository:
             )
             return cur.fetchall()
 
+    def get_finance_account(self, account_id: str) -> dict[str, Any] | None:
+        """One account by id, ACTIVE OR NOT: an edit of an old transaction
+        must still resolve the account it was booked to, even if that account
+        has since been retired. ``None`` when the id does not exist."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, name, account_type, currency, is_active FROM finance_accounts WHERE id = %s",
+                (account_id,),
+            )
+            return cur.fetchone()
+
     def get_finance_sync_cursor(self, source: str) -> int | None:
         """The current high-water mark for ``source`` -- ``max`` over
         non-failed batches only, so a crashed pull never advances it (the
@@ -1385,6 +1397,23 @@ class LocalPostgresRepository:
             )
 
     # -- Personal finance (dashboard reads/writes, db/migrations/0009) ------
+
+    @staticmethod
+    def _base_amount_sql(alias: str = "") -> str:
+        """SQL twin of ``brain.finance.currency.base_amount_cents``: the
+        materialized base amount, else the raw amount when the row is already
+        in the base currency, else NULL (which ``SUM`` skips). Rows written
+        before base amounts were materialized have a NULL
+        ``amount_base_cents``, so a bare ``SUM(amount_cents)`` -- or a bare
+        ``SUM(amount_base_cents)`` -- would be wrong for them. ``BASE_CURRENCY``
+        is a module constant, never user input, so inlining it is safe."""
+        prefix = f"{alias}." if alias else ""
+        # upper(trim()): `currency` is char(3), and a legacy value can be
+        # lower-case or space-padded; Python's normalize_currency does the same.
+        return (
+            f"COALESCE({prefix}amount_base_cents, "
+            f"CASE WHEN upper(trim({prefix}currency)) = '{BASE_CURRENCY}' THEN {prefix}amount_cents END)"
+        )
 
     def _upsert_by_id(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
         """Update-by-id when the caller supplies one (an edit), else INSERT a
@@ -1457,6 +1486,14 @@ class LocalPostgresRepository:
             cur.execute(query, params)
             return cur.fetchall()
 
+    def get_finance_transaction_by_client_id(self, client_id: str) -> dict[str, Any] | None:
+        """The stored row for an idempotency key, tombstoned or not -- the
+        PUT handler compares it with an incoming edit to decide whether the
+        materialized base amount has to be recomputed."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM finance_transactions WHERE client_id = %s", (client_id,))
+            return cur.fetchone()
+
     def upsert_finance_transaction(self, row: dict[str, Any]) -> dict[str, Any]:
         """Single-row wrapper over ``upsert_finance_transactions``'s batch
         upsert, for the dashboard's one-row-at-a-time PUT. Re-reads the row
@@ -1483,11 +1520,15 @@ class LocalPostgresRepository:
 
         ``month`` defaults to the current calendar month: "how am I doing on
         budget" is meaningless for an unspecified month.
+
+        ``actual_cents`` sums BASE amounts (budgets are base-currency-only in
+        v1), so a foreign-currency expense counts at its converted value and
+        one with no usable base amount is skipped rather than added raw.
         """
         month = month or date.today().strftime("%Y-%m")
         month_start = f"{month}-01"
 
-        query = """
+        query = f"""
             WITH effective_budgets AS (
                 SELECT DISTINCT ON (category_id) *
                 FROM finance_budgets
@@ -1495,7 +1536,7 @@ class LocalPostgresRepository:
                 ORDER BY category_id, (period_month IS NOT NULL) DESC
             ),
             month_spend AS (
-                SELECT category_id, SUM(amount_cents) AS actual_cents
+                SELECT category_id, SUM({self._base_amount_sql()})::bigint AS actual_cents
                 FROM finance_transactions
                 WHERE kind = 'expense'
                   AND deleted_at IS NULL
@@ -1560,17 +1601,21 @@ class LocalPostgresRepository:
         """Snapshots with totals computed at read time via a filtered
         aggregate over ``finance_net_worth_items`` -- 0008 deliberately does
         not store totals on the snapshot row (see its comment), so this is
-        the one place that formula lives."""
-        query = """
+        the one place that formula lives.
+
+        Totals are in the BASE currency: each item contributes its base
+        amount (see ``_base_amount_sql``), never its raw native amount."""
+        base_amount = self._base_amount_sql("i")
+        query = f"""
             SELECT
                 s.id,
                 s.snapshot_date,
                 s.notes,
                 s.created_at,
-                COALESCE(SUM(i.amount_cents) FILTER (WHERE i.is_asset), 0) AS total_assets_cents,
-                COALESCE(SUM(i.amount_cents) FILTER (WHERE NOT i.is_asset), 0) AS total_liabilities_cents,
-                COALESCE(SUM(i.amount_cents) FILTER (WHERE i.is_asset), 0)
-                    - COALESCE(SUM(i.amount_cents) FILTER (WHERE NOT i.is_asset), 0) AS net_worth_cents
+                COALESCE(SUM({base_amount}) FILTER (WHERE i.is_asset), 0)::bigint AS total_assets_cents,
+                COALESCE(SUM({base_amount}) FILTER (WHERE NOT i.is_asset), 0)::bigint AS total_liabilities_cents,
+                (COALESCE(SUM({base_amount}) FILTER (WHERE i.is_asset), 0)
+                    - COALESCE(SUM({base_amount}) FILTER (WHERE NOT i.is_asset), 0))::bigint AS net_worth_cents
             FROM finance_net_worth_snapshots s
             LEFT JOIN finance_net_worth_items i ON i.snapshot_id = s.id
             GROUP BY s.id
@@ -1612,7 +1657,12 @@ class LocalPostgresRepository:
         as a unit (see ``_cursor()``'s docstring). Replacing rather than
         diffing items is deliberately simple -- the dashboard always submits
         the full worksheet, matching the book's paper-form workflow, not a
-        line-item editor."""
+        line-item editor.
+
+        Each item carries ``fx_rate_to_base`` and ``amount_base_cents``,
+        resolved by the caller (``api/routers/finance.py`` validates that a
+        foreign-currency item has a rate); this method stores them as given.
+        The returned totals are base-currency totals."""
         with self._cursor() as cur:
             cur.execute(
                 """
@@ -1633,8 +1683,9 @@ class LocalPostgresRepository:
                 cur.execute(
                     """
                     INSERT INTO finance_net_worth_items
-                        (snapshot_id, is_asset, label, item_type, amount_cents, currency)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                        (snapshot_id, is_asset, label, item_type, amount_cents, currency,
+                         fx_rate_to_base, amount_base_cents)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
                     """,
                     (
@@ -1644,12 +1695,20 @@ class LocalPostgresRepository:
                         item.get("item_type", "other"),
                         item["amount_cents"],
                         item["currency"],
+                        item.get("fx_rate_to_base"),
+                        item.get("amount_base_cents"),
                     ),
                 )
                 prepared_items.append(cur.fetchone())
 
-        total_assets_cents = sum(item["amount_cents"] for item in prepared_items if item["is_asset"])
-        total_liabilities_cents = sum(item["amount_cents"] for item in prepared_items if not item["is_asset"])
+        # Same rule as the read query: an item with no usable base amount
+        # contributes nothing rather than its raw native amount.
+        total_assets_cents = sum(
+            base_amount_cents(item) or 0 for item in prepared_items if item["is_asset"]
+        )
+        total_liabilities_cents = sum(
+            base_amount_cents(item) or 0 for item in prepared_items if not item["is_asset"]
+        )
         return {
             **snapshot,
             "items": prepared_items,

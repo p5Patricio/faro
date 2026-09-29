@@ -36,20 +36,31 @@ CATEGORIES: list[dict[str, Any]] = [
 ]
 
 ACCOUNTS: list[dict[str, Any]] = [
-    {"id": "acc-efectivo", "name": "Efectivo", "account_type": "cash", "currency": "USD"},
-    {"id": "acc-debito", "name": "Tarjeta debito", "account_type": "debit", "currency": "USD"},
-    {"id": "acc-credito", "name": "Tarjeta credito", "account_type": "credit", "currency": "USD"},
-    {"id": "acc-ahorro", "name": "Ahorro", "account_type": "savings", "currency": "USD"},
+    {"id": "acc-efectivo", "name": "Efectivo", "account_type": "cash", "currency": "MXN"},
+    {"id": "acc-debito", "name": "Tarjeta debito", "account_type": "debit", "currency": "MXN"},
+    {"id": "acc-credito", "name": "Tarjeta credito", "account_type": "credit", "currency": "MXN"},
+    {"id": "acc-ahorro", "name": "Ahorro", "account_type": "savings", "currency": "MXN"},
 ]
 
 
-def _parse(text: str, *, default_account_name: str = "Efectivo", currency: str = "USD"):
+def _accounts_with(**currency_by_slug: str) -> list[dict[str, Any]]:
+    """ACCOUNTS with some accounts moved to another currency, e.g.
+    ``_accounts_with(efectivo="USD")`` makes the default account foreign."""
+    overrides = {f"acc-{slug}": currency for slug, currency in currency_by_slug.items()}
+    return [{**account, "currency": overrides.get(account["id"], account["currency"])} for account in ACCOUNTS]
+
+
+def _parse(
+    text: str,
+    *,
+    default_account_name: str = "Efectivo",
+    accounts: list[dict[str, Any]] | None = None,
+):
     return parse_message(
         text,
         categories=CATEGORIES,
-        accounts=ACCOUNTS,
+        accounts=ACCOUNTS if accounts is None else accounts,
         default_account_name=default_account_name,
-        currency=currency,
     )
 
 
@@ -194,6 +205,31 @@ def test_parse_message_unresolvable_default_account_is_rejected() -> None:
     assert _parse("150 comida", default_account_name="Bank of Nowhere") is None
 
 
+# -- Currency comes from the account (decision D1) -------------------------------
+
+
+def test_parse_message_currency_is_the_currency_of_the_resolved_account() -> None:
+    accounts = _accounts_with(ahorro="USD")
+
+    default_account = _parse("150 comida", accounts=accounts)
+    explicit_foreign_account = _parse("150 comida ahorro", accounts=accounts)
+
+    assert default_account is not None and default_account.currency == "MXN"
+    assert explicit_foreign_account is not None
+    assert explicit_foreign_account.account_name == "Ahorro"
+    assert explicit_foreign_account.currency == "USD"
+
+
+def test_finance_bot_config_ignores_the_removed_default_currency_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FINANCE_DEFAULT_CURRENCY", "USD")
+    monkeypatch.delenv("FINANCE_DEFAULT_ACCOUNT_NAME", raising=False)
+
+    config = FinanceBotConfig.from_env()
+
+    assert not hasattr(config, "default_currency")
+    assert config.default_account_name == "Efectivo"
+
+
 # -- client_id determinism (the core replay-safety contract) -----------------
 
 
@@ -230,8 +266,9 @@ class FakeSendSession:
 
 
 class FakeRepository:
-    def __init__(self, *, cursor: int | None = None) -> None:
+    def __init__(self, *, cursor: int | None = None, accounts: list[dict[str, Any]] | None = None) -> None:
         self._cursor = cursor
+        self._accounts = ACCOUNTS if accounts is None else accounts
         self.upsert_calls: list[list[dict]] = []
         self.batch_calls: list[dict] = []
 
@@ -243,7 +280,7 @@ class FakeRepository:
         return CATEGORIES
 
     def get_finance_accounts(self) -> list[dict[str, Any]]:
-        return ACCOUNTS
+        return self._accounts
 
     def upsert_finance_transactions(self, rows: list[dict[str, Any]]) -> int:
         self.upsert_calls.append(rows)
@@ -258,7 +295,7 @@ def _telegram_config() -> TelegramConfig:
 
 
 def _bot_config() -> FinanceBotConfig:
-    return FinanceBotConfig(default_account_name="Efectivo", default_currency="USD")
+    return FinanceBotConfig(default_account_name="Efectivo")
 
 
 def _fake_fetch(result: dict[str, Any]):
@@ -442,3 +479,72 @@ def test_run_poll_uses_offset_derived_from_cursor_plus_one(monkeypatch: pytest.M
     )
 
     assert seen_offsets == [501]
+
+
+# -- Base amounts and non-base accounts (decision D1) ----------------------------
+
+
+def _chat_update(update_id: int, text: str) -> dict[str, Any]:
+    return {"update_id": update_id, "message": {"date": 1700000000, "chat": {"id": -100999}, "text": text}}
+
+
+def _process(updates: list[dict[str, Any]], *, accounts: list[dict[str, Any]], session: FakeSendSession):
+    return finance_bot.process_updates(
+        updates,
+        categories=CATEGORIES,
+        accounts=accounts,
+        config=_bot_config(),
+        telegram_config=_telegram_config(),
+        session=session,
+        sleep=lambda *_a: None,
+    )
+
+
+def test_process_updates_writes_the_account_currency_with_rate_one_and_the_base_amount() -> None:
+    summary = _process([_chat_update(300, "150.50 comida")], accounts=ACCOUNTS, session=FakeSendSession())
+
+    row = summary["rows"][0]
+    assert row["currency"] == "MXN"
+    assert row["fx_rate_to_base"] == 1
+    assert row["amount_cents"] == 15_050
+    assert row["amount_base_cents"] == 15_050
+
+
+def test_process_updates_rejects_a_non_base_account_with_an_explanatory_reply() -> None:
+    session = FakeSendSession()
+
+    summary = _process([_chat_update(301, "150 comida")], accounts=_accounts_with(efectivo="USD"), session=session)
+
+    assert summary["rows"] == []
+    assert summary["applied_count"] == 0
+    assert summary["rejected_count"] == 1
+    assert summary["max_update_id"] == 301
+    assert len(session.requests) == 1
+    reply = session.requests[0]["json"]["text"]
+    assert "La cuenta Efectivo está en USD" in reply  # names the account and its non-base currency
+    assert "distinta de la base del registro (MXN)" in reply
+    assert "la moneda de la cuenta debe ser MXN" in reply  # the actionable condition
+    assert not reply.startswith("OK:")
+    assert "No entendi" not in reply  # a specific reason, not the generic parse failure
+
+
+def test_run_poll_reports_partial_and_writes_only_base_account_rows_when_one_message_targets_a_foreign_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updates = [_chat_update(400, "150 comida"), _chat_update(401, "20 comida ahorro")]
+    monkeypatch.setattr(finance_bot, "fetch_updates", _fake_fetch({"ok": True, "updates": updates}))
+    repository = FakeRepository(cursor=None, accounts=_accounts_with(ahorro="USD"))
+
+    result = finance_bot.run_poll(
+        repository=repository,
+        telegram_config=_telegram_config(),
+        config=_bot_config(),
+        session=FakeSendSession(),
+        sleep=lambda *_a: None,
+    )
+
+    assert result["status"] == "partial"
+    assert result["applied_count"] == 1
+    assert result["rejected_count"] == 1
+    assert result["cursor_update_id"] == 401
+    assert [row["client_id"] for row in repository.upsert_calls[0]] == [str(derive_client_id(400))]

@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Any
 
+from brain.finance.currency import base_amount_cents
+
 
 # The book's 50/30/20 rule: every expense category is bucketed into exactly
 # one of these three, each with its own target percentage of income.
@@ -38,6 +40,13 @@ def compute_monthly_summary(transactions: list[dict[str, Any]], categories: list
     """Roll up one month's already-filtered transactions into income/expense
     totals and the book's 50/30/20 bucket actuals vs. targets.
 
+    Every figure is in the BASE currency (see ``brain/finance/currency.py``):
+    summing raw ``amount_cents`` across currencies would add pesos to
+    dollars. An income/expense row with no usable base amount (a foreign
+    currency without an FX rate) is left out of every total and counted in
+    ``unconverted_transactions`` so the caller can warn instead of silently
+    under-reporting.
+
     Simplification: `kind='transfer'` transactions are ignored entirely -- a
     transfer between the user's own accounts is neither income nor expense,
     and there is no cross-account netting logic here (that would need real
@@ -45,8 +54,19 @@ def compute_monthly_summary(transactions: list[dict[str, Any]], categories: list
     """
     bucket_by_category_id = {category["id"]: category.get("budget_bucket") for category in categories}
 
-    income_cents = sum(t["amount_cents"] for t in transactions if t["kind"] == "income")
-    expense_cents = sum(t["amount_cents"] for t in transactions if t["kind"] == "expense")
+    converted: list[tuple[dict[str, Any], int]] = []
+    unconverted_transactions = 0
+    for t in transactions:
+        if t["kind"] not in ("income", "expense"):
+            continue
+        base_cents = base_amount_cents(t)
+        if base_cents is None:
+            unconverted_transactions += 1
+            continue
+        converted.append((t, base_cents))
+
+    income_cents = sum(cents for t, cents in converted if t["kind"] == "income")
+    expense_cents = sum(cents for t, cents in converted if t["kind"] == "expense")
     net_cents = income_cents - expense_cents
 
     buckets: dict[str, dict[str, int]] = {
@@ -59,12 +79,12 @@ def compute_monthly_summary(transactions: list[dict[str, Any]], categories: list
         }
         for bucket, percent in BUCKET_TARGET_PERCENT.items()
     }
-    for t in transactions:
+    for t, cents in converted:
         if t["kind"] != "expense":
             continue
         bucket = bucket_by_category_id.get(t.get("category_id"))
         if bucket in buckets:
-            buckets[bucket]["actual_cents"] += t["amount_cents"]
+            buckets[bucket]["actual_cents"] += cents
 
     savings_rate_pct = (
         buckets["ahorro_inversion"]["actual_cents"] / income_cents * 100 if income_cents > 0 else 0.0
@@ -76,6 +96,7 @@ def compute_monthly_summary(transactions: list[dict[str, Any]], categories: list
         "net_cents": net_cents,
         "savings_rate_pct": savings_rate_pct,
         "buckets": buckets,
+        "unconverted_transactions": unconverted_transactions,
     }
 
 
@@ -147,13 +168,23 @@ def annualize_recurring_bill_amount(amount_cents: int, frequency: str) -> int:
 
 def compute_subscription_total(recurring_bills: list[dict[str, Any]]) -> dict[str, Any]:
     """Sums annualized cost across ACTIVE bills only -- a cancelled
-    (inactive) subscription shouldn't inflate the total."""
+    (inactive) subscription shouldn't inflate the total.
+
+    Base currency only: bills are base-currency-only in v1 (the API enforces
+    it), so a bill in another currency can only be a legacy row. It is left
+    out of the total and counted in ``unconverted_bills`` rather than being
+    added at face value."""
     bills: list[dict[str, Any]] = []
     annual_total_cents = 0
+    unconverted_bills = 0
     for bill in recurring_bills:
         if not bill.get("is_active", True):
             continue
-        annual_cents = annualize_recurring_bill_amount(bill["amount_cents"], bill["frequency"])
+        base_cents = base_amount_cents(bill)
+        if base_cents is None:
+            unconverted_bills += 1
+            continue
+        annual_cents = annualize_recurring_bill_amount(base_cents, bill["frequency"])
         annual_total_cents += annual_cents
         bills.append({"name": bill["name"], "annual_cents": annual_cents})
 
@@ -161,6 +192,7 @@ def compute_subscription_total(recurring_bills: list[dict[str, Any]]) -> dict[st
         "annual_total_cents": annual_total_cents,
         "monthly_average_cents": annual_total_cents // 12,
         "bills": bills,
+        "unconverted_bills": unconverted_bills,
     }
 
 
@@ -174,7 +206,9 @@ def compute_cash_flow_forecast(
     horizon_days / 30``), and only bills with an already-scheduled pending
     payment inside the horizon count as committed outflow -- discretionary
     spending is not projected at all, by design (this is a bills-committed
-    view, not a full budget forecast)."""
+    view, not a full budget forecast). Every ``amount_cents`` passed in (and
+    the income average) must already be in the base currency; the caller
+    converts with ``base_amount_cents`` and drops what it cannot convert."""
     expected_income_cents = avg_monthly_income_cents * horizon_days / 30
 
     today = date.today()

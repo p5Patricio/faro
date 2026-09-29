@@ -18,6 +18,15 @@ falls back to a fuzzy guess (task rationale: a wrong silent category guess in
 someone's financial ledger is worse than an explicit rejection they can
 immediately retry).
 
+-- Currency ---------------------------------------------------------------
+
+The currency of an entry is the currency of the account it lands in. The
+free-text grammar cannot carry an FX rate, so a message that resolves to an
+account in a non-base currency (``brain/finance/currency.py::BASE_CURRENCY``)
+is rejected with an explanatory reply; those movements are captured in the
+app, which asks for the rate. Accepted rows are written with rate 1 and the
+base amount, so every ledger aggregate can read them.
+
 -- client_id / idempotency ------------------------------------------------
 
 There is no real client-side app generating a UUID here (the phone just sends
@@ -64,6 +73,7 @@ import psycopg
 import requests
 from dotenv import load_dotenv
 
+from brain.finance.currency import BASE_CURRENCY, normalize_currency, resolve_fx_and_base
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from ops.telegram_inbox import fetch_updates
 from ops.telegram_notifier import TelegramConfig, escape_html, send_telegram_message
@@ -73,9 +83,16 @@ from ops.telegram_notifier import TelegramConfig, escape_html, send_telegram_mes
 FINANCE_TELEGRAM_NAMESPACE = uuid.UUID("6f1f9a9e-8f3a-4b8e-9c2d-2a6f7e6b1a10")
 
 DEFAULT_FINANCE_ACCOUNT_NAME = "Efectivo"
-DEFAULT_FINANCE_CURRENCY = "USD"
 
 REJECTION_MESSAGE = "No entendi ese mensaje. Formato: <monto> <categoria> [cuenta] [notas]"
+
+# The message grammar has no way to state an FX rate, so the bot can only
+# book into accounts whose currency is the ledger's base currency.
+NON_BASE_ACCOUNT_MESSAGE = (
+    "La cuenta {account} está en {currency}, una moneda distinta de la base del registro ({base}). "
+    "Para registrar movimientos desde Telegram, la moneda de la cuenta debe ser {base}. "
+    "Puedes capturar este movimiento en la app con su tipo de cambio."
+)
 
 _AMOUNT_PATTERN = re.compile(r"^\d+([.,]\d{1,2})?$")
 
@@ -124,14 +141,15 @@ ACCOUNT_ALIASES: dict[str, str] = {
 
 @dataclass(frozen=True)
 class FinanceBotConfig:
+    # No currency setting: a transaction's currency is its account's currency
+    # (decision D1). A configured default currency is what used to book pesos
+    # as USD.
     default_account_name: str
-    default_currency: str
 
     @classmethod
     def from_env(cls) -> "FinanceBotConfig":
         return cls(
             default_account_name=(os.getenv("FINANCE_DEFAULT_ACCOUNT_NAME") or DEFAULT_FINANCE_ACCOUNT_NAME).strip(),
-            default_currency=(os.getenv("FINANCE_DEFAULT_CURRENCY") or DEFAULT_FINANCE_CURRENCY).strip().upper(),
         )
 
 
@@ -225,11 +243,14 @@ def parse_message(
     categories: list[dict[str, Any]],
     accounts: list[dict[str, Any]],
     default_account_name: str,
-    currency: str,
 ) -> ParsedMessage | None:
     """Parse one free-text ledger message. Returns ``None`` on any parse
     failure -- amount, category, and account resolution are all
-    all-or-nothing; there is no partial/fuzzy result."""
+    all-or-nothing; there is no partial/fuzzy result.
+
+    The currency is the resolved account's currency, never a bot setting. It
+    may be a non-base currency; ``process_updates`` rejects those (the
+    grammar has no way to carry an FX rate)."""
     tokens = text.split()
     if len(tokens) < 2:
         return None
@@ -259,12 +280,17 @@ def parse_message(
         kind=category["kind"],
         account_id=account["id"],
         account_name=account["name"],
-        currency=currency,
+        currency=normalize_currency(account["currency"]),
         notes=notes,
     )
 
 
 def _transaction_row(parsed: ParsedMessage, *, update_id: int, occurred_at: datetime, raw_text: str) -> dict[str, Any]:
+    # Only base-currency messages reach this point (process_updates rejects
+    # the rest), so the rate is 1 and the base amount is the amount itself.
+    # Written explicitly because the bot inserts straight through the
+    # repository, not through the API router that normally materializes them.
+    fx_rate_to_base, amount_base_cents = resolve_fx_and_base(parsed.amount_cents, parsed.currency, None)
     return {
         "client_id": str(derive_client_id(update_id)),
         "account_id": parsed.account_id,
@@ -272,6 +298,8 @@ def _transaction_row(parsed: ParsedMessage, *, update_id: int, occurred_at: date
         "kind": parsed.kind,
         "amount_cents": parsed.amount_cents,
         "currency": parsed.currency,
+        "fx_rate_to_base": fx_rate_to_base,
+        "amount_base_cents": amount_base_cents,
         "occurred_at": occurred_at.isoformat(),
         "merchant": None,
         "notes": parsed.notes,
@@ -323,13 +351,26 @@ def process_updates(
             categories=categories,
             accounts=accounts,
             default_account_name=config.default_account_name,
-            currency=config.default_currency,
         )
 
         if parsed is None:
             rejected_count += 1
             send_telegram_message(
                 escape_html(REJECTION_MESSAGE), telegram_config, session=session, sleep=sleep
+            )
+            continue
+
+        if parsed.currency != BASE_CURRENCY:
+            rejected_count += 1
+            send_telegram_message(
+                NON_BASE_ACCOUNT_MESSAGE.format(
+                    account=escape_html(parsed.account_name),
+                    currency=escape_html(parsed.currency),
+                    base=BASE_CURRENCY,
+                ),
+                telegram_config,
+                session=session,
+                sleep=sleep,
             )
             continue
 

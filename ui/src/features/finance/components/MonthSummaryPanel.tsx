@@ -2,7 +2,7 @@ import { AlertTriangle, Wallet } from 'lucide-react';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonLines, SkeletonMetrics } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import { BudgetFlowDiagram } from './BudgetFlowDiagram.tsx';
 import type { MonthlySummary } from '../types.ts';
 
@@ -43,14 +43,26 @@ export function MonthSummaryPanel({ summary, loading, error }: MonthSummaryPanel
     );
   }
 
+  const unconverted = summary.unconverted_transactions ?? 0;
+
   return (
     <div className="space-y-5">
+      {unconverted > 0 ? (
+        <p
+          role="status"
+          className="flex items-start gap-2 rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-sm text-ink-secondary"
+        >
+          <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-status-warning" />
+          <span>{unconvertedWarning(unconverted)}</span>
+        </p>
+      ) : null}
+
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-2xl border border-hairline bg-hairline sm:grid-cols-4">
-        <StatTile label="Ingresos" value={formatCents(summary.income_cents, DEFAULT_CURRENCY)} />
-        <StatTile label="Gastos" value={formatCents(summary.expense_cents, DEFAULT_CURRENCY)} />
+        <StatTile label="Ingresos" value={formatCents(summary.income_cents, BASE_CURRENCY)} />
+        <StatTile label="Gastos" value={formatCents(summary.expense_cents, BASE_CURRENCY)} />
         <StatTile
           label="Neto"
-          value={formatCents(summary.net_cents, DEFAULT_CURRENCY)}
+          value={formatCents(summary.net_cents, BASE_CURRENCY)}
           valueClassName={summary.net_cents < 0 ? 'text-status-critical' : 'text-status-good'}
         />
         <StatTile label="Tasa de ahorro" value={`${summary.savings_rate_pct.toFixed(0)}%`} />
@@ -63,6 +75,13 @@ export function MonthSummaryPanel({ summary, loading, error }: MonthSummaryPanel
       />
     </div>
   );
+}
+
+function unconvertedWarning(count: number): string {
+  if (count === 1) {
+    return `1 movimiento en otra moneda no está incluido en estas cifras porque no tiene tipo de cambio a ${BASE_CURRENCY}. Edítalo y agrega el tipo de cambio.`;
+  }
+  return `${count} movimientos en otra moneda no están incluidos en estas cifras porque no tienen tipo de cambio a ${BASE_CURRENCY}. Edítalos y agrega el tipo de cambio.`;
 }
 
 function StatTile({

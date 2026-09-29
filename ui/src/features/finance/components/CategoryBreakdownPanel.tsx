@@ -4,7 +4,7 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonTable } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import { putBudget } from '../hooks/useFinanceApi.ts';
 import type { FinanceBudget, FinanceCategory } from '../types.ts';
 
@@ -100,10 +100,10 @@ function CategoryRow({ budget, category }: { budget: FinanceBudget; category?: F
       </div>
       <div className="text-right text-[13px] font-medium">
         <span className={cn('block tabular-nums', over ? 'text-status-critical' : 'text-ink')}>
-          {budget.limit_cents > 0 ? formatCents(budget.actual_cents, DEFAULT_CURRENCY) : 'N/D'}
+          {budget.limit_cents > 0 ? formatCents(budget.actual_cents, BASE_CURRENCY) : 'N/D'}
         </span>
         <span className="block text-xs font-normal tabular-nums text-ink-muted">
-          de {formatCents(budget.limit_cents, DEFAULT_CURRENCY)}
+          de {formatCents(budget.limit_cents, BASE_CURRENCY)}
         </span>
       </div>
     </div>
@@ -122,7 +122,6 @@ function BudgetForm({
   const [categoryId, setCategoryId] = useState('');
   const [limit, setLimit] = useState('');
   const [percentOfIncome, setPercentOfIncome] = useState('');
-  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -137,7 +136,8 @@ function BudgetForm({
         period_month: `${month}-01`,
         limit_cents: Math.round(Number(limit) * 100),
         percent_of_income: percentOfIncome ? Number(percentOfIncome) : undefined,
-        currency,
+        // Budgets are base-currency only in v1; the API rejects anything else.
+        currency: BASE_CURRENCY,
       });
       setStatus('Presupuesto guardado.');
       setLimit('');
@@ -202,12 +202,9 @@ function BudgetForm({
         Moneda
         <input
           type="text"
-          value={currency}
-          onChange={(event) => setCurrency(event.target.value.toUpperCase())}
-          maxLength={3}
-          minLength={3}
-          required
-          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink outline-none transition focus:border-cobalt/40"
+          value={BASE_CURRENCY}
+          readOnly
+          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink-muted outline-none"
         />
       </label>
 

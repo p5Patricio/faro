@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { formatCents, formatMonth, formatMonthLabel, parseMonthInput, shiftMonth } from './format.ts';
+import { BASE_CURRENCY, formatCents, formatMonth, formatMonthLabel, parseMonthInput, shiftMonth } from './format.ts';
 
 describe('formatCents', () => {
+  it('defaults to the base currency', () => {
+    expect(BASE_CURRENCY).toBe('MXN');
+    expect(formatCents(150000)).toBe(formatCents(150000, 'MXN'));
+  });
+
   it('formats a positive MXN amount', () => {
     expect(formatCents(150000, 'MXN')).toBe(
       new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(1500),

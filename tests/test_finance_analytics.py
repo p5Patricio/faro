@@ -26,12 +26,12 @@ CATEGORIES = [
 
 def test_compute_monthly_summary_buckets_expenses_and_computes_savings_rate() -> None:
     transactions = [
-        {"kind": "income", "amount_cents": 100_000, "category_id": "cat-sueldo"},
-        {"kind": "expense", "amount_cents": 40_000, "category_id": "cat-vivienda"},
-        {"kind": "expense", "amount_cents": 10_000, "category_id": "cat-entretenimiento"},
-        {"kind": "expense", "amount_cents": 20_000, "category_id": "cat-ahorro"},
+        {"kind": "income", "amount_cents": 100_000, "currency": "MXN", "category_id": "cat-sueldo"},
+        {"kind": "expense", "amount_cents": 40_000, "currency": "MXN", "category_id": "cat-vivienda"},
+        {"kind": "expense", "amount_cents": 10_000, "currency": "MXN", "category_id": "cat-entretenimiento"},
+        {"kind": "expense", "amount_cents": 20_000, "currency": "MXN", "category_id": "cat-ahorro"},
         # A transfer must be ignored entirely (neither income nor expense).
-        {"kind": "transfer", "amount_cents": 5_000, "category_id": None},
+        {"kind": "transfer", "amount_cents": 5_000, "currency": "MXN", "category_id": None},
     ]
 
     summary = compute_monthly_summary(transactions, CATEGORIES)
@@ -43,6 +43,49 @@ def test_compute_monthly_summary_buckets_expenses_and_computes_savings_rate() ->
     assert summary["buckets"]["deseo"] == {"actual_cents": 10_000, "target_cents": 30_000}
     assert summary["buckets"]["ahorro_inversion"] == {"actual_cents": 20_000, "target_cents": 20_000}
     assert summary["savings_rate_pct"] == 20.0
+    assert summary["unconverted_transactions"] == 0
+
+
+def test_compute_monthly_summary_converts_mixed_currencies_to_base_instead_of_adding_raw_cents() -> None:
+    """Regression for the multi-currency bug: USD 50.00 booked at 17.5 plus
+    MXN 1000.00 is MXN 1,875.00 (187,500 cents), NOT 1,050.00 of raw cents."""
+    transactions = [
+        {
+            "kind": "expense",
+            "amount_cents": 5_000,
+            "currency": "USD",
+            "fx_rate_to_base": 17.5,
+            "amount_base_cents": 87_500,
+            "category_id": "cat-vivienda",
+        },
+        {"kind": "expense", "amount_cents": 100_000, "currency": "MXN", "category_id": "cat-vivienda"},
+    ]
+
+    summary = compute_monthly_summary(transactions, CATEGORIES)
+
+    assert summary["expense_cents"] == 187_500
+    assert summary["buckets"]["necesidad"]["actual_cents"] == 187_500
+    assert summary["unconverted_transactions"] == 0
+
+
+def test_compute_monthly_summary_excludes_and_counts_rows_that_cannot_be_converted() -> None:
+    transactions = [
+        {"kind": "income", "amount_cents": 200_000, "currency": "MXN", "amount_base_cents": None, "category_id": "cat-sueldo"},
+        # Base currency with a NULL base column (written before base amounts
+        # existed) still counts as its own base amount.
+        {"kind": "expense", "amount_cents": 30_000, "currency": "MXN", "amount_base_cents": None, "category_id": "cat-vivienda"},
+        # Foreign currency with no base amount: excluded from every total, counted.
+        {"kind": "expense", "amount_cents": 9_999, "currency": "USD", "amount_base_cents": None, "category_id": "cat-vivienda"},
+        {"kind": "income", "amount_cents": 8_888, "currency": "CAD", "category_id": "cat-sueldo"},
+        # A transfer never contributes, so an unconvertible one is not "lost" money.
+        {"kind": "transfer", "amount_cents": 7_777, "currency": "USD", "category_id": None},
+    ]
+
+    summary = compute_monthly_summary(transactions, CATEGORIES)
+
+    assert summary["income_cents"] == 200_000
+    assert summary["expense_cents"] == 30_000
+    assert summary["unconverted_transactions"] == 2
 
 
 def test_compute_monthly_summary_zero_income_gives_zero_savings_rate_and_targets() -> None:
@@ -144,9 +187,9 @@ def test_annualize_recurring_bill_amount_applies_occurrences_per_year() -> None:
 
 def test_compute_subscription_total_excludes_inactive_bills() -> None:
     bills = [
-        {"name": "Netflix", "amount_cents": 20_000, "frequency": "monthly", "is_active": True},
-        {"name": "Gimnasio", "amount_cents": 60_000, "frequency": "annual", "is_active": True},
-        {"name": "Cancelado", "amount_cents": 99_999, "frequency": "monthly", "is_active": False},
+        {"name": "Netflix", "amount_cents": 20_000, "currency": "MXN", "frequency": "monthly", "is_active": True},
+        {"name": "Gimnasio", "amount_cents": 60_000, "currency": "MXN", "frequency": "annual", "is_active": True},
+        {"name": "Cancelado", "amount_cents": 99_999, "currency": "MXN", "frequency": "monthly", "is_active": False},
     ]
 
     result = compute_subscription_total(bills)
@@ -156,10 +199,27 @@ def test_compute_subscription_total_excludes_inactive_bills() -> None:
     assert {b["name"] for b in result["bills"]} == {"Netflix", "Gimnasio"}
 
 
+def test_compute_subscription_total_leaves_out_and_counts_non_base_bills() -> None:
+    bills = [
+        {"name": "Netflix", "amount_cents": 20_000, "currency": "MXN", "frequency": "monthly", "is_active": True},
+        # A legacy USD bill has no base amount: adding its 999 cents at face
+        # value would treat dollars as pesos.
+        {"name": "iCloud", "amount_cents": 999, "currency": "USD", "frequency": "monthly", "is_active": True},
+        {"name": "Cancelado", "amount_cents": 500, "currency": "USD", "frequency": "monthly", "is_active": False},
+    ]
+
+    result = compute_subscription_total(bills)
+
+    assert result["annual_total_cents"] == 20_000 * 12
+    assert [b["name"] for b in result["bills"]] == ["Netflix"]
+    # Inactive bills are ignored before conversion, so only iCloud is unconverted.
+    assert result["unconverted_bills"] == 1
+
+
 def test_compute_subscription_total_empty_list_is_all_zero() -> None:
     result = compute_subscription_total([])
 
-    assert result == {"annual_total_cents": 0, "monthly_average_cents": 0, "bills": []}
+    assert result == {"annual_total_cents": 0, "monthly_average_cents": 0, "bills": [], "unconverted_bills": 0}
 
 
 # -- compute_cash_flow_forecast -------------------------------------------

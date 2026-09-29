@@ -2,7 +2,7 @@ import { Compass, PiggyBank, Repeat, Rocket } from 'lucide-react';
 import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import type {
   CashFlowForecastSummary,
   EmergencyFundSummary,
@@ -61,8 +61,8 @@ export function InvestableSurplusPanel({
           ) : (
             <div>
               <p className="mb-2 text-xs text-ink-muted">
-                Total anual {formatCents(subscriptions.annual_total_cents, DEFAULT_CURRENCY)} · promedio mensual{' '}
-                {formatCents(subscriptions.monthly_average_cents, DEFAULT_CURRENCY)}
+                Total anual {formatCents(subscriptions.annual_total_cents, BASE_CURRENCY)} · promedio mensual{' '}
+                {formatCents(subscriptions.monthly_average_cents, BASE_CURRENCY)}
               </p>
               <div className="flex flex-col">
                 {subscriptions.bills.map((bill, index) => (
@@ -72,7 +72,7 @@ export function InvestableSurplusPanel({
                   >
                     <span className="text-ink">{bill.name}</span>
                     <span className="font-medium tabular-nums text-ink-secondary">
-                      {formatCents(bill.annual_cents, DEFAULT_CURRENCY)} / año
+                      {formatCents(bill.annual_cents, BASE_CURRENCY)} / año
                     </span>
                   </div>
                 ))}
@@ -95,7 +95,7 @@ export function InvestableSurplusPanel({
           ) : (
             <>
               <p className="font-display text-[22px] leading-none tabular-nums text-ink [text-box:trim-both_cap_alphabetic]">
-                {formatCents(fireNumber.target_cents, DEFAULT_CURRENCY)}
+                {formatCents(fireNumber.target_cents, BASE_CURRENCY)}
               </p>
               <p className="mt-2 text-xs text-ink-muted">
                 gasto anual × 25
@@ -120,11 +120,11 @@ export function InvestableSurplusPanel({
         ) : (
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <ForecastStat label="Horizonte" value={`${cashFlowForecast.horizon_days} días`} />
-            <ForecastStat label="Ingreso esperado" value={formatCents(cashFlowForecast.expected_income_cents, DEFAULT_CURRENCY)} />
-            <ForecastStat label="Pagos comprometidos" value={formatCents(cashFlowForecast.committed_bills_cents, DEFAULT_CURRENCY)} />
+            <ForecastStat label="Ingreso esperado" value={formatCents(cashFlowForecast.expected_income_cents, BASE_CURRENCY)} />
+            <ForecastStat label="Pagos comprometidos" value={formatCents(cashFlowForecast.committed_bills_cents, BASE_CURRENCY)} />
             <ForecastStat
               label="Neto proyectado"
-              value={formatCents(cashFlowForecast.projected_net_cents, DEFAULT_CURRENCY)}
+              value={formatCents(cashFlowForecast.projected_net_cents, BASE_CURRENCY)}
               valueClassName={cashFlowForecast.projected_net_cents >= 0 ? 'text-status-good' : 'text-status-critical'}
             />
           </div>
@@ -170,7 +170,7 @@ function InsightCard({
 }
 
 function buildInsightSentence(surplus: InvestableSurplusSummary, emergencyFund: EmergencyFundSummary | null): string {
-  const amount = formatCents(Math.abs(surplus.surplus_cents), DEFAULT_CURRENCY);
+  const amount = formatCents(Math.abs(surplus.surplus_cents), BASE_CURRENCY);
 
   if (surplus.surplus_cents < 0) {
     return `Este mes te faltaron ${amount} para cubrir tus gastos — no hay excedente para invertir todavía.`;

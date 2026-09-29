@@ -1,17 +1,23 @@
 /**
- * Fallback currency for aggregate figures the API computes server-side
- * without echoing a `currency` field (e.g. `monthly_summary`, the
- * net-worth snapshot totals, `GET /budgets` rows). Every one of this
- * user's real accounts is MXN today, so this is a safe assumption for
- * those specific aggregates only — everywhere the API DOES return a
- * `currency` on the record (transactions, accounts, net-worth items,
- * recurring bills, goals) that field is used instead, never this
- * constant.
+ * The ledger's base currency. Mirrors `BASE_CURRENCY` in
+ * `brain/finance/currency.py` (decision D1). Every aggregate the API
+ * computes — monthly summary, net-worth totals, budget actuals,
+ * subscription and forecast figures — is expressed in it, so those
+ * figures are formatted with it. A record that carries its own native
+ * `currency` (a transaction, a net-worth item) is formatted with that
+ * currency instead.
  */
-export const DEFAULT_CURRENCY = 'MXN';
+export const BASE_CURRENCY = 'MXN';
 
-/** Format integer cents as a localized currency string. */
-export function formatCents(amountCents: number, currency: string): string {
+/**
+ * Currencies offered where a foreign amount can be entered (transactions
+ * take theirs from the account; net-worth items pick one). The four
+ * markets the app follows; the API accepts any ISO code given an FX rate.
+ */
+export const SELECTABLE_CURRENCIES = [BASE_CURRENCY, 'USD', 'CAD', 'CNY'] as const;
+
+/** Format integer cents as a localized currency string (base currency by default). */
+export function formatCents(amountCents: number, currency: string = BASE_CURRENCY): string {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(amountCents / 100);
 }
 

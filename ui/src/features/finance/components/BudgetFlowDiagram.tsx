@@ -1,4 +1,4 @@
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import type { MonthlyBucketSummary, MonthlySummary } from '../types.ts';
 
 interface BudgetFlowDiagramProps {
@@ -47,7 +47,7 @@ export function BudgetFlowDiagram({ buckets, incomeCents, dataSufficient }: Budg
       >
         <rect x={INCOME_BAR.x} y={14} width={INCOME_BAR.width} height={14} rx={4} fill="var(--color-cobalt)" />
         <text x={INCOME_BAR.x} y={10} fill="var(--color-ink-secondary)" fontWeight={600} fontSize={12}>
-          {hasData ? `Ingreso · ${formatCents(incomeCents, DEFAULT_CURRENCY)}` : 'Ingreso · sin datos'}
+          {hasData ? `Ingreso · ${formatCents(incomeCents, BASE_CURRENCY)}` : 'Ingreso · sin datos'}
         </text>
 
         {/*
@@ -109,7 +109,7 @@ function BucketLabels({
       </text>
       <text x={x} y={167} fill="var(--color-ink-muted)" fontSize={11}>
         {hasData
-          ? `${formatCents(bucket.actual_cents, DEFAULT_CURRENCY)} de ${formatCents(bucket.target_cents, DEFAULT_CURRENCY)} objetivo`
+          ? `${formatCents(bucket.actual_cents, BASE_CURRENCY)} de ${formatCents(bucket.target_cents, BASE_CURRENCY)} objetivo`
           : 'sin datos este mes'}
       </text>
     </>

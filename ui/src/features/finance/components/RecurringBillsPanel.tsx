@@ -4,7 +4,7 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonTable } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import { putRecurringBill, putRecurringBillPayment } from '../hooks/useFinanceApi.ts';
 import type { BillFrequency, FinanceAccount, FinanceCategory, RecurringBill } from '../types.ts';
 
@@ -177,7 +177,6 @@ function RecurringBillForm({
   const [categoryId, setCategoryId] = useState('');
   const [accountId, setAccountId] = useState('');
   const [amount, setAmount] = useState('');
-  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [frequency, setFrequency] = useState<BillFrequency>('monthly');
   const [anchorDueDate, setAnchorDueDate] = useState('');
   const [reminderDays, setReminderDays] = useState('3');
@@ -197,7 +196,8 @@ function RecurringBillForm({
         category_id: categoryId || undefined,
         account_id: accountId || undefined,
         amount_cents: Math.round(Number(amount) * 100),
-        currency,
+        // Bills are base-currency only in v1; the API rejects anything else.
+        currency: BASE_CURRENCY,
         frequency,
         anchor_due_date: anchorDueDate,
         reminder_days_before: Number(reminderDays) || 0,
@@ -281,12 +281,9 @@ function RecurringBillForm({
         Moneda
         <input
           type="text"
-          value={currency}
-          onChange={(event) => setCurrency(event.target.value.toUpperCase())}
-          maxLength={3}
-          minLength={3}
-          required
-          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink outline-none transition focus:border-cobalt/40"
+          value={BASE_CURRENCY}
+          readOnly
+          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink-muted outline-none"
         />
       </label>
 

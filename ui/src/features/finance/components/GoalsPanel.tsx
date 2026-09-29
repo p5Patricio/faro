@@ -4,7 +4,7 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonLines } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import { putGoal } from '../hooks/useFinanceApi.ts';
 import type { EmergencyFundSummary, FinanceGoal } from '../types.ts';
 
@@ -196,7 +196,6 @@ function GoalForm({ onSaved }: { onSaved: () => void }) {
   const [name, setName] = useState('');
   const [targetAmount, setTargetAmount] = useState('');
   const [currentAmount, setCurrentAmount] = useState('0');
-  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [targetDate, setTargetDate] = useState('');
   const [purposeNote, setPurposeNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -212,7 +211,8 @@ function GoalForm({ onSaved }: { onSaved: () => void }) {
         name: name.trim(),
         target_amount_cents: Math.round(Number(targetAmount) * 100),
         current_amount_cents: Math.round(Number(currentAmount || '0') * 100),
-        currency,
+        // Goals are base-currency only in v1; the API rejects anything else.
+        currency: BASE_CURRENCY,
         target_date: targetDate || undefined,
         purpose_note: purposeNote || undefined,
         is_achieved: false,
@@ -249,12 +249,9 @@ function GoalForm({ onSaved }: { onSaved: () => void }) {
         Moneda
         <input
           type="text"
-          value={currency}
-          onChange={(event) => setCurrency(event.target.value.toUpperCase())}
-          maxLength={3}
-          minLength={3}
-          required
-          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink outline-none transition focus:border-cobalt/40"
+          value={BASE_CURRENCY}
+          readOnly
+          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink-muted outline-none"
         />
       </label>
 
