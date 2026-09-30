@@ -3,7 +3,7 @@
 - Created: 2026-09-29
 - Branch: `codex/macro-finance-expansion` (from `origin/main` @ 5e55511)
 - Engram mirror: topic `odd/faro-macro-finance-expansion/tasks` (project `faro`)
-- Status: planned, no source writes yet
+- Status: in progress (P0: T0.1 and T0.2 done and committed locally, nothing pushed)
 
 ## Objective
 
@@ -88,8 +88,8 @@ off-machine transfer, touching `.atl/`, `.agents/`, `.claude/`, `skills-lock.jso
   `api/main.py`, `collector/local_repository.py`, `ui/src/App.tsx`, migrations). Triggers: Writer
   (2+ non-trivial files) and Preparation (reads that prepare the write). No SDD artifacts.
 - Delivery strategy: `ask-on-risk`. Forecast about 13,850 authored changed lines (additions plus
-  deletions, tests included), above the ~400 budget, so PRs are chained. Chain strategy: PENDING user
-  answer (`stacked-to-main` or `feature-branch-chain`).
+  deletions, tests included), above the ~400 budget, so PRs are chained. Chain strategy: `stacked-to-main`
+  (user choice, 2026-09-29): slices merge to main in order; slice branches are cut at commit boundaries.
 - Planned slices (one PR each): S1 = T0.1-T0.6; S2 = T1.1-T1.4; S3 = T1.5-T1.7; S4 = T2.1-T2.6;
   S5 = T2.7-T2.9; S6 = T2.10-T2.12; S7 = T3.1-T3.2; S8 = T3.3-T3.4; S9 = T4.1-T4.3 + T5.1.
   Slices are functionally coherent, so each is well above 400 lines; the ~400 figure is only a planning
@@ -97,7 +97,7 @@ off-machine transfer, touching `.atl/`, `.agents/`, `.claude/`, `skills-lock.jso
 
 ## Blocked on the user
 
-- B1 (now): chain strategy for the PR slices.
+- B1 (resolved 2026-09-29): chain strategy = `stacked-to-main`.
 - B2 (before T2.4 runs live): request the free Banxico SIE token and put `BANXICO_TOKEN` in `.env`.
 - B3 (before the new UI shows real data): run `py -3.14 -m db.migrate` against the real database.
 
@@ -112,10 +112,10 @@ id and evidence under Progress.
       and net-worth totals; bot uses the account's currency (drop the hard-coded USD default); mixed-currency
       regression tests. Files: `brain/finance/analytics.py`, `api/routers/finance.py`,
       `collector/local_repository.py`, `ops/finance_bot.py`, `ui/src/features/finance/**`.
-- [ ] T0.2 Recurring-bill lifecycle and forecast (~300): generate the next pending occurrence on save and on
+- [x] T0.2 (commit 46141d3) Recurring-bill lifecycle and forecast (~300): generate the next pending occurrence on save and on
       paid; `compute_cash_flow_forecast` takes `today`, includes overdue bills, expands weekly/biweekly
       occurrences inside the horizon, returns integer cents; panel states updated.
-- [ ] T0.3 Surplus and liquidity semantics (~450): D2 and D3; migration 0012 adds `is_liquid` to net-worth
+- [ ] T0.3 Surplus and liquidity semantics (~450): D2 and D3; migration 0013 adds `is_liquid` to net-worth
       items; emergency fund uses liquid items; "Sin categoría" bucket and full category breakdown; truthful
       `data_sufficient` and live empty states; "estimado" labels.
 - [ ] T0.4 Ingestion and API robustness (~400): bot amount cap, confirm only after the write, failed-batch
@@ -255,8 +255,25 @@ database via `db.migrate`; data-source claims verified with live read-only reque
 - T0.3's migration is now 0013 (0012 is taken by the data-only account-currency migration).
 - Deferred to later tasks: per-trailing-month unconverted counts and skipping months with zero converted rows (T0.3), `unconverted_bills` warning and error detail text in the UI (T0.5/T0.6), soft-delete of a legacy row whose currency differs from its account (residual, legacy-only).
 - Editing 0012's header changed its checksum; only the test database had recorded the old one (its `schema_migrations` row was updated). Any other database that applied the earlier 0012 would fail the drift check (the real database never applied it).
-- Engram mirror of this document is PENDING resync (usage limit reached before it could be rewritten); this file is the source of truth.
+- Engram mirror resynced at T0.2 closure (this file remains the source of truth).
+
+## T0.2 evidence and decisions
+
+- Commit 46141d3 (not pushed). Baseline 682 backend / 53 vitest; after 798 / 69, lint and build ok (writer). Parent spot checks: 184 passed before, 120 passed after a docstring-only fix (recurrence, repository, analytics files).
+- Runtime scenario: `test_runtime_scenario_a_weekly_bill_flows_through_the_forecast_and_advances_when_paid` (clock pinned 2026-09-29): committed = 5 x 15,000 for Sep 30, Oct 7/14/21/28; after paying Sep 30 the next due date is Oct 7 and committed = 4 x 15,000.
+- Risk gate: assess unassessable (untracked files) = high; independent verifier: OK TO COMMIT (6,000-case fuzz of the recurrence math against a brute-force implementation, 0 mismatches; tree integrity confirmed, stash list empty).
+- Rollback boundary: revert 46141d3; no schema change.
+- D14 First pending = earliest occurrence on or after today; on paid/skipped the next pending = earliest occurrence strictly after the settled due date (may be overdue); no automatic ledger transaction.
+- D15 Forecast counts an overdue pending row once plus every later occurrence in [today, today + horizon] (inclusive, so 31 calendar days against income scaled 30/30; add a docstring line in T0.3).
+- D16 Reactivating a bill keeps its old pending row (overdue until skipped); docstring corrected. Revisit in T0.6 when edit/deactivate UI makes it reachable.
+
+## Deferred from the T0.2 review
+
+- T0.3: migration 0013 adds a partial unique index (one pending row per bill) and the repository keeps the earliest unlinked pending row (a PUT `pending` on another date can currently add a second one); test that a legacy non-base bill is excluded from the forecast; forecast panel must show committed/overdue bills even without income history (truthful `data_sufficient`); docstring on the 31-day window.
+- T0.4: typed UUID/date payloads (unknown bill `id` gives 503; a 9999-12-31 due date overflows to 500); restrict or validate the `pending` status on the payment PUT.
+- T0.6: on reactivation drop stale unlinked overdue rows or make the UI clear them; edit/deactivate UI.
+- Inactive-bill upsert response returns `next_due_date: None` while the list shows the surviving pending row (NIT).
 
 ## Next step
 
-T0.2 (recurring-bill lifecycle and forecast) with one delegated writer; then T0.3-T0.6, then open the S1 PR (needs the user's OK to push).
+T0.3 (surplus and liquidity semantics, migration 0013) with one delegated writer; then T0.4-T0.6, then open the S1 PR (needs the user's OK to push).
