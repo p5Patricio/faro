@@ -115,18 +115,18 @@ id and evidence under Progress.
 - [x] T0.2 (commit 46141d3) Recurring-bill lifecycle and forecast (~300): generate the next pending occurrence on save and on
       paid; `compute_cash_flow_forecast` takes `today`, includes overdue bills, expands weekly/biweekly
       occurrences inside the horizon, returns integer cents; panel states updated.
-- [ ] T0.3 Surplus and liquidity semantics (~450): D2 and D3; migration 0013 adds `is_liquid` to net-worth
+- [x] T0.3a (85c2fa4) + T0.3b (f507089) Surplus and liquidity semantics (~450): D2 and D3; migration 0013 adds `is_liquid` to net-worth
       items; emergency fund uses liquid items; "Sin categoría" bucket and full category breakdown; truthful
       `data_sufficient` and live empty states; "estimado" labels.
-- [ ] T0.4 Ingestion and API robustness (~400): bot amount cap, confirm only after the write, failed-batch
+- [x] T0.4 (5977fd0) Ingestion and API robustness (~400): bot amount cap, confirm only after the write, failed-batch
       logging and cursor policy, parse `$120` and `120 mxn`, confirmation shows kind and currency,
       ambiguous-keyword handling; API payloads typed (UUID/date) so bad input is 422 not 503; pin the
       Postgres session timezone to America/Mexico_City for month boundaries; `api/main.py` `__main__` binds
       127.0.0.1.
-- [ ] T0.5 UI correctness and copy (~350): neutral es-MX copy; date-only strings parsed as local dates
+- [x] T0.5 (5c299b0) UI correctness and copy (~350): neutral es-MX copy; date-only strings parsed as local dates
       (`format.ts`, net-worth panel); fetch abort/sequence guard; inline error states for bills, goals,
       transactions.
-- [ ] T0.6 UI design, accessibility, editing (~350): budget flow diagram drawn from real ratios with HTML
+- [ ] T0.6 (deferred to the end, optional) UI design, accessibility, editing (~350): budget flow diagram drawn from real ratios with HTML
       labels; contrast tokens, labelled inputs, tab-bar affordance, drawer focus trap; transactions table
       shows notes, responsive columns, no raw UUID in confirms, visible list-cap message; edit/deactivate UI
       for bills and goals.
@@ -274,6 +274,37 @@ database via `db.migrate`; data-source claims verified with live read-only reque
 - T0.6: on reactivation drop stale unlinked overdue rows or make the UI clear them; edit/deactivate UI.
 - Inactive-bill upsert response returns `next_due_date: None` while the list shows the surviving pending row (NIT).
 
+## T0.3 evidence (compact)
+
+- T0.3a 85c2fa4: backend 798 -> 829, ui 69 -> 122 (writer); independent verifier OK TO COMMIT (20,000-case fuzz, no violations); minors fixed in one follow-up round.
+- T0.3b f507089 (migration 0013): backend targeted 220 passed, ui finance 105 passed, lint ok, scratch-dir build ok. Deploy-order behavior is documented in the migration header.
+- Known gap: an existing net-worth snapshot's liquid flags cannot be edited (a new snapshot must be saved); a "start from the latest snapshot" button was not built.
+- Cost finding: T0.1-T0.3a used about 1M subagent tokens each (65% of every commit is tests). See Workflow v2.
+
+## Workflow v2 (lean; user request 2026-09-30; supersedes the route, verification and bookkeeping rules above)
+
+- One writer per work block with short briefs that point at files; no mandatory long read lists.
+- Tests: one per rule plus one runtime scenario; no fuzzing or per-string tests; aim for tests <= source lines.
+- Writers run targeted tests and lint only. The parent runs the FULL backend and UI suites once per slice; CI repeats them on the PR.
+- No independent verifier by default: only for migrations touching real data, money math or security. MINOR/NIT findings go to a one-line deferred list, no follow-up round.
+- This document and the Engram mirror are updated once per slice (compact). Commit messages carry the evidence.
+- File-disjoint blocks may run in parallel. Writers never overwrite `ui/dist` (scratch `--outDir`).
+
+## Plan v2 (ordered by value)
+
+1. Finish S1 (finance correctness): T0.4 + T0.5 as one quick-fix bundle (in progress); T0.6 (diagram, a11y, edit/deactivate UI) deferred to the end, optional.
+2. Markets: T1.3 (index/FX/commodity/yield ingestion) plus T1.6/T1.7 as one minimal "Mercados" view and a tiny T1.1 trust layer (demo banner); then T1.2/T1.4/T1.5 (market caps, multi-market heatmap).
+3. Macro: T2.1-T2.6 (storage, providers, ingestion job), then one API and one screen (inflation and rates together), then calculators and calendar.
+4. P3 investment ledger and P4 extras last.
+
+## S1 closure evidence (T0.1-T0.5)
+
+- Commits (local, not pushed): 0888cbf, 46141d3, 85c2fa4, f507089, 5977fd0 (T0.4 backend), 5c299b0 (T0.5 UI).
+- Full suites run once on the combined state (2026-09-30): backend 916 passed (305 s); ui lint clean, vitest 138 passed (17 files), build to a scratch outDir ok.
+- T0.4 decisions: amount cap 1,000,000,000 units per message; a failed batch is retried row by row and the cursor advances past a row that still fails (status partial); `rentas` is refused and income from rent uses `ingreso-renta`; the month param is strict on /summary, /transactions and /budgets; bill due dates must be <= 2100-12-31; unknown id gives 404 only on the bill PUT (goal PUT still 503); the session timezone pin applies to every repository connection, ML jobs included.
+- For the user, in order: apply migrations 0012 (data-only, a no-op on the real database) and 0013 (is_liquid + one-pending-bill index) with `py -3.14 -m db.migrate`; restart the always-on app (`ops/run_local_app.ps1 -Stop`, then run it again) so the API and the UI build match.
+- Known gaps: T0.6 deferred; no UI to edit an existing snapshot's liquid flags; goal PUT with an unknown id still answers 503; reactivating an old bill keeps its overdue row (D16); the Categorías tab has no unconverted warning.
+
 ## Next step
 
-T0.3 (surplus and liquidity semantics, migration 0013) with one delegated writer; then T0.4-T0.6, then open the S1 PR (needs the user's OK to push).
+Ask the user to push S1 (branch push and PR to main), then start P1 (Mercados) per Plan v2.
