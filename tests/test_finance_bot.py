@@ -4,9 +4,12 @@ from typing import Any
 
 import pytest
 
+from brain.finance.currency import BIGINT_MAX
 from ops import finance_bot
 from ops.finance_bot import (
+    MAX_AMOUNT_CENTS,
     FinanceBotConfig,
+    MessageRejected,
     derive_client_id,
     parse_amount_cents,
     parse_message,
@@ -76,6 +79,11 @@ def _parse(
         ("120,50", 12050),
         ("0.99", 99),
         ("1", 100),
+        ("$120", 12000),
+        ("$1,200.50", 120050),
+        ("1,200.50", 120050),
+        ("1,200", 120000),
+        ("12,345,678.9", 1234567890),
     ],
 )
 def test_parse_amount_cents_valid(token: str, expected_cents: int) -> None:
@@ -84,10 +92,18 @@ def test_parse_amount_cents_valid(token: str, expected_cents: int) -> None:
 
 @pytest.mark.parametrize(
     "token",
-    ["abc", "-150", "0", "-1.5", "15.999", "", "15.5.5", "15,5,5", "$150"],
+    ["abc", "-150", "0", "-1.5", "15.999", "", "15.5.5", "15,5,5", "$", "$0", "1,20,000", "1.200,50"],
 )
 def test_parse_amount_cents_rejects_invalid_or_non_positive(token: str) -> None:
     assert parse_amount_cents(token) is None
+
+
+def test_parse_amount_cents_caps_the_amount_well_inside_bigint() -> None:
+    assert MAX_AMOUNT_CENTS < BIGINT_MAX
+    assert parse_amount_cents("1000000000") == MAX_AMOUNT_CENTS
+    for token in ("1000000000.01", "9" * 400):
+        with pytest.raises(MessageRejected, match="demasiado grande"):
+            parse_amount_cents(token)
 
 
 # -- parse_message: happy paths -----------------------------------------------
@@ -172,8 +188,13 @@ def test_parse_message_renta_alias_is_vivienda_expense() -> None:
     assert parsed.kind == "expense"
 
 
-def test_parse_message_rentas_exact_slug_is_income_not_vivienda() -> None:
-    parsed = _parse("3000 rentas")
+def test_parse_message_rentas_is_refused_as_ambiguous_instead_of_flipping_to_income() -> None:
+    with pytest.raises(MessageRejected, match="ingreso-renta"):
+        _parse("3000 rentas")
+
+
+def test_parse_message_income_from_rent_needs_its_explicit_keyword() -> None:
+    parsed = _parse("3000 ingreso-renta")
 
     assert parsed is not None
     assert parsed.category_slug == "rentas"
@@ -206,6 +227,23 @@ def test_parse_message_unresolvable_default_account_is_rejected() -> None:
 
 
 # -- Currency comes from the account (decision D1) -------------------------------
+
+
+def test_parse_message_accepts_a_currency_word_after_the_amount() -> None:
+    parsed = _parse("$1,200.50 mxn comida cena")
+
+    assert parsed is not None
+    assert parsed.amount_cents == 120050
+    assert parsed.category_slug == "alimentacion"
+    assert parsed.currency == "MXN"
+    assert parsed.notes == "cena"
+    assert _parse("120 mxn") is None  # a currency is not a category
+
+
+def test_parse_message_refuses_a_stated_currency_that_is_not_the_accounts() -> None:
+    with pytest.raises(MessageRejected, match="cuenta Efectivo está en MXN"):
+        _parse("120 usd comida")
+
 
 
 def test_parse_message_currency_is_the_currency_of_the_resolved_account() -> None:
@@ -548,3 +586,84 @@ def test_run_poll_reports_partial_and_writes_only_base_account_rows_when_one_mes
     assert result["rejected_count"] == 1
     assert result["cursor_update_id"] == 401
     assert [row["client_id"] for row in repository.upsert_calls[0]] == [str(derive_client_id(400))]
+
+
+# -- Replies: kind, currency, category; oversized amounts; "OK" only after the write ----
+
+
+def _reply_texts(session: FakeSendSession) -> list[str]:
+    return [request["json"]["text"] for request in session.requests]
+
+
+def test_confirmation_names_the_kind_the_currency_and_the_category_that_was_chosen(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updates = [_chat_update(600, "$1,200.50 comida"), _chat_update(601, "5000 sueldo")]
+    monkeypatch.setattr(finance_bot, "fetch_updates", _fake_fetch({"ok": True, "updates": updates}))
+    session = FakeSendSession()
+
+    finance_bot.run_poll(
+        repository=FakeRepository(cursor=None),
+        telegram_config=_telegram_config(),
+        config=_bot_config(),
+        session=session,
+        sleep=lambda *_a: None,
+    )
+
+    assert _reply_texts(session) == [
+        "OK: gasto de $1,200.50 MXN en la categoría Alimentacion (cuenta Efectivo).",
+        "OK: ingreso de $5,000.00 MXN en la categoría Sueldo (cuenta Efectivo).",
+    ]
+
+
+def test_an_oversized_amount_is_refused_with_a_specific_reply_and_writes_nothing() -> None:
+    session = FakeSendSession()
+
+    summary = _process([_chat_update(610, "9" * 30 + " comida")], accounts=ACCOUNTS, session=session)
+
+    assert summary["rows"] == []
+    assert summary["rejected_count"] == 1
+    assert "demasiado grande" in _reply_texts(session)[0]
+    assert "No entendi" not in _reply_texts(session)[0]
+
+
+class PoisonedRepository(FakeRepository):
+    """Refuses to store any batch that contains a poisoned client_id."""
+
+    def __init__(self, *, poisoned_update_ids: set[int]) -> None:
+        super().__init__(cursor=None)
+        self._poisoned = {str(derive_client_id(update_id)) for update_id in poisoned_update_ids}
+
+    def upsert_finance_transactions(self, rows: list[dict[str, Any]]) -> int:
+        if any(row["client_id"] in self._poisoned for row in rows):
+            raise RuntimeError("write refused")
+        return super().upsert_finance_transactions(rows)
+
+
+def test_a_failing_write_gets_no_ok_and_does_not_block_the_later_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    updates = [_chat_update(700, "150 comida"), _chat_update(701, "20 comida")]
+    monkeypatch.setattr(finance_bot, "fetch_updates", _fake_fetch({"ok": True, "updates": updates}))
+    repository = PoisonedRepository(poisoned_update_ids={700})
+    session = FakeSendSession()
+
+    result = finance_bot.run_poll(
+        repository=repository,
+        telegram_config=_telegram_config(),
+        config=_bot_config(),
+        session=session,
+        sleep=lambda *_a: None,
+    )
+
+    replies = _reply_texts(session)
+    assert len(replies) == 2
+    assert replies[0].startswith("No pude guardar gasto de $150.00 MXN")
+    assert replies[1].startswith("OK: gasto de $20.00 MXN")
+    # Policy: the cursor advances past the failed row; the second message was stored.
+    assert result["status"] == "partial"
+    assert result["cursor_update_id"] == 701
+    assert result["applied_count"] == 1
+    assert result["write_failed_count"] == 1
+    assert [row["client_id"] for row in repository.upsert_calls[-1]] == [str(derive_client_id(701))]
+    assert repository.batch_calls[0]["error_reason"] == "ledger_write_failed"

@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 import psycopg
 from dotenv import load_dotenv
-from psycopg import sql
+from psycopg import pq, sql
 from psycopg.adapt import Loader
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -29,6 +29,10 @@ from brain.finance.recurrence import (
 from collector.providers.base import AnalystConsensus
 
 logger = logging.getLogger(__name__)
+
+# The ledger's calendar: "which month is this?" is answered in the user's
+# local time, not in whatever zone the database server happens to use.
+LEDGER_TIMEZONE = "America/Mexico_City"
 
 
 class _UUIDStrLoader(Loader):
@@ -73,6 +77,12 @@ class LocalPostgresError(RuntimeError):
     Subclasses ``RuntimeError`` so existing ``except RuntimeError`` call
     sites in ``api/main.py`` keep working unchanged.
     """
+
+
+class LocalPostgresRecordNotFound(LocalPostgresError):
+    """An edit named an ``id`` that has no row. Still a ``LocalPostgresError``
+    (so generic ``except RuntimeError`` sites keep working), but distinct so a
+    router can answer 404 instead of 503."""
 
 
 class PendingOccurrenceConflict(Exception):
@@ -177,6 +187,23 @@ class LocalPostgresRepository:
         # _UUIDStrLoader) to match PostgREST's JSON contract.
         conn.adapters.register_loader("numeric", FloatLoader)
         conn.adapters.register_loader("uuid", _UUIDStrLoader)
+        LocalPostgresRepository._pin_session_timezone(conn)
+
+    @staticmethod
+    def _pin_session_timezone(conn: psycopg.Connection) -> None:
+        """Pin the session to ``LEDGER_TIMEZONE`` so month boundaries (a
+        ``timestamptz`` compared with a ``date``) never depend on the server's
+        configured zone. A no-op once pinned. ``set_config`` (not ``SET``) so
+        the value can be a bound parameter. On a connection that is idle and
+        not autocommit (a fresh pool connection) the setting is committed so
+        the pool does not discard it; a connection already inside a caller's
+        transaction is left alone, never committed on the caller's behalf."""
+        if conn.info.parameter_status("TimeZone") == LEDGER_TIMEZONE:
+            return
+        was_idle = conn.info.transaction_status == pq.TransactionStatus.IDLE
+        conn.execute("SELECT set_config('TimeZone', %s, false)", (LEDGER_TIMEZONE,))
+        if was_idle and not conn.autocommit:
+            conn.commit()
 
     @contextmanager
     def _cursor(self) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
@@ -1496,7 +1523,7 @@ class LocalPostgresRepository:
             cur.execute(query, (*payload.values(), record_id))
             updated = cur.fetchone()
             if updated is None:
-                raise LocalPostgresError(f"{table} row not found: {record_id}")
+                raise LocalPostgresRecordNotFound(f"{table} row not found: {record_id}")
             return updated
 
         insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)

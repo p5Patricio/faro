@@ -16,6 +16,7 @@ module directly first.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
@@ -44,13 +45,25 @@ from brain.finance.currency import (
 )
 from brain.finance.liquidity import is_liquidity_classified, summarize_net_worth_liquidity
 from brain.finance.recurrence import occurrence_on_or_after
-from collector.local_repository import LocalPostgresRepository, PendingOccurrenceConflict
+from collector.local_repository import (
+    LocalPostgresRecordNotFound,
+    LocalPostgresRepository,
+    PendingOccurrenceConflict,
+)
 
 router = APIRouter()
 
 # Every `*_cents` payload field lands in a `bigint` column: an amount beyond
 # it is a client error (422 from validation), never a database error (503).
 _MAX_CENTS = BIGINT_MAX
+
+# A due date past this overflows the recurrence math (``date.max`` plus a
+# period), so it is refused at validation (422) instead of failing later (500).
+_MAX_DUE_DATE = date(2100, 12, 31)
+
+# ``YYYY-MM`` with a real month; year 1000+ keeps ``YYYY-MM-01`` a valid date.
+# (Pydantic's regex engine has no look-around, hence the explicit ranges.)
+_MONTH_PATTERN = r"^[1-9][0-9]{3}-(0[1-9]|1[0-2])$"
 
 
 def _require_repository(repository: LocalPostgresRepository | None) -> LocalPostgresRepository:
@@ -79,13 +92,13 @@ def _require_base_currency(currency: str, *, subject: str) -> str:
 
 
 class FinanceTransactionPayload(BaseModel):
-    client_id: str
-    account_id: str
-    category_id: str | None = None
+    client_id: uuid.UUID
+    account_id: uuid.UUID
+    category_id: uuid.UUID | None = None
     kind: Literal["expense", "income", "transfer"]
     amount_cents: int = Field(ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
-    occurred_at: str
+    occurred_at: datetime
     merchant: str | None = None
     notes: str | None = None
     source: str = "ui"
@@ -93,12 +106,12 @@ class FinanceTransactionPayload(BaseModel):
     # No `amount_base_cents`: the base amount is always computed server-side
     # (see `_apply_transaction_base_amounts`). Pydantic drops unknown keys, so
     # a client that still sends one is silently ignored, never trusted.
-    deleted_at: str | None = None
+    deleted_at: datetime | None = None
 
 
 class FinanceBudgetPayload(BaseModel):
-    category_id: str
-    period_month: str | None = None
+    category_id: uuid.UUID
+    period_month: date | None = None
     limit_cents: int = Field(ge=0, le=_MAX_CENTS)
     percent_of_income: float | None = Field(default=None, ge=0, le=100)
     currency: str = Field(min_length=3, max_length=3)
@@ -120,41 +133,41 @@ class FinanceNetWorthItemPayload(BaseModel):
 
 
 class FinanceNetWorthSnapshotPayload(BaseModel):
-    snapshot_date: str
+    snapshot_date: date
     notes: str | None = None
     items: list[FinanceNetWorthItemPayload] = Field(default_factory=list)
 
 
 class FinanceRecurringBillPayload(BaseModel):
-    id: str | None = None
+    id: uuid.UUID | None = None
     name: str
-    category_id: str | None = None
-    account_id: str | None = None
+    category_id: uuid.UUID | None = None
+    account_id: uuid.UUID | None = None
     amount_cents: int = Field(ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
     frequency: Literal[
         "weekly", "biweekly", "monthly", "bimonthly", "quarterly", "semiannual", "annual"
     ]
-    anchor_due_date: str
+    anchor_due_date: date = Field(le=_MAX_DUE_DATE)
     reminder_days_before: int = Field(default=3, ge=0)
     is_active: bool = True
     notes: str | None = None
 
 
 class FinanceRecurringBillPaymentPayload(BaseModel):
-    bill_id: str
-    due_date: str
+    bill_id: uuid.UUID
+    due_date: date = Field(le=_MAX_DUE_DATE)
     status: Literal["pending", "paid", "skipped"] = "pending"
-    transaction_id: str | None = None
+    transaction_id: uuid.UUID | None = None
 
 
 class FinanceGoalPayload(BaseModel):
-    id: str | None = None
+    id: uuid.UUID | None = None
     name: str
     target_amount_cents: int = Field(gt=0, le=_MAX_CENTS)
     current_amount_cents: int = Field(default=0, ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
-    target_date: str | None = None
+    target_date: date | None = None
     purpose_note: str | None = None
     is_achieved: bool = False
 
@@ -185,7 +198,7 @@ def get_accounts(repository: LocalPostgresRepository | None = Depends(get_reposi
 
 @router.get("/transactions")
 def get_transactions(
-    month: str | None = Query(default=None),
+    month: str | None = Query(default=None, pattern=_MONTH_PATTERN),
     category_id: str | None = Query(default=None),
     account_id: str | None = Query(default=None),
     limit: int = Query(default=200, ge=1, le=1000),
@@ -281,7 +294,7 @@ def put_transaction(
 
 @router.get("/budgets")
 def get_budgets(
-    month: str | None = Query(default=None),
+    month: str | None = Query(default=None, pattern=_MONTH_PATTERN),
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     repository = _require_repository(repository)
@@ -392,16 +405,6 @@ def _today() -> date:
     return date.today()
 
 
-def _parse_date_field(value: str, *, detail: str) -> date:
-    """A payload date string as a ``date``; 422 with ``detail`` when it is not
-    a valid ISO date (the recurrence math needs a real date, so a bad value
-    must not reach it as a 500)."""
-    try:
-        return date.fromisoformat(value)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=detail) from None
-
-
 def _with_next_due_date(bills: list[dict[str, Any]], *, today: date) -> list[dict[str, Any]]:
     """Every ACTIVE bill gets a next due date. Saving a bill persists its
     pending occurrence, so this only fills in for a bill that has none (one
@@ -445,11 +448,10 @@ def put_recurring_bill(
     repository = _require_repository(repository)
     row = payload.model_dump()
     row["currency"] = _require_base_currency(row["currency"], subject="Los pagos recurrentes")
-    row["anchor_due_date"] = _parse_date_field(
-        row["anchor_due_date"], detail="La fecha del primer vencimiento no es válida (usa AAAA-MM-DD)."
-    )
     try:
         return repository.upsert_finance_recurring_bill(row, today=_today())
+    except LocalPostgresRecordNotFound:
+        raise HTTPException(status_code=404, detail="El pago recurrente indicado no existe.") from None
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el pago recurrente") from None
 
@@ -469,9 +471,6 @@ def put_recurring_bill_payment(
     repository = _require_repository(repository)
     row = payload.model_dump(exclude_unset=True)
     row.setdefault("status", "pending")
-    row["due_date"] = _parse_date_field(
-        row["due_date"], detail="La fecha de vencimiento no es válida (usa AAAA-MM-DD)."
-    )
     # `paid_at` is a business-level value, not a payload field: the caller
     # only states the fact ("this got paid"); the timestamp is this router's
     # job, not something a client should have to compute itself. Any other
@@ -541,7 +540,7 @@ def _trailing_months(month: str, *, count: int) -> list[str]:
 
 @router.get("/summary")
 def get_summary(
-    month: str | None = Query(default=None),
+    month: str | None = Query(default=None, pattern=_MONTH_PATTERN),
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
     """One composed payload for the dashboard's overview screen. Degrades

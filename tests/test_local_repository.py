@@ -869,3 +869,27 @@ def test_get_latest_analyst_consensus_returns_none_without_snapshots(
     asset_id = repository.get_or_create_asset("aapl", asset_class="stock")
 
     assert repository.get_latest_analyst_consensus(asset_id) is None
+
+
+def test_month_boundaries_follow_the_ledger_timezone_not_the_session_default(
+    repository: LocalPostgresRepository, db_connection, make_finance_account
+) -> None:
+    """23:30 on 30 September in Mexico City is already 1 October in UTC. Even
+    when the session starts on UTC, the repository pins the ledger's zone, so
+    the transaction still belongs to September."""
+    db_connection.execute("SET TIME ZONE 'UTC'")
+    repository.upsert_finance_transaction(
+        {
+            "client_id": "6f1f9a9e-8f3a-4b8e-9c2d-2a6f7e6b1a99",
+            "account_id": make_finance_account("Cuenta zona horaria", "MXN"),
+            "kind": "expense",
+            "amount_cents": 5_000,
+            "currency": "MXN",
+            "fx_rate_to_base": 1,
+            "amount_base_cents": 5_000,
+            "occurred_at": "2026-09-30T23:30:00-06:00",
+        }
+    )
+
+    assert len(repository.get_finance_transactions(month="2026-09")) == 1
+    assert repository.get_finance_transactions(month="2026-10") == []

@@ -1108,6 +1108,73 @@ def test_the_payment_route_returns_404_for_an_unknown_bill(finance_client: TestC
     assert response.status_code == 404
 
 
+def test_editing_an_unknown_bill_answers_404_not_503(finance_client: TestClient) -> None:
+    response = finance_client.put(
+        BILLS_URL,
+        json={
+            "id": str(uuid.uuid4()),
+            "name": "Fantasma",
+            "amount_cents": 1_000,
+            "currency": "MXN",
+            "frequency": "monthly",
+            "anchor_due_date": "2026-01-05",
+        },
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "url,body",
+    [
+        (
+            TRANSACTIONS_URL,
+            {
+                "client_id": "not-a-uuid",
+                "account_id": str(uuid.uuid4()),
+                "kind": "expense",
+                "amount_cents": 100,
+                "currency": "MXN",
+                "occurred_at": "2026-09-10T12:00:00+00:00",
+            },
+        ),
+        (
+            TRANSACTIONS_URL,
+            {
+                "client_id": str(uuid.uuid4()),
+                "account_id": str(uuid.uuid4()),
+                "kind": "expense",
+                "amount_cents": 100,
+                "currency": "MXN",
+                "occurred_at": "yesterday",
+            },
+        ),
+        (PAYMENTS_URL, {"bill_id": "not-a-uuid", "due_date": "2026-10-05", "status": "paid"}),
+        (
+            BILLS_URL,
+            {
+                "name": "Lejano",
+                "amount_cents": 1_000,
+                "currency": "MXN",
+                "frequency": "monthly",
+                "anchor_due_date": "9999-12-31",
+            },
+        ),
+        (PAYMENTS_URL, {"bill_id": str(uuid.uuid4()), "due_date": "9999-12-31", "status": "paid"}),
+    ],
+)
+def test_malformed_ids_dates_and_out_of_range_due_dates_answer_422(
+    finance_client: TestClient, url: str, body: dict[str, Any]
+) -> None:
+    assert finance_client.put(url, json=body).status_code == 422
+
+
+@pytest.mark.parametrize("bad_month", ["bad", "2026-13", "2026-9", "0000-01"])
+def test_month_query_params_reject_a_malformed_month_with_422(finance_client: TestClient, bad_month: str) -> None:
+    for url in (SUMMARY_URL, TRANSACTIONS_URL, "/api/finance/budgets"):
+        assert finance_client.get(url, params={"month": bad_month}).status_code == 422
+
+
 @pytest.mark.parametrize("bad_date", ["not-a-date", "2026-13-40", ""])
 def test_recurring_bill_routes_reject_an_invalid_date_with_422(
     finance_client: TestClient, pin_today: Callable[[date], None], bad_date: str
