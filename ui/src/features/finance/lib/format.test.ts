@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { BASE_CURRENCY, formatCents, formatMonth, formatMonthLabel, parseMonthInput, shiftMonth } from './format.ts';
+import {
+  BASE_CURRENCY,
+  formatCents,
+  formatMonth,
+  formatMonthLabel,
+  formatSignedCents,
+  parseMonthInput,
+  shiftMonth,
+} from './format.ts';
+
+describe('formatSignedCents', () => {
+  it('puts an explicit plus on a positive amount so the sign, not only a colour, carries the direction', () => {
+    expect(formatSignedCents(150000)).toBe(`+${formatCents(150000)}`);
+  });
+
+  it('keeps the minus of a negative amount and leaves zero unsigned', () => {
+    expect(formatSignedCents(-500)).toBe(formatCents(-500));
+    expect(formatSignedCents(-500)).toContain('-');
+    expect(formatSignedCents(0)).toBe(formatCents(0));
+  });
+});
 
 describe('formatCents', () => {
   it('defaults to the base currency', () => {

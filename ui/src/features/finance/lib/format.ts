@@ -21,6 +21,16 @@ export function formatCents(amountCents: number, currency: string = BASE_CURRENC
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(amountCents / 100);
 }
 
+/**
+ * `formatCents` with an explicit "+" on positive amounts (negatives already
+ * carry "-"), so the direction of a difference reads from the sign and not
+ * from a colour alone.
+ */
+export function formatSignedCents(amountCents: number, currency: string = BASE_CURRENCY): string {
+  const formatted = formatCents(amountCents, currency);
+  return amountCents > 0 ? `+${formatted}` : formatted;
+}
+
 /** "YYYY-MM" for the given date (defaults to now). */
 export function formatMonth(date: Date = new Date()): string {
   const year = date.getFullYear();

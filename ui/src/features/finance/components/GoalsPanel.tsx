@@ -109,8 +109,22 @@ function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSumma
     );
   }
 
-  const ratio =
-    emergencyFund.months_covered == null ? null : emergencyFund.months_covered / emergencyFund.target_max_months;
+  // No essential-expense baseline (the counted months logged no necesidad
+  // spending): the coverage cannot be measured, so there is no status to
+  // badge -- "below" would claim a measurement that does not exist.
+  if (emergencyFund.months_covered == null) {
+    return (
+      <div className="flex items-start gap-2 text-sm text-ink-muted">
+        <Target aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Fondo de emergencia: todavía no hay suficiente historial para estimarlo. Los meses anteriores no tienen
+          gastos esenciales registrados con los que medir cuántos meses cubre tu patrimonio.
+        </span>
+      </div>
+    );
+  }
+
+  const ratio = emergencyFund.months_covered / emergencyFund.target_max_months;
   const badge =
     emergencyFund.status === 'above' ? 'Sobre el objetivo' : emergencyFund.status === 'below' ? 'Por debajo' : null;
   const fillClassName =
@@ -125,7 +139,7 @@ function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSumma
       name="Fondo de emergencia"
       targetLabel={`${emergencyFund.target_min_months} a ${emergencyFund.target_max_months} meses de gasto fijo`}
       ratio={ratio}
-      leftFigure={emergencyFund.months_covered != null ? `${emergencyFund.months_covered.toFixed(1)} meses cubiertos` : 'N/D'}
+      leftFigure={`${emergencyFund.months_covered.toFixed(1)} meses cubiertos`}
       rightFigure={`objetivo ${emergencyFund.target_max_months} meses`}
       badge={badge}
       fillClassName={fillClassName}

@@ -24,12 +24,16 @@ from pydantic import BaseModel, Field
 
 from api.main import get_repository
 from brain.finance.analytics import (
+    MIN_TRANSACTIONS_PER_TRAILING_MONTH,
+    TRAILING_MONTHS_CONSIDERED,
     compute_cash_flow_forecast,
+    compute_category_breakdown,
     compute_emergency_fund_status,
     compute_fire_number,
     compute_investable_surplus,
     compute_monthly_summary,
     compute_subscription_total,
+    compute_trailing_baseline,
 )
 from brain.finance.currency import (
     BASE_CURRENCY,
@@ -492,10 +496,6 @@ def _trailing_months(month: str, *, count: int) -> list[str]:
     return list(reversed(months))
 
 
-def _average(values: list[int]) -> int:
-    return int(sum(values) / len(values)) if values else 0
-
-
 @router.get("/summary")
 def get_summary(
     month: str | None = Query(default=None),
@@ -504,7 +504,26 @@ def get_summary(
     """One composed payload for the dashboard's overview screen. Degrades
     gracefully section-by-section (never a 500) when there isn't enough
     history yet: each section carries its own `data_sufficient` flag rather
-    than the whole endpoint failing for a brand-new user with zero data."""
+    than the whole endpoint failing for a brand-new user with zero data.
+
+    What each flag means. Every ``data_sufficient`` is derived from data except
+    ``subscriptions``, which is always true: having no subscriptions is a true
+    zero, not a gap in the data.
+
+    * ``monthly_summary`` -- the month has at least one converted
+      income/expense transaction. ``net_cents`` there is income minus
+      ``spending_cents`` (savings are not spending); see
+      ``compute_monthly_summary``.
+    * ``emergency_fund`` / ``fire_number`` / ``investable_surplus`` -- there
+      is a net-worth snapshot AND at least one trailing month met the
+      coverage rule (decision D2: 5+ converted transactions). ``history``
+      reports how many of the 3 trailing months counted, and how many of
+      their rows were unconverted, so the UI can say "Estimado con N meses".
+    * ``cash_flow_forecast`` -- shown whenever there are bills committed in
+      the window or overdue, even with no income history: the bills are facts
+      from the schedule. ``income_data_sufficient`` says separately whether
+      an income projection exists (a covered trailing month with income).
+    """
     repository = _require_repository(repository)
     today = _today()
     target_month = month or today.strftime("%Y-%m")
@@ -513,28 +532,25 @@ def get_summary(
         categories = repository.get_finance_categories()
         transactions = repository.get_finance_transactions(month=target_month, limit=10_000)
         monthly_summary = compute_monthly_summary(transactions, categories)
+        budget_limits = {
+            budget["category_id"]: budget["limit_cents"]
+            for budget in repository.get_finance_budgets(month=target_month)
+        }
+        category_breakdown = compute_category_breakdown(transactions, categories, budget_limits)
 
-        # Trailing averages (necesidad spend, total expense, income) over the
-        # 3 completed months before `target_month`. A month with zero
-        # transactions is skipped entirely rather than counted as a $0
-        # data point -- a month nobody logged anything in isn't evidence of
-        # $0 spending, it's an absence of data.
-        necesidad_totals: list[int] = []
-        total_expense_totals: list[int] = []
-        income_totals: list[int] = []
-        for trailing_month in _trailing_months(target_month, count=3):
-            trailing_transactions = repository.get_finance_transactions(month=trailing_month, limit=10_000)
-            if not trailing_transactions:
-                continue
-            trailing_summary = compute_monthly_summary(trailing_transactions, categories)
-            necesidad_totals.append(trailing_summary["buckets"]["necesidad"]["actual_cents"])
-            total_expense_totals.append(trailing_summary["expense_cents"])
-            income_totals.append(trailing_summary["income_cents"])
-
-        history_sufficient = len(necesidad_totals) > 0
-        avg_necesidad_cents = _average(necesidad_totals)
-        avg_total_expense_cents = _average(total_expense_totals)
-        avg_income_cents = _average(income_totals)
+        # Baselines over the completed months before `target_month`. Only a
+        # month that meets the coverage rule counts (decision D2); the rest
+        # are skipped, not averaged in as zeros, and their unconverted rows
+        # are still reported through `history`.
+        baseline = compute_trailing_baseline(
+            [
+                compute_monthly_summary(
+                    repository.get_finance_transactions(month=trailing_month, limit=10_000), categories
+                )
+                for trailing_month in _trailing_months(target_month, count=TRAILING_MONTHS_CONSIDERED)
+            ]
+        )
+        history_sufficient = baseline["months_used"] > 0
 
         snapshots = repository.get_finance_net_worth_snapshots(limit=1)
         latest_snapshot = snapshots[0] if snapshots else None
@@ -546,11 +562,15 @@ def get_summary(
         # out of scope here.
         liquid_net_worth_cents = latest_snapshot["net_worth_cents"] if latest_snapshot else 0
 
-        emergency_fund_status = compute_emergency_fund_status(liquid_net_worth_cents, avg_necesidad_cents)
+        # Emergency fund: essential (necesidad) expenses; FIRE: spending
+        # without the savings bucket (decision D3).
+        emergency_fund_status = compute_emergency_fund_status(
+            liquid_net_worth_cents, baseline["avg_necesidad_cents"]
+        )
         # Naive annualization: 12x the trailing monthly average, ignoring
         # seasonality -- consistent with this module's "genuinely simple"
         # mandate.
-        fire_number = compute_fire_number(liquid_net_worth_cents, avg_total_expense_cents * 12)
+        fire_number = compute_fire_number(liquid_net_worth_cents, baseline["avg_spending_cents"] * 12)
         investable_surplus = compute_investable_surplus(monthly_summary, emergency_fund_status)
 
         recurring_bills = _with_next_due_date(
@@ -575,15 +595,32 @@ def get_summary(
                     "frequency": bill["frequency"],
                 }
             )
+        # No income projection without an income baseline: `None`, never a
+        # made-up $0 (a covered month that logged only expenses says nothing
+        # about what comes in).
+        income_baseline_cents = baseline["avg_income_cents"] if baseline["avg_income_cents"] > 0 else None
         cash_flow_forecast = compute_cash_flow_forecast(
-            pending_bill_payments, avg_income_cents, horizon_days=30, today=today
+            pending_bill_payments, income_baseline_cents, horizon_days=30, today=today
+        )
+        forecast_has_bills = (
+            cash_flow_forecast["committed_bills_cents"] > 0 or cash_flow_forecast["overdue_bills_count"] > 0
         )
 
         combined_sufficient = net_worth_sufficient and history_sufficient
 
         return {
             "month": target_month,
-            "monthly_summary": {"data_sufficient": True, **monthly_summary},
+            "monthly_summary": {
+                "data_sufficient": monthly_summary["converted_transactions"] > 0,
+                **monthly_summary,
+            },
+            "category_breakdown": category_breakdown,
+            "history": {
+                "months_used": baseline["months_used"],
+                "months_considered": baseline["months_considered"],
+                "min_transactions_per_month": MIN_TRANSACTIONS_PER_TRAILING_MONTH,
+                "unconverted_transactions": baseline["unconverted_transactions"],
+            },
             "net_worth": {
                 "data_sufficient": net_worth_sufficient,
                 "snapshot_date": latest_snapshot["snapshot_date"] if latest_snapshot else None,
@@ -596,7 +633,10 @@ def get_summary(
             "fire_number": {"data_sufficient": combined_sufficient, **fire_number},
             "investable_surplus": {"data_sufficient": combined_sufficient, **investable_surplus},
             "subscriptions": {"data_sufficient": True, **subscriptions},
-            "cash_flow_forecast": {"data_sufficient": history_sufficient, **cash_flow_forecast},
+            "cash_flow_forecast": {
+                "data_sufficient": forecast_has_bills or cash_flow_forecast["income_data_sufficient"],
+                **cash_flow_forecast,
+            },
         }
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo calcular el resumen financiero") from None

@@ -292,40 +292,87 @@ def test_put_goal_then_get_reflects_it(finance_client: TestClient) -> None:
 # -- Summary ---------------------------------------------------------------
 
 
-def test_get_summary_degrades_gracefully_with_no_data(finance_client: TestClient) -> None:
-    response = finance_client.get("/api/finance/summary")
+def test_get_summary_degrades_gracefully_with_no_data(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    """The exact payload a brand-new user gets. The frontend fixture in
+    `ui/src/features/finance/FinanceDashboard.test.tsx` mirrors it, so the UI
+    is tested against what production returns, not an invented shape."""
+    response = finance_client.get("/api/finance/summary", params={"month": "2026-09"})
 
     assert response.status_code == 200
-    payload = response.json()
-
-    assert payload["monthly_summary"]["data_sufficient"] is True
-    assert payload["monthly_summary"]["income_cents"] == 0
-    assert payload["monthly_summary"]["expense_cents"] == 0
-
-    assert payload["net_worth"]["data_sufficient"] is False
-    assert payload["net_worth"]["net_worth_cents"] is None
-
-    assert payload["emergency_fund"]["data_sufficient"] is False
-    assert payload["emergency_fund"]["months_covered"] is None
-
-    assert payload["fire_number"]["data_sufficient"] is False
-
-    assert payload["investable_surplus"] == {
-        "data_sufficient": False,
-        "surplus_cents": 0,
-        "reason": "building_emergency_fund",
+    assert response.json() == {
+        "month": "2026-09",
+        # No converted transaction this month: not sufficient (it used to be hard-coded true).
+        "monthly_summary": {
+            "data_sufficient": False,
+            "income_cents": 0,
+            "expense_cents": 0,
+            "spending_cents": 0,
+            "saved_cents": 0,
+            "net_cents": 0,
+            "savings_rate_pct": 0.0,
+            "buckets": {
+                "necesidad": {"actual_cents": 0, "target_cents": 0},
+                "deseo": {"actual_cents": 0, "target_cents": 0},
+                "ahorro_inversion": {"actual_cents": 0, "target_cents": 0},
+                "sin_categoria": {"actual_cents": 0},
+            },
+            "converted_transactions": 0,
+            "unconverted_transactions": 0,
+        },
+        "category_breakdown": [],
+        "history": {
+            "months_used": 0,
+            "months_considered": 3,
+            "min_transactions_per_month": 5,
+            "unconverted_transactions": 0,
+        },
+        "net_worth": {
+            "data_sufficient": False,
+            "snapshot_date": None,
+            "total_assets_cents": None,
+            "total_liabilities_cents": None,
+            "net_worth_cents": None,
+            "liquid_net_worth_cents": None,
+        },
+        "emergency_fund": {
+            "data_sufficient": False,
+            "months_covered": None,
+            "target_min_months": 3,
+            "target_max_months": 6,
+            "status": "below",
+        },
+        "fire_number": {"data_sufficient": False, "target_cents": 0, "progress_pct": None},
+        "investable_surplus": {
+            "data_sufficient": False,
+            "surplus_cents": 0,
+            "reason": "building_emergency_fund",
+            "available_cents": 0,
+            "shortfall_cents": 0,
+            "income_cents": 0,
+            "spending_cents": 0,
+            "saved_cents": 0,
+        },
+        # No subscriptions is a true zero, not a data gap, so this stays sufficient.
+        "subscriptions": {
+            "data_sufficient": True,
+            "annual_total_cents": 0,
+            "monthly_average_cents": 0,
+            "bills": [],
+            "unconverted_bills": 0,
+        },
+        "cash_flow_forecast": {
+            "data_sufficient": False,
+            "horizon_days": 30,
+            "income_data_sufficient": False,
+            "expected_income_cents": None,
+            "committed_bills_cents": 0,
+            "overdue_bills_cents": 0,
+            "overdue_bills_count": 0,
+            "projected_net_cents": None,
+        },
     }
-
-    assert payload["subscriptions"] == {
-        "data_sufficient": True,
-        "annual_total_cents": 0,
-        "monthly_average_cents": 0,
-        "bills": [],
-        "unconverted_bills": 0,
-    }
-    assert payload["monthly_summary"]["unconverted_transactions"] == 0
-
-    assert payload["cash_flow_forecast"]["data_sufficient"] is False
 
 
 # -- Currency rules (decision D1: base currency MXN) --------------------------
@@ -1134,24 +1181,32 @@ def test_summary_forecast_reports_overdue_bills_separately_and_includes_them_in_
     assert forecast["overdue_bills_cents"] == 100_000
     assert forecast["overdue_bills_count"] == 1
     assert forecast["committed_bills_cents"] == 200_000
-    assert forecast["projected_net_cents"] == forecast["expected_income_cents"] - 200_000
+    # No income history: the projection is unknown (null), not a made-up $0 income.
+    assert forecast["income_data_sufficient"] is False
+    assert forecast["expected_income_cents"] is None
+    assert forecast["projected_net_cents"] is None
 
 
 def test_summary_forecast_payload_is_integer_cents(
-    finance_client: TestClient, pin_today: Callable[[date], None]
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    pin_today: Callable[[date], None],
 ) -> None:
+    """With an income history every figure is integer cents; without one the
+    two income-dependent figures are null and the bill figures stay integers."""
     _put_bill(finance_client, amount_cents=33_333, frequency="weekly", anchor_due_date="2026-09-02")
+    bill_keys = ("committed_bills_cents", "overdue_bills_cents", "overdue_bills_count")
+    income_keys = ("expected_income_cents", "projected_net_cents")
 
-    forecast = _forecast(finance_client)
+    without_income = _forecast(finance_client)
+    assert all(type(without_income[key]) is int for key in bill_keys)
+    assert all(without_income[key] is None for key in income_keys)
 
-    for key in (
-        "expected_income_cents",
-        "committed_bills_cents",
-        "overdue_bills_cents",
-        "overdue_bills_count",
-        "projected_net_cents",
-    ):
-        assert type(forecast[key]) is int, key
+    _seed_month(finance_client, repository, make_finance_account("Cuenta MXN de prueba", "MXN"), "2026-08", COVERED_MONTH)
+    with_income = _forecast(finance_client)
+
+    assert all(type(with_income[key]) is int for key in (*bill_keys, *income_keys))
 
 
 def test_runtime_scenario_a_weekly_bill_flows_through_the_forecast_and_advances_when_paid(
@@ -1176,6 +1231,327 @@ def test_runtime_scenario_a_weekly_bill_flows_through_the_forecast_and_advances_
     assert _occurrence_rows(db_connection, bill["id"]) == [("2026-09-30", "paid"), ("2026-10-07", "pending")]
     # Oct 7, 14, 21, 28 remain.
     assert _forecast(finance_client)["committed_bills_cents"] == 4 * amount_cents
+
+
+# -- Summary semantics: spending vs saving, coverage rule, truthful empty states -------
+
+# (kind, category slug or None for "no category", amount in MXN cents). Five converted
+# transactions, so a trailing month holding these exactly meets the coverage rule (D2).
+COVERED_MONTH: list[tuple[str, str | None, int]] = [
+    ("income", "sueldo", 1_000_000),
+    ("expense", "alimentacion", 200_000),  # necesidad
+    ("expense", "entretenimiento", 100_000),  # deseo
+    ("expense", "ahorro-inversion", 150_000),  # ahorro_inversion: saved, not spent
+    ("expense", None, 50_000),  # uncategorized
+]
+
+
+def _seed_month(
+    client: TestClient,
+    repository: LocalPostgresRepository,
+    account_id: str,
+    month: str,
+    entries: list[tuple[str, str | None, int]],
+) -> None:
+    """PUT each entry as an MXN transaction booked mid-month (well away from a month boundary)."""
+    for kind, slug, cents in entries:
+        body: dict[str, Any] = {
+            "client_id": str(uuid.uuid4()),
+            "account_id": account_id,
+            "kind": kind,
+            "amount_cents": cents,
+            "currency": "MXN",
+            "occurred_at": f"{month}-10T12:00:00+00:00",
+        }
+        if slug is not None:
+            body["category_id"] = _category_id(repository, slug)
+        response = client.put(TRANSACTIONS_URL, json=body)
+        assert response.status_code == 200, response.text
+
+
+def _summary(client: TestClient, month: str = "2026-09") -> dict[str, Any]:
+    response = client.get(SUMMARY_URL, params={"month": month})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _put_net_worth_cash(client: TestClient, cents: int) -> None:
+    response = client.put(
+        "/api/finance/net-worth",
+        json={
+            "snapshot_date": "2026-09-01",
+            "items": [{"is_asset": True, "label": "Efectivo", "item_type": "cash", "amount_cents": cents, "currency": "MXN"}],
+        },
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_runtime_scenario_spending_saving_and_the_uncategorized_bucket_through_the_summary(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    pin_today: Callable[[date], None],
+) -> None:
+    """End to end through the real HTTP stack and SQL, clock pinned to
+    2026-09-29: an income plus one expense in each bucket plus one with no
+    category are PUT, then /summary must tell spending from saving, keep the
+    uncategorized money in its own bucket, and break the month down by
+    category without losing a cent. An untouched month then reports itself as
+    insufficient instead of showing $0.00 as if it were data."""
+    account = make_finance_account("Cuenta MXN de prueba", "MXN")
+    _seed_month(finance_client, repository, account, "2026-09", COVERED_MONTH)
+
+    payload = _summary(finance_client)
+    month = payload["monthly_summary"]
+
+    assert month["data_sufficient"] is True
+    assert month["income_cents"] == 1_000_000
+    assert month["expense_cents"] == 500_000  # raw total: 200k + 100k + 150k saved + 50k uncategorized
+    assert month["spending_cents"] == 350_000  # everything except the savings bucket
+    assert month["saved_cents"] == 150_000
+    assert month["net_cents"] == 650_000  # income - spending: saving is NOT counted as spent
+    assert month["savings_rate_pct"] == 15.0
+    assert month["converted_transactions"] == 5
+    assert month["buckets"] == {
+        "necesidad": {"actual_cents": 200_000, "target_cents": 500_000},
+        "deseo": {"actual_cents": 100_000, "target_cents": 300_000},
+        "ahorro_inversion": {"actual_cents": 150_000, "target_cents": 200_000},
+        "sin_categoria": {"actual_cents": 50_000},
+    }
+    assert sum(bucket["actual_cents"] for bucket in month["buckets"].values()) == month["expense_cents"]
+
+    # Ungated: the money left unspent is reported even though the emergency fund gates the investable figure.
+    surplus = payload["investable_surplus"]
+    assert (surplus["available_cents"], surplus["shortfall_cents"]) == (650_000, 0)
+    assert (surplus["income_cents"], surplus["spending_cents"], surplus["saved_cents"]) == (1_000_000, 350_000, 150_000)
+    assert (surplus["surplus_cents"], surplus["reason"]) == (0, "building_emergency_fund")
+    assert surplus["data_sufficient"] is False
+
+    breakdown = payload["category_breakdown"]
+    assert sum(row["actual_cents"] for row in breakdown) == month["expense_cents"]
+    assert {row["category_name"]: row["actual_cents"] for row in breakdown} == {
+        "Alimentacion": 200_000,
+        "Entretenimiento": 100_000,
+        "Ahorro e Inversion": 150_000,
+        "Sin categoría": 50_000,
+    }
+    assert breakdown[-1]["category_id"] is None
+    assert breakdown[-1]["bucket"] == "sin_categoria"
+
+    empty = _summary(finance_client, month="2026-07")
+    assert empty["monthly_summary"]["data_sufficient"] is False
+    assert empty["monthly_summary"]["converted_transactions"] == 0
+    assert empty["category_breakdown"] == []
+    assert empty["investable_surplus"]["data_sufficient"] is False
+    assert empty["history"]["months_used"] == 0
+
+
+def test_summary_of_a_month_with_only_unconverted_rows_is_not_data_sufficient_but_counts_them(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    db_connection: psycopg.Connection,
+    pin_today: Callable[[date], None],
+) -> None:
+    usd = make_finance_account("Cuenta USD de prueba", "USD")
+    db_connection.execute(
+        "INSERT INTO finance_transactions (client_id, account_id, category_id, kind, amount_cents, currency, occurred_at) "
+        "VALUES (%s, %s, %s, 'expense', 5000, 'USD', '2026-09-12T12:00:00+00:00')",
+        (str(uuid.uuid4()), usd, _category_id(repository, "alimentacion")),
+    )
+
+    month = _summary(finance_client)["monthly_summary"]
+
+    assert month["data_sufficient"] is False
+    assert month["unconverted_transactions"] == 1
+
+
+def test_summary_category_breakdown_carries_budgets_and_adds_up_to_the_expense(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    pin_today: Callable[[date], None],
+) -> None:
+    account = make_finance_account("Cuenta MXN de prueba", "MXN")
+    _seed_month(finance_client, repository, account, "2026-09", COVERED_MONTH)
+    for slug, limit in (("alimentacion", 300_000), ("vivienda", 400_000)):  # vivienda: budgeted, nothing spent
+        response = finance_client.put(
+            "/api/finance/budgets",
+            json={
+                "category_id": _category_id(repository, slug),
+                "period_month": "2026-09-01",
+                "limit_cents": limit,
+                "currency": "MXN",
+            },
+        )
+        assert response.status_code == 200
+
+    payload = _summary(finance_client)
+    rows = {row["category_name"]: row for row in payload["category_breakdown"]}
+
+    assert sum(row["actual_cents"] for row in rows.values()) == payload["monthly_summary"]["expense_cents"] == 500_000
+    assert (rows["Alimentacion"]["budget_cents"], rows["Alimentacion"]["actual_cents"]) == (300_000, 200_000)
+    assert rows["Alimentacion"]["bucket"] == "necesidad"
+    assert (rows["Vivienda"]["budget_cents"], rows["Vivienda"]["actual_cents"]) == (400_000, 0)
+    # Unbudgeted spend is listed too: nothing vanishes for lack of a budget.
+    assert rows["Entretenimiento"]["budget_cents"] is None
+    assert rows["Sin categoría"]["actual_cents"] == 50_000
+    # The dedicated budgets endpoint is untouched: still only the budgeted categories.
+    budgets = finance_client.get("/api/finance/budgets", params={"month": "2026-09"}).json()
+    assert {budget["category_name"] for budget in budgets} == {"Alimentacion", "Vivienda"}
+
+
+def test_summary_trailing_month_needs_five_transactions_to_count(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    pin_today: Callable[[date], None],
+) -> None:
+    """Decision D2 through the API: a net-worth snapshot is there, and the only
+    trailing month has four transactions, then five."""
+    account = make_finance_account("Cuenta MXN de prueba", "MXN")
+    _put_net_worth_cash(finance_client, 700_000)
+    _seed_month(finance_client, repository, account, "2026-08", COVERED_MONTH[:4])
+
+    four = _summary(finance_client)
+
+    assert four["history"]["months_used"] == 0
+    assert four["history"]["months_considered"] == 3
+    assert four["history"]["min_transactions_per_month"] == 5
+    for section in ("emergency_fund", "fire_number", "investable_surplus"):
+        assert four[section]["data_sufficient"] is False, section
+
+    _seed_month(finance_client, repository, account, "2026-08", COVERED_MONTH[4:])
+    five = _summary(finance_client)
+
+    assert five["history"]["months_used"] == 1
+    for section in ("emergency_fund", "fire_number", "investable_surplus"):
+        assert five[section]["data_sufficient"] is True, section
+
+
+def test_summary_skips_a_month_of_only_unconverted_rows_and_reports_how_many_were_left_out(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    db_connection: psycopg.Connection,
+    pin_today: Callable[[date], None],
+) -> None:
+    account = make_finance_account("Cuenta MXN de prueba", "MXN")
+    usd = make_finance_account("Cuenta USD de prueba", "USD")
+    food = _category_id(repository, "alimentacion")
+    _seed_month(finance_client, repository, account, "2026-08", COVERED_MONTH)
+    # June: six foreign rows with no base amount (written before base amounts existed).
+    for _ in range(6):
+        db_connection.execute(
+            "INSERT INTO finance_transactions (client_id, account_id, category_id, kind, amount_cents, currency, occurred_at) "
+            "VALUES (%s, %s, %s, 'expense', 5000, 'USD', '2026-06-12T12:00:00+00:00')",
+            (str(uuid.uuid4()), usd, food),
+        )
+
+    history = _summary(finance_client)["history"]
+
+    # June is skipped (nothing converted) rather than averaged in as a zero month; July is empty.
+    assert history["months_used"] == 1
+    assert history["months_considered"] == 3
+    assert history["unconverted_transactions"] == 6
+
+
+def test_summary_uses_spending_and_essential_baselines_from_the_trailing_months(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    pin_today: Callable[[date], None],
+) -> None:
+    """The wiring of the baselines: FIRE is 25 x 12 x the average monthly
+    SPENDING (savings left out), the emergency fund is measured against the
+    average necesidad expense, and once covered the surplus is what the
+    month left unspent."""
+    account = make_finance_account("Cuenta MXN de prueba", "MXN")
+    _seed_month(finance_client, repository, account, "2026-08", COVERED_MONTH)
+    _put_net_worth_cash(finance_client, 700_000)
+    _seed_month(
+        finance_client,
+        repository,
+        account,
+        "2026-09",
+        [("income", "sueldo", 500_000), ("expense", "alimentacion", 200_000)],
+    )
+
+    payload = _summary(finance_client)
+
+    # August: spending 350k (200k necesidad + 100k deseo + 50k uncategorized); the 150k saved is excluded.
+    assert payload["fire_number"]["target_cents"] == 350_000 * 12 * 25
+    assert payload["fire_number"]["progress_pct"] == pytest.approx(700_000 / (350_000 * 12 * 25) * 100)
+    assert payload["emergency_fund"]["months_covered"] == 3.5  # 700k against 200k of essentials
+    assert payload["emergency_fund"]["status"] == "within"
+    surplus = payload["investable_surplus"]
+    assert surplus["data_sufficient"] is True
+    assert surplus["reason"] == "emergency_fund_covered"
+    assert (surplus["available_cents"], surplus["surplus_cents"]) == (300_000, 300_000)
+
+
+def test_summary_forecast_shows_committed_and_overdue_bills_without_any_income_history(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    pin_today(date(2026, 8, 20))
+    _put_bill(finance_client, name="Renta", amount_cents=100_000, frequency="monthly", anchor_due_date="2026-01-15")
+    pin_today(date(2026, 9, 29))
+
+    forecast = _forecast(finance_client)
+
+    # The bills are facts from the schedule: shown, not hidden because income history is missing.
+    assert forecast["data_sufficient"] is True
+    assert forecast["income_data_sufficient"] is False
+    assert forecast["overdue_bills_count"] == 1
+    assert forecast["overdue_bills_cents"] == 100_000
+    assert forecast["committed_bills_cents"] == 200_000
+    assert forecast["expected_income_cents"] is None
+    assert forecast["projected_net_cents"] is None
+
+
+def test_summary_forecast_projects_income_once_a_covered_month_exists(
+    finance_client: TestClient,
+    repository: LocalPostgresRepository,
+    make_finance_account: MakeAccount,
+    pin_today: Callable[[date], None],
+) -> None:
+    _put_bill(finance_client, name="Renta", amount_cents=100_000, frequency="monthly", anchor_due_date="2026-01-15")
+    _seed_month(finance_client, repository, make_finance_account("Cuenta MXN de prueba", "MXN"), "2026-08", COVERED_MONTH)
+
+    forecast = _forecast(finance_client)
+
+    assert forecast["income_data_sufficient"] is True
+    assert forecast["expected_income_cents"] == 1_000_000
+    assert forecast["projected_net_cents"] == 1_000_000 - forecast["committed_bills_cents"]
+
+
+def test_summary_forecast_is_not_sufficient_with_no_bills_and_no_income_history(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    forecast = _forecast(finance_client)
+
+    assert forecast["data_sufficient"] is False
+    assert forecast["income_data_sufficient"] is False
+
+
+def test_summary_forecast_excludes_and_counts_a_legacy_non_base_bill(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    """A bill written in another currency before bills became base-only has
+    no base amount: adding its face value would treat dollars as pesos. It
+    stays out of the forecast and out of the subscription total, and is
+    counted (`subscriptions.unconverted_bills`) instead of silently vanishing."""
+    _put_bill(finance_client, name="Netflix", amount_cents=19_900, frequency="monthly", anchor_due_date="2026-01-05")
+    db_connection.execute(
+        "INSERT INTO finance_recurring_bills (name, amount_cents, currency, frequency, anchor_due_date) "
+        "VALUES ('iCloud', 999, 'USD', 'monthly', '2026-01-05')"
+    )
+
+    payload = _summary(finance_client)
+
+    assert payload["cash_flow_forecast"]["committed_bills_cents"] == 19_900
+    assert payload["subscriptions"]["unconverted_bills"] == 1
+    assert [bill["name"] for bill in payload["subscriptions"]["bills"]] == ["Netflix"]
 
 
 # -- repository is None -> 503 (matching PUT /api/risk-profile's pattern) ----

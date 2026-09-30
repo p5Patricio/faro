@@ -161,37 +161,6 @@ export function useFinanceTransactions(filters: TransactionFilters = {}): Resour
   return { data, loading, error, refetch };
 }
 
-export function useFinanceBudgets(month: string): ResourceState<FinanceBudget[]> {
-  const [data, setData] = useState<FinanceBudget[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axios.get<FinanceBudget[]>(`${FINANCE_BASE_URL}/budgets`, { params: { month } });
-      setData(response.data);
-    } catch {
-      setError('No se pudieron cargar los presupuestos.');
-    } finally {
-      setLoading(false);
-    }
-  }, [month]);
-
-  useEffect(() => {
-    let disposed = false;
-    queueMicrotask(() => {
-      if (!disposed) void refetch();
-    });
-    return () => {
-      disposed = true;
-    };
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
-}
-
 export function useFinanceNetWorth(limit = 24): ResourceState<NetWorthSnapshot[]> {
   const [data, setData] = useState<NetWorthSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
