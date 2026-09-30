@@ -4,7 +4,14 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonLines } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { BASE_CURRENCY, SELECTABLE_CURRENCIES, formatCents, formatShortDate } from '../lib/format.ts';
+import {
+  BASE_CURRENCY,
+  SELECTABLE_CURRENCIES,
+  formatCents,
+  formatDateOnly,
+  formatShortDate,
+  parseDateValue,
+} from '../lib/format.ts';
 import { defaultIsLiquid, isLiquidityUnclassified } from '../lib/liquidity.ts';
 import { putNetWorthSnapshot } from '../hooks/useFinanceApi.ts';
 import type { NetWorthItem, NetWorthSnapshot } from '../types.ts';
@@ -145,7 +152,7 @@ function liquidityNotice(snapshot: NetWorthSnapshot): string {
 }
 
 function formatMonthName(value: string): string {
-  return new Intl.DateTimeFormat('es-MX', { month: 'long' }).format(new Date(value));
+  return new Intl.DateTimeFormat('es-MX', { month: 'long' }).format(parseDateValue(value));
 }
 
 const SPARKLINE_WIDTH = 560;
@@ -192,7 +199,7 @@ function NetWorthSparkline({ snapshots }: { snapshots: NetWorthSnapshot[] }) {
 function buildSparkline(snapshots: NetWorthSnapshot[]) {
   const ordered = [...snapshots]
     .filter((snapshot) => Number.isFinite(snapshot.net_worth_cents))
-    .sort((a, b) => new Date(a.snapshot_date).getTime() - new Date(b.snapshot_date).getTime());
+    .sort((a, b) => parseDateValue(a.snapshot_date).getTime() - parseDateValue(b.snapshot_date).getTime());
   if (ordered.length < 2) return null;
 
   const values = ordered.map((snapshot) => snapshot.net_worth_cents);
@@ -217,8 +224,8 @@ function buildSparkline(snapshots: NetWorthSnapshot[]) {
     linePath,
     areaPath,
     lastPoint: points[points.length - 1],
-    firstDate: shortMonth.format(new Date(ordered[0].snapshot_date)),
-    lastDate: shortMonth.format(new Date(ordered[ordered.length - 1].snapshot_date)),
+    firstDate: shortMonth.format(parseDateValue(ordered[0].snapshot_date)),
+    lastDate: shortMonth.format(parseDateValue(ordered[ordered.length - 1].snapshot_date)),
   };
 }
 
@@ -253,8 +260,7 @@ function newDraftItem(isAsset: boolean): DraftItem {
 }
 
 function NetWorthForm({ onSaved }: { onSaved: () => void }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [snapshotDate, setSnapshotDate] = useState(today);
+  const [snapshotDate, setSnapshotDate] = useState(() => formatDateOnly());
   const [notes, setNotes] = useState('');
   const [items, setItems] = useState<DraftItem[]>([newDraftItem(true)]);
   const [saving, setSaving] = useState(false);

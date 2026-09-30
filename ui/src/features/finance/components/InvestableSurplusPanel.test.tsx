@@ -9,6 +9,7 @@ import type {
   FireNumberSummary,
   InvestableSurplusSummary,
   NetWorthSummary,
+  SubscriptionsSummary,
 } from '../types.ts';
 
 function makeForecast(overrides: Partial<CashFlowForecastSummary> = {}): CashFlowForecastSummary {
@@ -89,6 +90,7 @@ interface PanelOverrides {
   emergencyFund?: EmergencyFundSummary | null;
   history?: FinanceHistory;
   netWorth?: NetWorthSummary;
+  subscriptions?: SubscriptionsSummary;
 }
 
 function renderPanel({
@@ -99,12 +101,13 @@ function renderPanel({
   emergencyFund = null,
   history = HISTORY,
   netWorth = NET_WORTH,
+  subscriptions = { data_sufficient: true, annual_total_cents: 0, monthly_average_cents: 0, bills: [] },
 }: PanelOverrides = {}) {
   return render(
     <InvestableSurplusPanel
       investableSurplus={investableSurplus}
       fireNumber={fireNumber}
-      subscriptions={{ data_sufficient: true, annual_total_cents: 0, monthly_average_cents: 0, bills: [] }}
+      subscriptions={subscriptions}
       cashFlowForecast={cashFlowForecast}
       emergencyFund={emergencyFund}
       history={history}
@@ -370,5 +373,26 @@ describe('InvestableSurplusPanel estimates', () => {
     renderPanel({ fireNumber: { data_sufficient: true, target_cents: 0, progress_pct: null } });
 
     expect(screen.getByText('Sin gasto promedio que proyectar')).toBeInTheDocument();
+  });
+});
+
+describe('InvestableSurplusPanel unconverted bills', () => {
+  const SUBSCRIPTIONS: SubscriptionsSummary = {
+    data_sufficient: true,
+    annual_total_cents: 0,
+    monthly_average_cents: 0,
+    bills: [],
+  };
+
+  it('warns that active bills outside the base currency are left out of the subscription figures', () => {
+    renderPanel({ subscriptions: { ...SUBSCRIPTIONS, unconverted_bills: 2 } });
+
+    expect(screen.getByText(/2 pagos recurrentes activos no están incluidos en estas cifras/)).toBeInTheDocument();
+  });
+
+  it.each([0, undefined])('shows no such warning when unconverted_bills is %s', (count) => {
+    renderPanel({ subscriptions: { ...SUBSCRIPTIONS, unconverted_bills: count } });
+
+    expect(screen.queryByText(/pagos? recurrentes? activos? no está/)).not.toBeInTheDocument();
   });
 });

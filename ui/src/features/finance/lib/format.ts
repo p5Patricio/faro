@@ -64,7 +64,27 @@ export function shiftMonth(month: string, delta: number): string {
   return formatMonth(date);
 }
 
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parses a date-only ("YYYY-MM-DD") string as a LOCAL calendar day and anything
+ * else (an ISO timestamp) as the instant it names. `new Date("2026-10-01")` is
+ * UTC midnight, which is still Sep 30 in any UTC-negative zone (Mexico), so a
+ * bare date must never go through it.
+ */
+export function parseDateValue(value: string): Date {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return new Date(value);
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+/** "YYYY-MM-DD" from the LOCAL date parts (`toISOString` is UTC: tomorrow after 6 pm in Mexico). */
+export function formatDateOnly(date: Date = new Date()): string {
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${formatMonth(date)}-${day}`;
+}
+
 /** Short date label for a date-only or ISO-timestamp string. */
 export function formatShortDate(value: string): string {
-  return new Intl.DateTimeFormat('es-MX', { month: 'short', day: 'numeric' }).format(new Date(value));
+  return new Intl.DateTimeFormat('es-MX', { month: 'short', day: 'numeric' }).format(parseDateValue(value));
 }

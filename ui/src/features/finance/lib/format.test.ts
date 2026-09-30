@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   BASE_CURRENCY,
   formatCents,
+  formatDateOnly,
   formatMonth,
   formatMonthLabel,
+  formatShortDate,
   formatSignedCents,
+  parseDateValue,
   parseMonthInput,
   shiftMonth,
 } from './format.ts';
@@ -90,5 +93,23 @@ describe('formatMonthLabel', () => {
     expect(formatMonthLabel('2026-09')).toBe(
       new Intl.DateTimeFormat('es-MX', { month: 'long', year: 'numeric' }).format(new Date(2026, 8, 1)),
     );
+  });
+});
+
+describe('date-only strings', () => {
+  it('reads a date-only string as a local calendar day, so it never renders a day early', () => {
+    const parsed = parseDateValue('2026-10-01');
+    expect([parsed.getFullYear(), parsed.getMonth(), parsed.getDate(), parsed.getHours()]).toEqual([2026, 9, 1, 0]);
+    expect(formatShortDate('2026-10-01')).toBe(
+      new Intl.DateTimeFormat('es-MX', { month: 'short', day: 'numeric' }).format(new Date(2026, 9, 1)),
+    );
+  });
+
+  it('still reads a full timestamp as the instant it names', () => {
+    expect(parseDateValue('2026-10-01T15:30:00.000Z').toISOString()).toBe('2026-10-01T15:30:00.000Z');
+  });
+
+  it('builds a date-only string from the local date parts, not from UTC', () => {
+    expect(formatDateOnly(new Date(2026, 9, 1, 23, 30))).toBe('2026-10-01');
   });
 });

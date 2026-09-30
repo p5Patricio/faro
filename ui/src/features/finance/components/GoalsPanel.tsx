@@ -43,7 +43,7 @@ export function GoalsPanel({ goals, emergencyFund, loading, error, onChanged }: 
               <EmptyState
                 icon={<Target aria-hidden="true" className="h-6 w-6" />}
                 title="Sin metas registradas"
-                hint="Creá tu primera meta con el formulario de abajo."
+                hint="Crea tu primera meta con el formulario de abajo."
               />
             </div>
           ) : (
@@ -167,10 +167,12 @@ function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSumma
 function GoalCard({ goal, onChanged }: { goal: FinanceGoal; onChanged: () => void }) {
   const [current, setCurrent] = useState(String(goal.current_amount_cents / 100));
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const ratio = goal.target_amount_cents > 0 ? goal.current_amount_cents / goal.target_amount_cents : null;
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await putGoal({
         id: goal.id,
@@ -183,6 +185,8 @@ function GoalCard({ goal, onChanged }: { goal: FinanceGoal; onChanged: () => voi
         is_achieved: goal.target_amount_cents > 0 && Math.round(Number(current) * 100) >= goal.target_amount_cents,
       });
       onChanged();
+    } catch {
+      setSaveError(`No se pudo actualizar el monto de «${goal.name}». Inténtalo de nuevo.`);
     } finally {
       setSaving(false);
     }
@@ -219,6 +223,11 @@ function GoalCard({ goal, onChanged }: { goal: FinanceGoal; onChanged: () => voi
           {saving ? 'Guardando' : 'Actualizar monto'}
         </button>
       </div>
+      {saveError ? (
+        <p role="alert" className="mt-2 text-xs text-status-critical">
+          {saveError}
+        </p>
+      ) : null}
     </div>
   );
 }

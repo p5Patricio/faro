@@ -41,6 +41,7 @@ export function InvestableSurplusPanel({
   history,
   netWorth,
 }: InvestableSurplusPanelProps) {
+  const unconvertedBills = subscriptions.unconverted_bills ?? 0;
   return (
     <div className="space-y-5">
       {investableSurplus.data_sufficient ? (
@@ -63,11 +64,20 @@ export function InvestableSurplusPanel({
             <Repeat aria-hidden="true" className="h-4 w-4 text-cobalt" />
             Suscripciones · anualizado
           </h2>
+          {unconvertedBills > 0 ? (
+            <p
+              role="status"
+              className="mb-3 flex items-start gap-2 rounded-lg border border-status-warning/40 bg-status-warning/10 px-3 py-2 text-sm text-ink-secondary"
+            >
+              <AlertTriangle aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-status-warning" />
+              <span>{unconvertedBillsWarning(unconvertedBills)}</span>
+            </p>
+          ) : null}
           {!subscriptions.data_sufficient || subscriptions.bills.length === 0 ? (
             <EmptyState
               icon={<Repeat aria-hidden="true" className="h-6 w-6" />}
               title="Sin suscripciones activas registradas"
-              hint="Aparecen automáticamente cuando registrás pagos recurrentes activos."
+              hint="Aparecen automáticamente cuando registras pagos recurrentes activos."
             />
           ) : (
             <div>
@@ -232,6 +242,13 @@ function HistoryNote({ history }: { history: FinanceHistory }) {
       </span>
     </p>
   );
+}
+
+function unconvertedBillsWarning(count: number): string {
+  if (count === 1) {
+    return `1 pago recurrente activo no está incluido en estas cifras porque no está en ${BASE_CURRENCY}. Revísalo en la pestaña Recurrentes.`;
+  }
+  return `${count} pagos recurrentes activos no están incluidos en estas cifras porque no están en ${BASE_CURRENCY}. Revísalos en la pestaña Recurrentes.`;
 }
 
 function unconvertedHistoryNote(count: number): string {

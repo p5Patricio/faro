@@ -74,7 +74,7 @@ export function AssetSwitcher({ assets, selectedTicker, onSelect, memory }: Asse
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex items-center gap-2">
             <span className="font-mono text-sm font-semibold text-slate-50">
-              {selected?.ticker ?? 'Elegí un activo'}
+              {selected?.ticker ?? 'Elige un activo'}
             </span>
             {selected?.asset_class ? (
               <span className="rounded bg-hairline/50 px-1.5 py-0.5 text-xs uppercase tracking-wide text-slate-400">

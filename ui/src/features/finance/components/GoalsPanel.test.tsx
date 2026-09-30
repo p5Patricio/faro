@@ -1,7 +1,9 @@
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import axios from 'axios';
 import { describe, expect, it, vi } from 'vitest';
 import { GoalsPanel } from './GoalsPanel.tsx';
-import type { EmergencyFundSummary } from '../types.ts';
+import type { EmergencyFundSummary, FinanceGoal } from '../types.ts';
 
 vi.mock('axios');
 
@@ -56,5 +58,29 @@ describe('GoalsPanel emergency fund row', () => {
 
     expect(screen.getByText(/todavía no hay suficiente historial/)).toBeInTheDocument();
     expect(screen.queryByText('Por debajo')).not.toBeInTheDocument();
+  });
+});
+
+describe('GoalsPanel goal update', () => {
+  it('says so next to the action when updating a goal amount fails, and does not refresh', async () => {
+    vi.mocked(axios.put).mockRejectedValue(new Error('boom'));
+    const user = userEvent.setup();
+    const onChanged = vi.fn();
+    const goal = {
+      id: 'goal-1',
+      name: 'Viaje',
+      target_amount_cents: 100000,
+      current_amount_cents: 20000,
+      currency: 'MXN',
+      target_date: null,
+      purpose_note: null,
+      is_achieved: false,
+    } as FinanceGoal;
+    render(<GoalsPanel goals={[goal]} emergencyFund={null} onChanged={onChanged} />);
+
+    await user.click(screen.getByRole('button', { name: 'Actualizar monto' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('No se pudo actualizar el monto de «Viaje»');
+    expect(onChanged).not.toHaveBeenCalled();
   });
 });

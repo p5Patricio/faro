@@ -200,7 +200,7 @@ function BudgetForm({
           className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none transition focus:border-cobalt/40"
         >
           <option value="" disabled>
-            Elegí una categoría
+            Elige una categoría
           </option>
           {categories.map((category) => (
             <option key={category.id} value={category.id}>

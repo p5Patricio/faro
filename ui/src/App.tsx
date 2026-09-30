@@ -1767,7 +1767,7 @@ function PaperTradingRunsPanel({ rows }: { rows: PaperTradingRunRow[] }) {
         <EmptyState
           icon={<Save aria-hidden="true" className="h-6 w-6" />}
           title="Sin corridas guardadas"
-          hint="Guardá una simulación para compararla después."
+          hint="Guarda una simulación para compararla después."
         />
       ) : (
         <DataTable
@@ -1990,7 +1990,7 @@ function PricePanel({
         <EmptyState
           icon={<BarChart3 aria-hidden="true" className="h-6 w-6" />}
           title="Sin histórico de precio"
-          hint="Cargá datos de mercado para este activo."
+          hint="Carga datos de mercado para este activo."
           command="py -3.14 -m collector.run_market_data_job --tickers <TICKER> --feature-sets technical_v2"
           className="min-h-[420px] justify-center"
         />

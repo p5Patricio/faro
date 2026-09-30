@@ -63,7 +63,7 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedCategory || !accountId || !amount) {
-      setError('Completá categoría, cuenta y monto.');
+      setError('Completa categoría, cuenta y monto.');
       return;
     }
     const fx = Number(fxRate);
@@ -110,7 +110,7 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
           className={FIELD_CLASS}
         >
           <option value="" disabled>
-            Elegí una categoría
+            Elige una categoría
           </option>
           {categories.map((category) => (
             <option key={category.id} value={category.id}>
@@ -139,7 +139,7 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
           className={FIELD_CLASS}
         >
           <option value="" disabled>
-            Elegí una cuenta
+            Elige una cuenta
           </option>
           {selectableAccounts.map((account) => (
             <option key={account.id} value={account.id}>

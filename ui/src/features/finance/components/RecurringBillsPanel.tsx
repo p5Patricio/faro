@@ -4,7 +4,7 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonTable } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents, parseDateValue } from '../lib/format.ts';
 import { putRecurringBill, putRecurringBillPayment } from '../hooks/useFinanceApi.ts';
 import type {
   BillFrequency,
@@ -86,7 +86,7 @@ export function RecurringBillsPanel({
         <EmptyState
           icon={<Repeat aria-hidden="true" className="h-6 w-6" />}
           title="Sin pagos recurrentes registrados"
-          hint="Agregá tus suscripciones y pagos fijos con el formulario de abajo."
+          hint="Agrega tus suscripciones y pagos fijos con el formulario de abajo."
         />
       ) : (
         <div className="flex flex-col">
@@ -213,17 +213,17 @@ function describeDue(bill: RecurringBill): { text: string; tone: DueTone } {
 }
 
 function daysUntil(dateOnly: string): number {
-  const due = new Date(`${dateOnly}T00:00:00`);
+  const due = parseDateValue(dateOnly);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.round((due.getTime() - today.getTime()) / 86_400_000);
 }
 
-// A date-only string is a calendar day, not an instant: parse it as a LOCAL
-// date (like `daysUntil`) so it never renders a day early in UTC-negative zones.
+// A date-only string is a calendar day, not an instant: `parseDateValue` reads it
+// as a LOCAL date (like `daysUntil`) so it never renders a day early in UTC-negative zones.
 function formatDueDate(dateOnly: string): string {
   return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }).format(
-    new Date(`${dateOnly}T00:00:00`),
+    parseDateValue(dateOnly),
   );
 }
 
