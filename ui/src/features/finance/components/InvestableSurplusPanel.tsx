@@ -241,6 +241,9 @@ function unconvertedHistoryNote(count: number): string {
   return `${count} movimientos de esos meses no se incluyen porque están en otra moneda sin tipo de cambio a ${BASE_CURRENCY}.`;
 }
 
+// The emergency fund is measured against the assets the user marked as liquid.
+const LIQUID_BASIS = 'Tu fondo de emergencia se mide con los activos que marcaste como líquidos.';
+
 function InsightCard({
   investableSurplus,
   emergencyFund,
@@ -248,7 +251,7 @@ function InsightCard({
   investableSurplus: InvestableSurplusSummary;
   emergencyFund: EmergencyFundSummary | null;
 }) {
-  const { sentence, followUp } = buildInsight(investableSurplus, emergencyFund);
+  const { sentence, followUp, basis } = buildInsight(investableSurplus, emergencyFund);
 
   return (
     <div
@@ -263,6 +266,7 @@ function InsightCard({
       {followUp ? (
         <p className="relative mt-3 max-w-[46ch] text-[13px] leading-relaxed text-[#d8c497]">{followUp}</p>
       ) : null}
+      {basis ? <p className="relative mt-2 max-w-[46ch] text-xs leading-relaxed text-[#b9a679]">{basis}</p> : null}
     </div>
   );
 }
@@ -278,7 +282,7 @@ function InsightCard({
 function buildInsight(
   surplus: InvestableSurplusSummary,
   emergencyFund: EmergencyFundSummary | null,
-): { sentence: string; followUp?: string } {
+): { sentence: string; followUp?: string; basis?: string } {
   if (surplus.income_cents === 0 && surplus.spending_cents === 0) {
     // Saving alone is neither income nor spending: say what is there, not that nothing is.
     if (surplus.saved_cents > 0) {
@@ -305,6 +309,7 @@ function buildInsight(
       return {
         sentence: `Este mes te quedaron ${formatCents(surplus.surplus_cents, BASE_CURRENCY)} sin gastar y tu fondo de emergencia ya está cubierto, así que este dinero puede trabajar.`,
         followUp: 'Con este excedente, revisa las señales de tus activos en la pestaña Mercados antes de moverlo.',
+        basis: LIQUID_BASIS,
       };
     }
     return { sentence: 'Este mes gastaste todo lo que ingresó, así que no quedó excedente.' };
@@ -315,12 +320,19 @@ function buildInsight(
   }
 
   const unspent = formatCents(surplus.available_cents, BASE_CURRENCY);
+  if (surplus.reason === 'liquidity_unclassified') {
+    return {
+      sentence: `Este mes te quedaron ${unspent} sin gastar, pero todavía no se puede medir tu fondo de emergencia porque no has marcado cuáles de tus activos son líquidos.`,
+      followUp: 'Marca cuáles de tus activos son líquidos en la pestaña Patrimonio para saber si este dinero ya puede invertirse.',
+    };
+  }
   if (emergencyFund?.months_covered != null) {
     const remaining = Math.max(emergencyFund.target_min_months - emergencyFund.months_covered, 0);
     const progress =
       remaining > 0.05 ? `te faltan ${remaining.toFixed(1)} meses para completarlo` : 'está a punto de completarse';
     return {
       sentence: `Este mes te quedaron ${unspent} sin gastar. Antes de invertir va tu fondo de emergencia: ${progress}.`,
+      basis: LIQUID_BASIS,
     };
   }
   return {

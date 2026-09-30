@@ -11,8 +11,9 @@ from datetime import date
 from typing import Any
 
 import psycopg
+import pytest
 
-from collector.local_repository import LocalPostgresRepository
+from collector.local_repository import LocalPostgresRepository, PendingOccurrenceConflict
 
 MakeAccount = Callable[[str, str], str]
 
@@ -255,18 +256,21 @@ def test_a_pending_row_linked_to_a_transaction_is_never_deleted_by_an_edit(
         ).fetchone()[0]
     )
     saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+    # Link the bill's one pending row (Oct 5) to the ledger transaction. A bill
+    # can no longer hold a second pending row, so the link goes on that row.
     repository.upsert_finance_recurring_bill_payment(
-        {"bill_id": saved["id"], "due_date": date(2026, 10, 9), "status": "pending", "transaction_id": transaction_id}
+        {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "pending", "transaction_id": transaction_id}
     )
 
     edited = repository.upsert_finance_recurring_bill(
         {**_bill(anchor_due_date=date(2026, 1, 12)), "id": saved["id"]}, today=TODAY
     )
 
-    # The unlinked Oct 5 row is stale and gone; the linked Oct 9 row stays and
-    # counts as the bill's pending occurrence, so nothing else is generated.
-    assert _pending_dates(db_connection, saved["id"]) == [date(2026, 10, 9)]
-    assert edited["next_due_date"] == date(2026, 10, 9)
+    # Oct 5 is no longer a schedule date (Oct 12 is), but the row is linked, so
+    # the edit does not delete it; it stays the bill's pending occurrence and
+    # nothing else is generated.
+    assert _pending_dates(db_connection, saved["id"]) == [date(2026, 10, 5)]
+    assert edited["next_due_date"] == date(2026, 10, 5)
 
 
 # -- Settling an occurrence ------------------------------------------------------------
@@ -430,6 +434,117 @@ def test_settling_creates_no_ledger_transaction(
     )
 
     assert db_connection.execute("SELECT count(*) FROM finance_transactions").fetchone()[0] == 0
+
+
+# -- One pending occurrence per bill ---------------------------------------------------
+
+
+def test_a_pending_write_on_another_date_is_refused_and_writes_nothing(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+
+    with pytest.raises(PendingOccurrenceConflict) as refused:
+        repository.upsert_finance_recurring_bill_payment(
+            {"bill_id": saved["id"], "due_date": date(2026, 10, 9), "status": "pending"}
+        )
+
+    assert refused.value.existing_due_date == date(2026, 10, 5)
+    assert refused.value.requested_due_date == date(2026, 10, 9)
+    assert _payments(db_connection, saved["id"]) == [(date(2026, 10, 5), "pending")]
+
+
+def test_a_pending_write_defaults_to_pending_when_the_status_is_omitted(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+
+    with pytest.raises(PendingOccurrenceConflict):
+        repository.upsert_finance_recurring_bill_payment({"bill_id": saved["id"], "due_date": date(2026, 10, 9)})
+
+    assert _pending_dates(db_connection, saved["id"]) == [date(2026, 10, 5)]
+
+
+def test_repeating_the_pending_write_on_the_pending_date_is_an_idempotent_update(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+
+    for _ in range(2):
+        payment = repository.upsert_finance_recurring_bill_payment(
+            {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "pending"}
+        )
+        assert payment is not None
+        assert payment["status"] == "pending"
+
+    assert _payments(db_connection, saved["id"]) == [(date(2026, 10, 5), "pending")]
+
+
+def test_reopening_a_paid_occurrence_is_refused_while_another_pending_row_exists(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+    repository.upsert_finance_recurring_bill_payment(
+        {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "paid"}
+    )
+
+    with pytest.raises(PendingOccurrenceConflict):
+        repository.upsert_finance_recurring_bill_payment(
+            {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "pending"}
+        )
+
+    assert _payments(db_connection, saved["id"]) == [(date(2026, 10, 5), "paid"), (date(2026, 11, 5), "pending")]
+
+
+def test_a_paid_occurrence_of_an_inactive_bill_can_be_reopened_because_no_other_pending_row_exists(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+    repository.upsert_finance_recurring_bill({**_bill(is_active=False), "id": saved["id"]}, today=TODAY)
+    repository.upsert_finance_recurring_bill_payment(
+        {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "paid"}
+    )
+
+    repository.upsert_finance_recurring_bill_payment(
+        {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "pending"}
+    )
+
+    assert _payments(db_connection, saved["id"]) == [(date(2026, 10, 5), "pending")]
+
+
+def test_settling_out_of_order_never_trips_the_rule_or_leaves_two_pending_rows(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    """Paid/skipped writes are not `pending` writes: settling Nov 5 first, then
+    the pending Oct 5, must not conflict with the one-pending rule."""
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+
+    repository.upsert_finance_recurring_bill_payment(
+        {"bill_id": saved["id"], "due_date": date(2026, 11, 5), "status": "skipped"}
+    )
+    repository.upsert_finance_recurring_bill_payment(
+        {"bill_id": saved["id"], "due_date": date(2026, 10, 5), "status": "paid"}
+    )
+
+    assert _pending_dates(db_connection, saved["id"]) == [date(2026, 12, 5)]
+
+
+def test_the_one_pending_rule_holds_in_code_on_a_database_without_the_unique_index(
+    repository: LocalPostgresRepository, db_connection: psycopg.Connection
+) -> None:
+    """The application must not rely on migration 0013's index for
+    correctness: with the index dropped (a database that has not applied the
+    migration) a second pending row is still refused, with the domain error
+    rather than a raw integrity error, and nothing is written."""
+    db_connection.execute("DROP INDEX finance_recurring_bill_payments_one_pending_key")
+    saved = repository.upsert_finance_recurring_bill(_bill(), today=TODAY)
+
+    with pytest.raises(PendingOccurrenceConflict):
+        repository.upsert_finance_recurring_bill_payment(
+            {"bill_id": saved["id"], "due_date": date(2026, 10, 9), "status": "pending"}
+        )
+
+    assert _pending_dates(db_connection, saved["id"]) == [date(2026, 10, 5)]
 
 
 def test_get_finance_recurring_bills_reports_the_earliest_pending_occurrence(

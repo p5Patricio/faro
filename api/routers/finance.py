@@ -42,8 +42,9 @@ from brain.finance.currency import (
     normalize_currency,
     resolve_fx_and_base,
 )
+from brain.finance.liquidity import is_liquidity_classified, summarize_net_worth_liquidity
 from brain.finance.recurrence import occurrence_on_or_after
-from collector.local_repository import LocalPostgresRepository
+from collector.local_repository import LocalPostgresRepository, PendingOccurrenceConflict
 
 router = APIRouter()
 
@@ -110,6 +111,12 @@ class FinanceNetWorthItemPayload(BaseModel):
     amount_cents: int = Field(ge=0, le=_MAX_CENTS)
     currency: str = Field(min_length=3, max_length=3)
     fx_rate_to_base: float | None = None
+    # Three states, told apart by whether the client sent the field at all
+    # (`model_fields_set`): true / false classify the asset, an explicit null
+    # means "not classified", and an absent field lets the repository keep the
+    # classification the item already had or default it by `item_type`.
+    # Ignored for liabilities.
+    is_liquid: bool | None = None
 
 
 class FinanceNetWorthSnapshotPayload(BaseModel):
@@ -301,6 +308,17 @@ def put_budget(
 # -- Net worth -----------------------------------------------------------
 
 
+def _with_liquidity(snapshot: dict[str, Any], *, flags_available: bool) -> dict[str, Any]:
+    """A snapshot plus its liquidity figures: ``liquid_assets_cents`` (the
+    base amounts of the assets flagged liquid, liabilities NOT subtracted;
+    null when the database has no liquidity flags), the counts of liquid and
+    unclassified assets, and ``liquidity_flags_available``."""
+    return {
+        **snapshot,
+        **summarize_net_worth_liquidity(snapshot["items"], flags_available=flags_available),
+    }
+
+
 @router.get("/net-worth")
 def get_net_worth(
     limit: int = Query(default=24, ge=1, le=200),
@@ -308,17 +326,27 @@ def get_net_worth(
 ):
     repository = _require_repository(repository)
     try:
-        return repository.get_finance_net_worth_snapshots(limit=limit)
+        snapshots = repository.get_finance_net_worth_snapshots(limit=limit)
+        flags_available = repository.net_worth_liquidity_flags_available()
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudieron obtener los patrimonios") from None
+    return [_with_liquidity(snapshot, flags_available=flags_available) for snapshot in snapshots]
 
 
 def _resolve_net_worth_item(item: FinanceNetWorthItemPayload) -> dict[str, Any]:
     """One worksheet line with its materialized base amount. The base
     currency gets rate 1; a foreign currency must bring a positive rate
     (422 naming the offending line, so a mixed worksheet is never summed at
-    face value)."""
-    data = item.model_dump()
+    face value).
+
+    ``is_liquid`` is passed on only when the client sent it (a liability never
+    carries one); when absent, the repository decides (see
+    ``LocalPostgresRepository._resolve_liquidity_flag``)."""
+    data = item.model_dump(exclude={"is_liquid"})
+    if not item.is_asset:
+        data["is_liquid"] = None
+    elif "is_liquid" in item.model_fields_set:
+        data["is_liquid"] = item.is_liquid
     data["currency"] = normalize_currency(data["currency"])
     try:
         data["fx_rate_to_base"], data["amount_base_cents"] = resolve_fx_and_base(
@@ -344,13 +372,15 @@ def put_net_worth(
     repository = _require_repository(repository)
     items = [_resolve_net_worth_item(item) for item in payload.items]
     try:
-        return repository.upsert_finance_net_worth_snapshot(
+        snapshot = repository.upsert_finance_net_worth_snapshot(
             snapshot_date=payload.snapshot_date,
             notes=payload.notes,
             items=items,
         )
+        flags_available = repository.net_worth_liquidity_flags_available()
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el patrimonio") from None
+    return _with_liquidity(snapshot, flags_available=flags_available)
 
 
 # -- Recurring bills -----------------------------------------------------
@@ -431,7 +461,11 @@ def put_recurring_bill_payment(
 ):
     """Record an occurrence's status. Settling it (``paid`` / ``skipped``)
     also creates the bill's next pending occurrence; no ledger transaction is
-    created (``transaction_id`` stays an optional link)."""
+    created (``transaction_id`` stays an optional link).
+
+    A bill has one pending occurrence at a time: a ``pending`` status on a due
+    date other than the current pending row answers 422 (repeating the write
+    on that row's own date is fine)."""
     repository = _require_repository(repository)
     row = payload.model_dump(exclude_unset=True)
     row.setdefault("status", "pending")
@@ -445,6 +479,15 @@ def put_recurring_bill_payment(
     row["paid_at"] = datetime.now(UTC).isoformat() if row["status"] == "paid" else None
     try:
         payment = repository.upsert_finance_recurring_bill_payment(row)
+    except PendingOccurrenceConflict as conflict:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Este pago recurrente ya tiene un vencimiento pendiente el {conflict.existing_due_date.isoformat()}. "
+                f"Márcalo como pagado u omitido antes de dejar pendiente otra fecha "
+                f"({conflict.requested_due_date.isoformat()})."
+            ),
+        ) from None
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el pago") from None
     if payment is None:
@@ -519,6 +562,16 @@ def get_summary(
       coverage rule (decision D2: 5+ converted transactions). ``history``
       reports how many of the 3 trailing months counted, and how many of
       their rows were unconverted, so the UI can say "Estimado con N meses".
+    * ``net_worth`` carries the liquidity figures the emergency fund is built
+      from: ``liquid_assets_cents`` (base amounts of the assets flagged
+      liquid; liabilities are NOT subtracted), ``liquid_items_count``,
+      ``unclassified_items_count`` and ``liquidity_flags_available`` (false
+      while migration 0013 is unapplied). ``emergency_fund`` is measured
+      against liquid assets only; when no asset is flagged liquid and some
+      asset is unclassified, or the flags are unavailable, its ``status`` is
+      ``unclassified`` (no months) and the investable surplus stays gated with
+      reason ``liquidity_unclassified``. ``fire_number`` still uses TOTAL net
+      worth (assets minus liabilities) and remains an estimate.
     * ``cash_flow_forecast`` -- shown whenever there are bills committed in
       the window or overdue, even with no income history: the bills are facts
       from the schedule. ``income_data_sufficient`` says separately whether
@@ -555,22 +608,29 @@ def get_summary(
         snapshots = repository.get_finance_net_worth_snapshots(limit=1)
         latest_snapshot = snapshots[0] if snapshots else None
         net_worth_sufficient = latest_snapshot is not None
-        # Simplification: "liquid" net worth is stood in by TOTAL net worth
-        # (assets - liabilities). Splitting out only genuinely liquid items
-        # (cash, not real estate/retirement accounts) would need a fixed
-        # `item_type` taxonomy that 0008 deliberately left freeform --
-        # out of scope here.
-        liquid_net_worth_cents = latest_snapshot["net_worth_cents"] if latest_snapshot else 0
+        net_worth_cents = latest_snapshot["net_worth_cents"] if latest_snapshot else 0
 
-        # Emergency fund: essential (necesidad) expenses; FIRE: spending
-        # without the savings bucket (decision D3).
+        # Liquid assets: only the asset items the user flagged liquid, in base
+        # cents, liabilities NOT subtracted. The database may not have the
+        # flags yet (migration 0013 unapplied): that reads as "unclassified".
+        liquidity_flags_available = repository.net_worth_liquidity_flags_available()
+        liquidity = summarize_net_worth_liquidity(
+            latest_snapshot["items"] if latest_snapshot else [], flags_available=liquidity_flags_available
+        )
+
+        # Emergency fund: liquid assets over essential (necesidad) expenses,
+        # or an explicit "unclassified" status when nothing says which assets
+        # are liquid. FIRE: TOTAL net worth over spending without the savings
+        # bucket (decision D3).
         emergency_fund_status = compute_emergency_fund_status(
-            liquid_net_worth_cents, baseline["avg_necesidad_cents"]
+            liquidity["liquid_assets_cents"] or 0,
+            baseline["avg_necesidad_cents"],
+            liquidity_classified=latest_snapshot is None or is_liquidity_classified(liquidity),
         )
         # Naive annualization: 12x the trailing monthly average, ignoring
         # seasonality -- consistent with this module's "genuinely simple"
         # mandate.
-        fire_number = compute_fire_number(liquid_net_worth_cents, baseline["avg_spending_cents"] * 12)
+        fire_number = compute_fire_number(net_worth_cents, baseline["avg_spending_cents"] * 12)
         investable_surplus = compute_investable_surplus(monthly_summary, emergency_fund_status)
 
         recurring_bills = _with_next_due_date(
@@ -627,7 +687,10 @@ def get_summary(
                 "total_assets_cents": latest_snapshot["total_assets_cents"] if latest_snapshot else None,
                 "total_liabilities_cents": latest_snapshot["total_liabilities_cents"] if latest_snapshot else None,
                 "net_worth_cents": latest_snapshot["net_worth_cents"] if latest_snapshot else None,
-                "liquid_net_worth_cents": liquid_net_worth_cents if latest_snapshot else None,
+                "liquid_assets_cents": liquidity["liquid_assets_cents"] if latest_snapshot else None,
+                "liquid_items_count": liquidity["liquid_items_count"],
+                "unclassified_items_count": liquidity["unclassified_items_count"],
+                "liquidity_flags_available": liquidity["liquidity_flags_available"],
             },
             "emergency_fund": {"data_sufficient": combined_sufficient, **emergency_fund_status},
             "fire_number": {"data_sufficient": combined_sufficient, **fire_number},

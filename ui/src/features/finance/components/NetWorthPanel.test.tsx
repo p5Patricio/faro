@@ -17,6 +17,10 @@ const MIXED_SNAPSHOT: NetWorthSnapshot = {
   total_assets_cents: 275000,
   total_liabilities_cents: 30000,
   net_worth_cents: 245000,
+  liquid_assets_cents: 100000,
+  liquid_items_count: 1,
+  unclassified_items_count: 1,
+  liquidity_flags_available: true,
   items: [
     {
       is_asset: true,
@@ -26,6 +30,7 @@ const MIXED_SNAPSHOT: NetWorthSnapshot = {
       currency: 'USD',
       fx_rate_to_base: 17.5,
       amount_base_cents: 175000,
+      is_liquid: null,
     },
     {
       is_asset: true,
@@ -35,6 +40,7 @@ const MIXED_SNAPSHOT: NetWorthSnapshot = {
       currency: 'MXN',
       fx_rate_to_base: 1,
       amount_base_cents: 100000,
+      is_liquid: true,
     },
     {
       is_asset: false,
@@ -72,6 +78,26 @@ describe('NetWorthPanel base-currency totals', () => {
   });
 });
 
+describe('NetWorthPanel liquidity', () => {
+  it('shows the net worth and the liquid assets side by side', () => {
+    renderPanel([MIXED_SNAPSHOT]);
+
+    expect(screen.getByText('Patrimonio neto')).toBeInTheDocument();
+    expect(screen.getByText('Activos líquidos')).toBeInTheDocument();
+    expect(screen.getByText('Patrimonio neto').parentElement).toHaveTextContent(asRenderedText(formatCents(245000, 'MXN')));
+    expect(screen.getByText('Activos líquidos').parentElement).toHaveTextContent(asRenderedText(formatCents(100000, 'MXN')));
+    expect(screen.queryByText(/Todavía no has marcado/)).not.toBeInTheDocument();
+  });
+
+  it('says no asset is classified yet, instead of showing a zero, while none is marked liquid', () => {
+    renderPanel([{ ...MIXED_SNAPSHOT, liquid_assets_cents: 0, liquid_items_count: 0, unclassified_items_count: 2 }]);
+
+    expect(screen.getByText('Activos líquidos').parentElement).toHaveTextContent('Sin clasificar');
+    expect(screen.getByText(/Todavía no has marcado cuáles de tus activos son líquidos/)).toBeInTheDocument();
+    expect(screen.queryByText(asRenderedText(formatCents(0, 'MXN')))).not.toBeInTheDocument();
+  });
+});
+
 describe('NetWorthPanel form', () => {
   beforeEach(() => {
     vi.mocked(axios.put).mockReset();
@@ -105,6 +131,42 @@ describe('NetWorthPanel form', () => {
     const payload = vi.mocked(axios.put).mock.calls[0][1] as { items: Array<Record<string, unknown>> };
     expect(payload.items).toHaveLength(1);
     expect(payload.items[0]).toMatchObject({ currency: 'USD', amount_cents: 10000, fx_rate_to_base: 17.5 });
+  });
+
+  it('sends is_liquid with an asset, defaulted from its category until the user decides', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    const liquid = screen.getByRole('checkbox', { name: /Líquido/ });
+    expect(liquid).not.toBeChecked();
+
+    await user.type(screen.getByPlaceholderText(/Concepto/), 'Cuenta');
+    await user.type(screen.getByPlaceholderText('Monto'), '500');
+    await user.clear(screen.getByPlaceholderText('Categoría'));
+    await user.type(screen.getByPlaceholderText('Categoría'), 'savings');
+    expect(liquid).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Guardar corte' }));
+
+    const payload = vi.mocked(axios.put).mock.calls[0][1] as { items: Array<Record<string, unknown>> };
+    expect(payload.items[0]).toMatchObject({ item_type: 'savings', is_liquid: true });
+  });
+
+  it('sends the checkbox choice even when it goes against the category default, and none for a liability', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.type(screen.getByPlaceholderText(/Concepto/), 'Casa');
+    await user.type(screen.getByPlaceholderText('Monto'), '900');
+    await user.click(screen.getByRole('checkbox', { name: /Líquido/ }));
+    await user.click(screen.getByRole('button', { name: /Agregar pasivo/ }));
+    await user.type(screen.getAllByPlaceholderText(/Concepto/)[1], 'Tarjeta');
+    await user.type(screen.getAllByPlaceholderText('Monto')[1], '100');
+    expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+    await user.click(screen.getByRole('button', { name: 'Guardar corte' }));
+
+    const payload = vi.mocked(axios.put).mock.calls[0][1] as { items: Array<Record<string, unknown>> };
+    expect(payload.items[0]).toMatchObject({ is_asset: true, is_liquid: true });
+    expect(payload.items[1]).not.toHaveProperty('is_liquid');
   });
 
   it('does not save a foreign item that has no rate', async () => {

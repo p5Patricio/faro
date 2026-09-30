@@ -334,7 +334,10 @@ def test_get_summary_degrades_gracefully_with_no_data(
             "total_assets_cents": None,
             "total_liabilities_cents": None,
             "net_worth_cents": None,
-            "liquid_net_worth_cents": None,
+            "liquid_assets_cents": None,
+            "liquid_items_count": 0,
+            "unclassified_items_count": 0,
+            "liquidity_flags_available": True,
         },
         "emergency_fund": {
             "data_sufficient": False,

@@ -353,7 +353,7 @@ def test_the_fire_baseline_excludes_savings_and_the_emergency_baseline_is_essent
     assert fire["progress_pct"] == 100.0
 
     emergency = compute_emergency_fund_status(
-        liquid_net_worth_cents=350_000, avg_monthly_fixed_expense_cents=baseline["avg_necesidad_cents"]
+        liquid_assets_cents=350_000, avg_monthly_fixed_expense_cents=baseline["avg_necesidad_cents"]
     )
     assert emergency["months_covered"] == 3.5
     assert emergency["status"] == "within"
@@ -363,21 +363,21 @@ def test_the_fire_baseline_excludes_savings_and_the_emergency_baseline_is_essent
 
 
 def test_compute_emergency_fund_status_reports_months_covered_and_status() -> None:
-    below = compute_emergency_fund_status(liquid_net_worth_cents=100_000, avg_monthly_fixed_expense_cents=100_000)
+    below = compute_emergency_fund_status(liquid_assets_cents=100_000, avg_monthly_fixed_expense_cents=100_000)
     assert below["months_covered"] == 1.0
     assert below["status"] == "below"
 
-    within = compute_emergency_fund_status(liquid_net_worth_cents=400_000, avg_monthly_fixed_expense_cents=100_000)
+    within = compute_emergency_fund_status(liquid_assets_cents=400_000, avg_monthly_fixed_expense_cents=100_000)
     assert within["months_covered"] == 4.0
     assert within["status"] == "within"
 
-    above = compute_emergency_fund_status(liquid_net_worth_cents=700_000, avg_monthly_fixed_expense_cents=100_000)
+    above = compute_emergency_fund_status(liquid_assets_cents=700_000, avg_monthly_fixed_expense_cents=100_000)
     assert above["months_covered"] == 7.0
     assert above["status"] == "above"
 
 
 def test_compute_emergency_fund_status_guards_zero_expense_baseline() -> None:
-    result = compute_emergency_fund_status(liquid_net_worth_cents=500_000, avg_monthly_fixed_expense_cents=0)
+    result = compute_emergency_fund_status(liquid_assets_cents=500_000, avg_monthly_fixed_expense_cents=0)
 
     assert result["months_covered"] is None
     assert result["status"] == "below"
@@ -386,10 +386,41 @@ def test_compute_emergency_fund_status_guards_zero_expense_baseline() -> None:
 
 
 def test_compute_emergency_fund_status_boundary_exactly_three_months_is_within() -> None:
-    result = compute_emergency_fund_status(liquid_net_worth_cents=300_000, avg_monthly_fixed_expense_cents=100_000)
+    result = compute_emergency_fund_status(liquid_assets_cents=300_000, avg_monthly_fixed_expense_cents=100_000)
 
     assert result["months_covered"] == 3.0
     assert result["status"] == "within"
+
+
+def test_compute_emergency_fund_status_is_unclassified_not_below_when_no_asset_is_known_to_be_liquid() -> None:
+    """Nothing was measured, so no coverage is claimed: no months and a status
+    of its own, not the misleading "below" a $0 cushion would get."""
+    result = compute_emergency_fund_status(
+        liquid_assets_cents=0, avg_monthly_fixed_expense_cents=100_000, liquidity_classified=False
+    )
+
+    assert result == {
+        "months_covered": None,
+        "target_min_months": 3,
+        "target_max_months": 6,
+        "status": "unclassified",
+    }
+
+
+def test_compute_emergency_fund_status_unclassified_takes_precedence_over_a_missing_expense_baseline() -> None:
+    result = compute_emergency_fund_status(
+        liquid_assets_cents=0, avg_monthly_fixed_expense_cents=0, liquidity_classified=False
+    )
+
+    assert result["status"] == "unclassified"
+
+
+def test_compute_emergency_fund_status_classified_zero_liquid_assets_is_zero_months_below() -> None:
+    """The user said none of the assets is liquid: that is a measurement."""
+    result = compute_emergency_fund_status(liquid_assets_cents=0, avg_monthly_fixed_expense_cents=100_000)
+
+    assert result["months_covered"] == 0.0
+    assert result["status"] == "below"
 
 
 # -- compute_fire_number -------------------------------------------------
@@ -450,6 +481,27 @@ def test_compute_investable_surplus_boundary_exactly_target_months_counts_as_cov
     # Decision D3: the surplus is income minus non-savings spending, not the savings bucket.
     assert result["surplus_cents"] == 50_000
     assert result["reason"] == "emergency_fund_covered"
+
+
+def test_compute_investable_surplus_is_gated_with_its_own_reason_while_liquidity_is_unclassified() -> None:
+    unclassified = compute_emergency_fund_status(
+        liquid_assets_cents=0, avg_monthly_fixed_expense_cents=100_000, liquidity_classified=False
+    )
+
+    result = compute_investable_surplus(_income_and_spending(300_000, 250_000), unclassified)
+
+    # Gated like "building", but the reason names what is actually missing; the unspent money is still reported.
+    assert result["surplus_cents"] == 0
+    assert result["reason"] == "liquidity_unclassified"
+    assert result["available_cents"] == 50_000
+
+
+def test_compute_investable_surplus_opens_the_gate_once_a_classified_fund_is_covered() -> None:
+    covered = compute_emergency_fund_status(liquid_assets_cents=400_000, avg_monthly_fixed_expense_cents=100_000)
+
+    result = compute_investable_surplus(_income_and_spending(300_000, 250_000), covered)
+
+    assert (result["surplus_cents"], result["reason"]) == (50_000, "emergency_fund_covered")
 
 
 def test_compute_investable_surplus_reports_a_shortfall_when_spending_exceeds_income() -> None:

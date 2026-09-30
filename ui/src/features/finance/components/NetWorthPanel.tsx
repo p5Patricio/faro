@@ -1,10 +1,11 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { AlertTriangle, Landmark, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, Info, Landmark, Plus, Trash2 } from 'lucide-react';
 import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonLines } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
 import { BASE_CURRENCY, SELECTABLE_CURRENCIES, formatCents, formatShortDate } from '../lib/format.ts';
+import { defaultIsLiquid, isLiquidityUnclassified } from '../lib/liquidity.ts';
 import { putNetWorthSnapshot } from '../hooks/useFinanceApi.ts';
 import type { NetWorthItem, NetWorthSnapshot } from '../types.ts';
 
@@ -20,6 +21,7 @@ export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPa
   const latest = snapshots[0];
   const previous = snapshots[1];
   const delta = latest && previous ? latest.net_worth_cents - previous.net_worth_cents : null;
+  const liquidityUnclassified = latest ? isLiquidityUnclassified(latest) : false;
 
   return (
     <Panel title="Patrimonio" icon={<Landmark aria-hidden="true" className="h-4 w-4 text-cobalt" />}>
@@ -37,7 +39,7 @@ export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPa
             <EmptyState
               icon={<Landmark aria-hidden="true" className="h-6 w-6" />}
               title="Todavía no registraste tu patrimonio"
-              hint="Cargá tu primer corte de activos y pasivos con el formulario de abajo."
+              hint="Carga tu primer corte de activos y pasivos con el formulario de abajo."
             />
           ) : (
             <div className="grid grid-cols-1 gap-4 md:grid-cols-[1.3fr_1fr]">
@@ -46,9 +48,28 @@ export function NetWorthPanel({ snapshots, loading, error, onSaved }: NetWorthPa
                   Tendencia · últimos {snapshots.length} {snapshots.length === 1 ? 'corte' : 'cortes'}
                 </h3>
                 {/* Snapshot totals are sums of BASE amounts, whatever currencies the items are in. */}
-                <p className="font-display mt-2 text-[32px] leading-none tabular-nums text-ink [text-box:trim-both_cap_alphabetic]">
-                  {formatCents(latest.net_worth_cents, BASE_CURRENCY)}
-                </p>
+                <div className="mt-3 flex flex-wrap gap-x-8 gap-y-3">
+                  <div>
+                    <p className="text-xs text-ink-muted">Patrimonio neto</p>
+                    <p className="font-display mt-1 text-[28px] leading-none tabular-nums text-ink">
+                      {formatCents(latest.net_worth_cents, BASE_CURRENCY)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-ink-muted">Activos líquidos</p>
+                    <p className="font-display mt-1 text-[28px] leading-none tabular-nums text-ink">
+                      {liquidityUnclassified || latest.liquid_assets_cents == null
+                        ? 'Sin clasificar'
+                        : formatCents(latest.liquid_assets_cents, BASE_CURRENCY)}
+                    </p>
+                  </div>
+                </div>
+                {liquidityUnclassified ? (
+                  <p className="mt-3 flex items-start gap-2 text-[13px] text-ink-secondary">
+                    <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{liquidityNotice(latest)}</span>
+                  </p>
+                ) : null}
                 {delta != null && previous ? (
                   <p
                     className={cn(
@@ -91,7 +112,12 @@ function NetWorthItemRow({ item }: { item: NetWorthItem }) {
   const isForeign = item.currency !== BASE_CURRENCY;
   return (
     <div className="flex items-center justify-between gap-3 border-b border-hairline/60 py-2 text-sm last:border-b-0">
-      <span className={item.is_asset ? 'text-ink' : 'text-status-critical'}>{item.label}</span>
+      <span className={item.is_asset ? 'text-ink' : 'text-status-critical'}>
+        {item.label}
+        {item.is_asset && item.is_liquid !== undefined ? (
+          <span className="ml-2 text-xs font-normal text-ink-muted">{liquidityLabel(item.is_liquid)}</span>
+        ) : null}
+      </span>
       <span className={cn('text-right font-medium tabular-nums', item.is_asset ? 'text-ink' : 'text-status-critical')}>
         {item.is_asset ? '' : '–'}
         {formatCents(Math.abs(item.amount_cents), item.currency)}
@@ -103,6 +129,19 @@ function NetWorthItemRow({ item }: { item: NetWorthItem }) {
       </span>
     </div>
   );
+}
+
+function liquidityLabel(isLiquid: boolean | null): string {
+  if (isLiquid === true) return 'Líquido';
+  if (isLiquid === false) return 'No líquido';
+  return 'Sin clasificar';
+}
+
+function liquidityNotice(snapshot: NetWorthSnapshot): string {
+  if (snapshot.liquidity_flags_available === false) {
+    return 'Los activos líquidos todavía no se pueden calcular: falta aplicar la migración de liquidez en la base de datos.';
+  }
+  return 'Todavía no has marcado cuáles de tus activos son líquidos. Guarda un corte nuevo y marca «Líquido» en el dinero que podrías usar en una emergencia.';
 }
 
 function formatMonthName(value: string): string {
@@ -192,6 +231,11 @@ interface DraftItem {
   currency: string;
   // Rate to the base currency; only used (and required) when `currency` is not the base.
   fx: string;
+  // Assets only. Starts from the item type (cash-like = liquid) until the user
+  // toggles it, and is always sent for an asset: what the checkbox shows is
+  // what is saved.
+  is_liquid: boolean;
+  liquid_touched: boolean;
 }
 
 function newDraftItem(isAsset: boolean): DraftItem {
@@ -203,6 +247,8 @@ function newDraftItem(isAsset: boolean): DraftItem {
     amount: '',
     currency: BASE_CURRENCY,
     fx: '',
+    is_liquid: false,
+    liquid_touched: false,
   };
 }
 
@@ -226,7 +272,7 @@ function NetWorthForm({ onSaved }: { onSaved: () => void }) {
     event.preventDefault();
     const filledItems = items.filter((item) => item.label.trim() && item.amount);
     if (filledItems.length === 0) {
-      setStatus('Agregá al menos un concepto con monto.');
+      setStatus('Agrega al menos un concepto con monto.');
       return;
     }
     if (filledItems.some((item) => item.currency !== BASE_CURRENCY && !(Number(item.fx) > 0))) {
@@ -240,6 +286,7 @@ function NetWorthForm({ onSaved }: { onSaved: () => void }) {
       amount_cents: Math.round(Number(item.amount) * 100),
       currency: item.currency,
       ...(item.currency !== BASE_CURRENCY ? { fx_rate_to_base: Number(item.fx) } : {}),
+      ...(item.is_asset ? { is_liquid: item.is_liquid } : {}),
     }));
     setSaving(true);
     setStatus(null);
@@ -303,7 +350,12 @@ function NetWorthForm({ onSaved }: { onSaved: () => void }) {
                 type="text"
                 placeholder="Categoría"
                 value={item.item_type}
-                onChange={(event) => updateItem(item.key, { item_type: event.target.value })}
+                onChange={(event) =>
+                  updateItem(item.key, {
+                    item_type: event.target.value,
+                    ...(item.liquid_touched ? {} : { is_liquid: defaultIsLiquid(event.target.value) }),
+                  })
+                }
                 className="h-9 w-28 rounded-lg border border-hairline bg-canvas px-2 text-sm text-ink outline-none focus:border-cobalt/40"
               />
               <input
@@ -336,6 +388,20 @@ function NetWorthForm({ onSaved }: { onSaved: () => void }) {
                 <Trash2 aria-hidden="true" className="h-4 w-4" />
               </button>
             </div>
+            {item.is_asset ? (
+              <label className="flex items-start gap-2 text-xs text-ink-muted">
+                <input
+                  type="checkbox"
+                  checked={item.is_liquid}
+                  onChange={(event) => updateItem(item.key, { is_liquid: event.target.checked, liquid_touched: true })}
+                  className="mt-0.5 h-4 w-4 shrink-0"
+                />
+                <span>
+                  <span className="font-medium text-ink-secondary">Líquido</span> · dinero que podrías usar en una
+                  emergencia
+                </span>
+              </label>
+            ) : null}
             {item.currency !== BASE_CURRENCY ? (
               <label className="flex flex-wrap items-center gap-2 text-xs text-ink-muted">
                 Tipo de cambio a {BASE_CURRENCY} (1 {item.currency} = ? {BASE_CURRENCY})

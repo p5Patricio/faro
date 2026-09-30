@@ -28,6 +28,20 @@ describe('GoalsPanel emergency fund row', () => {
     expect(screen.getByText('Por debajo')).toBeInTheDocument();
   });
 
+  it('asks to mark the liquid assets, with no months and no "Por debajo", when the fund is unclassified', () => {
+    renderPanel(makeFund({ months_covered: null, status: 'unclassified' }));
+
+    expect(screen.getByText(/Marca cuáles de tus activos son líquidos/)).toBeInTheDocument();
+    expect(screen.queryByText('Por debajo')).not.toBeInTheDocument();
+    expect(screen.queryByText(/meses cubiertos/)).not.toBeInTheDocument();
+  });
+
+  it('says a measured fund is based on the assets marked as liquid', () => {
+    renderPanel(makeFund());
+
+    expect(screen.getByText('Calculado con los activos que marcaste como líquidos.')).toBeInTheDocument();
+  });
+
   it('shows no status badge and no N/D, and says there is not enough history, when coverage is unknown', () => {
     // Sufficient history but no essential expenses to measure against: `months_covered` is null and the API's status is a placeholder "below".
     renderPanel(makeFund({ months_covered: null, status: 'below' }));

@@ -42,6 +42,17 @@ MIN_TRANSACTIONS_PER_TRAILING_MONTH = 5
 # How many completed months before the target month feed the averages.
 TRAILING_MONTHS_CONSIDERED = 3
 
+# The emergency-fund status when the user has not said which assets are liquid
+# (or the database cannot store the answer yet). It joins "below" / "within" /
+# "above" in the status vocabulary and is NOT a coverage level: no months are
+# reported with it.
+EMERGENCY_FUND_UNCLASSIFIED = "unclassified"
+
+# `investable_surplus.reason` while the emergency fund cannot be measured
+# because the liquidity of the assets is unclassified; the surplus is gated
+# (0) exactly as while the fund is being built.
+SURPLUS_REASON_LIQUIDITY_UNCLASSIFIED = "liquidity_unclassified"
+
 # Occurrences per year for each `finance_recurring_bills.frequency` value
 # (0008's CHECK constraint enumerates the same seven values).
 FREQUENCY_OCCURRENCES_PER_YEAR: dict[str, int] = {
@@ -266,16 +277,36 @@ def compute_trailing_baseline(trailing_summaries: list[dict[str, Any]]) -> dict[
 
 
 def compute_emergency_fund_status(
-    liquid_net_worth_cents: int, avg_monthly_fixed_expense_cents: int
+    liquid_assets_cents: int,
+    avg_monthly_fixed_expense_cents: int,
+    *,
+    liquidity_classified: bool = True,
 ) -> dict[str, Any]:
     """The book's 3-6 month cash-cushion rule. When there's no expense
     baseline yet (a brand-new user), ``months_covered`` is ``None`` rather
     than raising ``ZeroDivisionError``; ``status`` conservatively reports
     "below" in that case since coverage can't be verified.
 
+    The cushion is the user's LIQUID ASSETS (``brain.finance.liquidity``):
+    the sum of the assets flagged liquid, with liabilities NOT subtracted.
     The baseline is the trailing monthly average of ESSENTIAL expenses (the
     ``necesidad`` bucket): a cushion has to cover what cannot be cut, not
-    the discretionary spending."""
+    the discretionary spending.
+
+    ``liquidity_classified`` is False when the assets have not been
+    classified (see ``is_liquidity_classified``): the result is then
+    ``status`` ``"unclassified"`` with no months figure. That is different
+    from "below": nothing was measured, so no coverage is claimed, and it
+    takes precedence over the missing-baseline case because it names the
+    action the user can take."""
+    if not liquidity_classified:
+        return {
+            "months_covered": None,
+            "target_min_months": 3,
+            "target_max_months": 6,
+            "status": EMERGENCY_FUND_UNCLASSIFIED,
+        }
+
     if avg_monthly_fixed_expense_cents <= 0:
         return {
             "months_covered": None,
@@ -284,7 +315,7 @@ def compute_emergency_fund_status(
             "status": "below",
         }
 
-    months_covered = liquid_net_worth_cents / avg_monthly_fixed_expense_cents
+    months_covered = liquid_assets_cents / avg_monthly_fixed_expense_cents
     if months_covered < 3:
         status = "below"
     elif months_covered <= 6:
@@ -307,7 +338,11 @@ def compute_fire_number(net_worth_cents: int, avg_annual_expense_cents: int) -> 
 
     The annual baseline is 12 x the trailing average monthly SPENDING
     (``spending_cents``, savings excluded): money moved into savings is not
-    a cost of living that the portfolio has to cover."""
+    a cost of living that the portfolio has to cover.
+
+    ``net_worth_cents`` is TOTAL net worth (assets minus liabilities), not
+    liquid assets: a FIRE target is about the whole balance sheet. It is an
+    estimate, and the callers label it as one."""
     if avg_annual_expense_cents <= 0:
         return {"target_cents": 0, "progress_pct": None}
 
@@ -329,12 +364,15 @@ def compute_investable_surplus(monthly_summary: dict[str, Any], emergency_fund_s
     * ``surplus_cents`` -- GATED: the book's own stated priority is to fully
       fund the emergency cushion first, so it is 0 with ``reason``
       ``building_emergency_fund`` while coverage is below ``target_min_months``
-      or unknown (a brand-new user). Once covered (exactly
+      or unknown (a brand-new user). While the fund's status is
+      ``unclassified`` (the user has not said which assets are liquid) it is
+      also 0, with ``reason`` ``liquidity_unclassified``: the gate cannot be
+      opened by a coverage nobody measured. Once covered (exactly
       ``target_min_months`` counts as covered -- the boundary is inclusive) it
       is ``max(available_cents, 0)`` with ``reason``
       ``emergency_fund_covered``. ``reason`` therefore only describes the
       emergency-fund gate; a month that overspent has ``shortfall_cents > 0``
-      under either reason and the caller should say so first.
+      under any reason and the caller should say so first.
 
     ``income_cents``, ``spending_cents`` and ``saved_cents`` are echoed so a
     caller can tell "nothing was logged this month" from "everything was
@@ -349,7 +387,9 @@ def compute_investable_surplus(monthly_summary: dict[str, Any], emergency_fund_s
 
     months_covered = emergency_fund_status.get("months_covered")
     target_min_months = emergency_fund_status.get("target_min_months", 3)
-    if months_covered is None or months_covered < target_min_months:
+    if emergency_fund_status.get("status") == EMERGENCY_FUND_UNCLASSIFIED:
+        surplus_cents, reason = 0, SURPLUS_REASON_LIQUIDITY_UNCLASSIFIED
+    elif months_covered is None or months_covered < target_min_months:
         surplus_cents, reason = 0, "building_emergency_fund"
     else:
         surplus_cents, reason = max(available_cents, 0), "emergency_fund_covered"

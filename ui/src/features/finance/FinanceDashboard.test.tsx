@@ -47,7 +47,10 @@ const NEW_USER_SUMMARY: FinanceSummary = {
     total_assets_cents: null,
     total_liabilities_cents: null,
     net_worth_cents: null,
-    liquid_net_worth_cents: null,
+    liquid_assets_cents: null,
+    liquid_items_count: 0,
+    unclassified_items_count: 0,
+    liquidity_flags_available: true,
   },
   emergency_fund: {
     data_sufficient: false,

@@ -95,6 +95,10 @@ export interface NetWorthItem {
   // computed base amount. Snapshot totals are sums of the base amounts.
   fx_rate_to_base?: number | null;
   amount_base_cents?: number | null;
+  // Assets only: true = liquid (money you could use in an emergency), false =
+  // classified as not liquid, null/absent = not classified yet. Liabilities
+  // never carry one.
+  is_liquid?: boolean | null;
 }
 
 export interface NetWorthSnapshot {
@@ -105,6 +109,13 @@ export interface NetWorthSnapshot {
   total_liabilities_cents: number;
   net_worth_cents: number;
   items: NetWorthItem[];
+  // Liquidity figures the API adds to every snapshot. `liquid_assets_cents`
+  // sums the assets flagged liquid (liabilities NOT subtracted) and is null
+  // when the database cannot store the flags.
+  liquid_assets_cents?: number | null;
+  liquid_items_count?: number;
+  unclassified_items_count?: number;
+  liquidity_flags_available?: boolean;
 }
 
 export interface NetWorthPayload {
@@ -262,7 +273,14 @@ export interface NetWorthSummary {
   total_assets_cents: number | null;
   total_liabilities_cents: number | null;
   net_worth_cents: number | null;
-  liquid_net_worth_cents: number | null;
+  // Base amounts of the assets flagged liquid; liabilities are NOT subtracted.
+  // Null when there is no snapshot or the database cannot store the flags.
+  liquid_assets_cents: number | null;
+  liquid_items_count: number;
+  // Assets nobody has classified as liquid or not liquid yet.
+  unclassified_items_count: number;
+  // False while the database cannot store liquidity flags (migration 0013 unapplied).
+  liquidity_flags_available: boolean;
 }
 
 export interface EmergencyFundSummary {
@@ -270,7 +288,9 @@ export interface EmergencyFundSummary {
   months_covered: number | null;
   target_min_months: number;
   target_max_months: number;
-  status: 'below' | 'within' | 'above';
+  // 'unclassified': no asset is marked liquid yet, so nothing was measured
+  // (`months_covered` is null); it is not the same as 'below'.
+  status: 'below' | 'within' | 'above' | 'unclassified';
 }
 
 export interface FireNumberSummary {
@@ -285,7 +305,9 @@ export interface InvestableSurplusSummary {
   // otherwise `max(available_cents, 0)`.
   surplus_cents: number;
   // Describes only the emergency-fund gate; check `shortfall_cents` first.
-  reason: 'building_emergency_fund' | 'emergency_fund_covered';
+  // 'liquidity_unclassified': the fund could not be measured because no asset
+  // is marked liquid yet; the surplus stays gated (0).
+  reason: 'building_emergency_fund' | 'emergency_fund_covered' | 'liquidity_unclassified';
   // UNGATED: income minus spending, what the month left unspent (may be negative).
   available_cents: number;
   // How much spending exceeded income; 0 when it did not.

@@ -54,7 +54,10 @@ const NET_WORTH: NetWorthSummary = {
   total_assets_cents: 700_000,
   total_liabilities_cents: 0,
   net_worth_cents: 700_000,
-  liquid_net_worth_cents: 700_000,
+  liquid_assets_cents: 700_000,
+  liquid_items_count: 1,
+  unclassified_items_count: 0,
+  liquidity_flags_available: true,
 };
 
 const NO_NET_WORTH: NetWorthSummary = {
@@ -63,7 +66,10 @@ const NO_NET_WORTH: NetWorthSummary = {
   total_assets_cents: null,
   total_liabilities_cents: null,
   net_worth_cents: null,
-  liquid_net_worth_cents: null,
+  liquid_assets_cents: null,
+  liquid_items_count: 0,
+  unclassified_items_count: 0,
+  liquidity_flags_available: true,
 };
 
 function makeFund(monthsCovered: number | null): EmergencyFundSummary {
@@ -224,6 +230,17 @@ describe('InvestableSurplusPanel surplus insight copy', () => {
     });
 
     expect(screen.getByText(/todavía no hay datos para medir cuánto te falta/)).toBeInTheDocument();
+  });
+
+  it('says the fund cannot be measured, and names the next action, while no asset is marked liquid', () => {
+    renderPanel({
+      investableSurplus: makeSurplus({ reason: 'liquidity_unclassified', available_cents: 300_000, spending_cents: 700_000 }),
+      emergencyFund: { ...makeFund(null), status: 'unclassified' },
+    });
+
+    expect(screen.getByText(/todavía no se puede medir tu fondo de emergencia/)).toHaveTextContent(formatCents(300_000));
+    expect(screen.getByText(/Marca cuáles de tus activos son líquidos/)).toBeInTheDocument();
+    expect(screen.queryByText(/todavía no hay datos para medir/)).not.toBeInTheDocument();
   });
 
   it('says the money can work, and points at Mercados, once the emergency fund is covered', () => {

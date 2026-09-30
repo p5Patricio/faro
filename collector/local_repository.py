@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,6 +19,7 @@ from psycopg.types.numeric import FloatLoader
 from psycopg_pool import ConnectionPool
 
 from brain.finance.currency import BASE_CURRENCY, base_amount_cents
+from brain.finance.liquidity import default_is_liquid
 from brain.finance.recurrence import (
     is_occurrence,
     occurrence_after,
@@ -25,6 +27,8 @@ from brain.finance.recurrence import (
     occurrences_between,
 )
 from collector.providers.base import AnalystConsensus
+
+logger = logging.getLogger(__name__)
 
 
 class _UUIDStrLoader(Loader):
@@ -69,6 +73,32 @@ class LocalPostgresError(RuntimeError):
     Subclasses ``RuntimeError`` so existing ``except RuntimeError`` call
     sites in ``api/main.py`` keep working unchanged.
     """
+
+
+class PendingOccurrenceConflict(Exception):
+    """A recurring bill may have only ONE pending occurrence, and a write
+    asked for a second one (a ``pending`` status on a due date other than the
+    bill's current pending row).
+
+    Deliberately NOT a ``RuntimeError``: it is a client mistake the router
+    turns into a 422, not a database failure that ``except RuntimeError``
+    call sites turn into a 503.
+    """
+
+    def __init__(self, *, bill_id: str, existing_due_date: date, requested_due_date: date) -> None:
+        super().__init__(
+            f"bill {bill_id} already has a pending occurrence on {existing_due_date.isoformat()}; "
+            f"cannot leave {requested_due_date.isoformat()} pending too"
+        )
+        self.bill_id = bill_id
+        self.existing_due_date = existing_due_date
+        self.requested_due_date = requested_due_date
+
+
+# Name of the attribute where the "is_liquid column exists" answer is cached
+# on the pool (production) or the injected connection (tests). See
+# `LocalPostgresRepository.net_worth_liquidity_flags_available`.
+_LIQUIDITY_PROBE_ATTR = "_faro_net_worth_is_liquid_present"
 
 
 # SEC XBRL fact store (db/migrations/0006_fundamental_facts.sql). The natural key
@@ -1664,10 +1694,73 @@ class LocalPostgresRepository:
 
         items_by_snapshot: dict[str, list[dict[str, Any]]] = {}
         for item in items:
+            # A database without migration 0013 has no `is_liquid` column, and
+            # `SELECT *` then simply omits it: the key is always present in
+            # the API contract, null meaning "not classified".
+            item.setdefault("is_liquid", None)
             items_by_snapshot.setdefault(item["snapshot_id"], []).append(item)
         for row in snapshots:
             row["items"] = items_by_snapshot.get(row["id"], [])
         return snapshots
+
+    def net_worth_liquidity_flags_available(self) -> bool:
+        """Whether ``finance_net_worth_items.is_liquid`` exists, i.e. whether
+        migration 0013 is applied to THIS database. Code that reads or writes
+        the flag checks this first and degrades to the legacy behavior when it
+        is False (the scheduled jobs and the always-on API run this working
+        tree before the user applies the migration).
+
+        A positive answer is cached for the life of the pool (or the injected
+        connection): a column does not disappear. A negative answer is NOT
+        cached, so applying the migration takes effect on the next request
+        without restarting anything; the probe is one catalog lookup."""
+        target = self.connection if self.connection is not None else self.pool
+        if getattr(target, _LIQUIDITY_PROBE_ATTR, False) is True:
+            return True
+
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'finance_net_worth_items'
+                      AND column_name = 'is_liquid'
+                ) AS present
+                """
+            )
+            present = bool(cur.fetchone()["present"])
+
+        if present:
+            try:
+                setattr(target, _LIQUIDITY_PROBE_ATTR, True)
+            except AttributeError:  # an object that refuses attributes: just probe again next time
+                pass
+        return present
+
+    @staticmethod
+    def _resolve_liquidity_flag(
+        item: dict[str, Any], stored_flags: dict[tuple[bool, str], bool]
+    ) -> bool | None:
+        """The ``is_liquid`` value to store for one item of a snapshot write.
+
+        * A liability is never classified: ``None``.
+        * A flag the client sent (``True``, ``False`` or an explicit ``None``
+          for "not classified") is stored as given.
+        * A flag the client did not send keeps the classification the same
+          item (same kind and label) already had in this snapshot -- a repeat
+          write of the worksheet must not silently flip a choice -- and only a
+          genuinely new item, or one still unclassified, gets the default for
+          its ``item_type`` (``brain.finance.liquidity.default_is_liquid``).
+        """
+        if not item["is_asset"]:
+            return None
+        if "is_liquid" in item:
+            return item["is_liquid"]
+        stored = stored_flags.get((True, item["label"].strip().lower()))
+        if stored is not None:
+            return stored
+        return default_is_liquid(item.get("item_type", "other"), is_asset=True)
 
     def upsert_finance_net_worth_snapshot(
         self,
@@ -1687,7 +1780,13 @@ class LocalPostgresRepository:
         Each item carries ``fx_rate_to_base`` and ``amount_base_cents``,
         resolved by the caller (``api/routers/finance.py`` validates that a
         foreign-currency item has a rate); this method stores them as given.
-        The returned totals are base-currency totals."""
+        The returned totals are base-currency totals.
+
+        ``is_liquid`` (see ``_resolve_liquidity_flag``) is stored only when
+        the database has the column; without it the flag is ignored, with a
+        warning if the client asked for one, and every returned item reports
+        ``is_liquid: None``."""
+        flags_available = self.net_worth_liquidity_flags_available()
         with self._cursor() as cur:
             cur.execute(
                 """
@@ -1701,30 +1800,64 @@ class LocalPostgresRepository:
             snapshot = cur.fetchone()
             snapshot_id = snapshot["id"]
 
+            # The classifications this snapshot already holds, read before the
+            # wholesale replace below wipes them (see `_resolve_liquidity_flag`).
+            stored_flags: dict[tuple[bool, str], bool] = {}
+            if flags_available:
+                cur.execute(
+                    "SELECT is_asset, label, is_liquid FROM finance_net_worth_items "
+                    "WHERE snapshot_id = %s AND is_liquid IS NOT NULL",
+                    (snapshot_id,),
+                )
+                stored_flags = {
+                    (row["is_asset"], row["label"].strip().lower()): row["is_liquid"] for row in cur.fetchall()
+                }
+
             cur.execute("DELETE FROM finance_net_worth_items WHERE snapshot_id = %s", (snapshot_id,))
+
+            if not flags_available and any(item.get("is_liquid") is not None for item in items):
+                logger.warning(
+                    "finance_net_worth_liquidity_ignored: finance_net_worth_items.is_liquid does not exist "
+                    "(migration 0013 is not applied); the liquidity flags of this write were not stored"
+                )
 
             prepared_items: list[dict[str, Any]] = []
             for item in items:
-                cur.execute(
-                    """
-                    INSERT INTO finance_net_worth_items
-                        (snapshot_id, is_asset, label, item_type, amount_cents, currency,
-                         fx_rate_to_base, amount_base_cents)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (
-                        snapshot_id,
-                        item["is_asset"],
-                        item["label"],
-                        item.get("item_type", "other"),
-                        item["amount_cents"],
-                        item["currency"],
-                        item.get("fx_rate_to_base"),
-                        item.get("amount_base_cents"),
-                    ),
+                values = (
+                    snapshot_id,
+                    item["is_asset"],
+                    item["label"],
+                    item.get("item_type", "other"),
+                    item["amount_cents"],
+                    item["currency"],
+                    item.get("fx_rate_to_base"),
+                    item.get("amount_base_cents"),
                 )
-                prepared_items.append(cur.fetchone())
+                if flags_available:
+                    cur.execute(
+                        """
+                        INSERT INTO finance_net_worth_items
+                            (snapshot_id, is_asset, label, item_type, amount_cents, currency,
+                             fx_rate_to_base, amount_base_cents, is_liquid)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING *
+                        """,
+                        (*values, self._resolve_liquidity_flag(item, stored_flags)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO finance_net_worth_items
+                            (snapshot_id, is_asset, label, item_type, amount_cents, currency,
+                             fx_rate_to_base, amount_base_cents)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING *
+                        """,
+                        values,
+                    )
+                prepared_item = cur.fetchone()
+                prepared_item.setdefault("is_liquid", None)
+                prepared_items.append(prepared_item)
 
         # Same rule as the read query: an item with no usable base amount
         # contributes nothing rather than its raw native amount.
@@ -1844,8 +1977,10 @@ class LocalPostgresRepository:
     ) -> date:
         """Guarantee the bill has a pending occurrence and return its due date.
 
-        The schema's design is ONE pending row per bill at a time (0008), so
-        when one already exists (the earliest wins) nothing is created.
+        The schema's design is ONE pending row per bill at a time (0008, now
+        also enforced by 0013's partial unique index), so when one already
+        exists (the earliest wins) nothing is created. This check is what
+        keeps the rule correct on a database without that index.
         Otherwise the new row is the earliest schedule date on or after
         ``not_before`` that has no row yet -- skipping dates that already
         exist as paid/skipped history, so settling an old occurrence never
@@ -1889,12 +2024,35 @@ class LocalPostgresRepository:
 
         Idempotent: repeating the same call keeps the original ``paid_at`` and
         creates nothing new. ``None`` when the bill does not exist. No ledger
-        transaction is created; ``transaction_id`` is only an optional link."""
+        transaction is created; ``transaction_id`` is only an optional link.
+
+        One pending occurrence per bill. A ``pending`` write on a due date
+        other than the bill's current pending row (including reopening a paid
+        or skipped date) raises ``PendingOccurrenceConflict`` before anything
+        is written: the bill row is locked, so the check cannot race, and it
+        holds whether or not migration 0013's partial unique index exists
+        (the index is only a backstop for writers that bypass this method).
+        Repeating the write on the pending row's own date stays a plain
+        idempotent update."""
         with self._cursor() as cur:
             cur.execute("SELECT * FROM finance_recurring_bills WHERE id = %s FOR UPDATE", (row["bill_id"],))
             bill = cur.fetchone()
             if bill is None:
                 return None
+
+            if row.get("status", "pending") == "pending":
+                cur.execute(
+                    "SELECT due_date FROM finance_recurring_bill_payments "
+                    "WHERE bill_id = %s AND status = 'pending' ORDER BY due_date",
+                    (row["bill_id"],),
+                )
+                pending_dates = [payment["due_date"] for payment in cur.fetchall()]
+                if pending_dates and row["due_date"] not in pending_dates:
+                    raise PendingOccurrenceConflict(
+                        bill_id=str(row["bill_id"]),
+                        existing_due_date=pending_dates[0],
+                        requested_due_date=row["due_date"],
+                    )
 
             cur.execute(
                 "SELECT status FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date = %s",

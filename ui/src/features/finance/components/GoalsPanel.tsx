@@ -97,6 +97,20 @@ function GoalRow({ name, targetLabel, ratio, leftFigure, rightFigure, badge, fil
 }
 
 function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSummary | null }) {
+  // Nothing was measured because no asset is marked liquid yet: name the next
+  // action instead of a coverage level ("Por debajo" would claim a measurement).
+  if (emergencyFund?.status === 'unclassified') {
+    return (
+      <div className="flex items-start gap-2 text-sm text-ink-muted">
+        <Target aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Fondo de emergencia: todavía no se puede medir. Marca cuáles de tus activos son líquidos en la pestaña
+          Patrimonio para calcularlo.
+        </span>
+      </div>
+    );
+  }
+
   if (!emergencyFund || !emergencyFund.data_sufficient) {
     return (
       <div className="flex items-start gap-2 text-sm text-ink-muted">
@@ -135,15 +149,18 @@ function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSumma
         : 'bg-beam';
 
   return (
-    <GoalRow
-      name="Fondo de emergencia"
-      targetLabel={`${emergencyFund.target_min_months} a ${emergencyFund.target_max_months} meses de gasto fijo`}
-      ratio={ratio}
-      leftFigure={`${emergencyFund.months_covered.toFixed(1)} meses cubiertos`}
-      rightFigure={`objetivo ${emergencyFund.target_max_months} meses`}
-      badge={badge}
-      fillClassName={fillClassName}
-    />
+    <div>
+      <GoalRow
+        name="Fondo de emergencia"
+        targetLabel={`${emergencyFund.target_min_months} a ${emergencyFund.target_max_months} meses de gasto fijo`}
+        ratio={ratio}
+        leftFigure={`${emergencyFund.months_covered.toFixed(1)} meses cubiertos`}
+        rightFigure={`objetivo ${emergencyFund.target_max_months} meses`}
+        badge={badge}
+        fillClassName={fillClassName}
+      />
+      <p className="mt-1.5 text-xs text-ink-muted">Calculado con los activos que marcaste como líquidos.</p>
+    </div>
   );
 }
 
