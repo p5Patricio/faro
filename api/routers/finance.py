@@ -38,6 +38,7 @@ from brain.finance.currency import (
     normalize_currency,
     resolve_fx_and_base,
 )
+from brain.finance.recurrence import occurrence_on_or_after
 from collector.local_repository import LocalPostgresRepository
 
 router = APIRouter()
@@ -351,6 +352,41 @@ def put_net_worth(
 # -- Recurring bills -----------------------------------------------------
 
 
+def _today() -> date:
+    """The machine-local calendar date every "due today / overdue" decision
+    is made against. One seam so tests can pin the clock."""
+    return date.today()
+
+
+def _parse_date_field(value: str, *, detail: str) -> date:
+    """A payload date string as a ``date``; 422 with ``detail`` when it is not
+    a valid ISO date (the recurrence math needs a real date, so a bad value
+    must not reach it as a 500)."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=detail) from None
+
+
+def _with_next_due_date(bills: list[dict[str, Any]], *, today: date) -> list[dict[str, Any]]:
+    """Every ACTIVE bill gets a next due date. Saving a bill persists its
+    pending occurrence, so this only fills in for a bill that has none (one
+    written before occurrences were generated, or inserted by hand): its next
+    due date is derived, read-only, as the earliest schedule date on or after
+    ``today``. Marking that date paid upserts the row, so the derived date
+    behaves like a stored one."""
+    completed: list[dict[str, Any]] = []
+    for bill in bills:
+        if bill["is_active"] and bill.get("next_due_date") is None:
+            bill = {
+                **bill,
+                "next_due_date": occurrence_on_or_after(bill["anchor_due_date"], bill["frequency"], today),
+                "next_status": "pending",
+            }
+        completed.append(bill)
+    return completed
+
+
 @router.get("/recurring-bills")
 def get_recurring_bills(
     include_inactive: bool = Query(default=False),
@@ -358,9 +394,10 @@ def get_recurring_bills(
 ):
     repository = _require_repository(repository)
     try:
-        return repository.get_finance_recurring_bills(include_inactive=include_inactive)
+        bills = repository.get_finance_recurring_bills(include_inactive=include_inactive)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudieron obtener los pagos recurrentes") from None
+    return _with_next_due_date(bills, today=_today())
 
 
 @router.put("/recurring-bills")
@@ -368,11 +405,17 @@ def put_recurring_bill(
     payload: FinanceRecurringBillPayload,
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
+    """Create or edit a bill. An active bill always ends up with a pending
+    occurrence (see ``upsert_finance_recurring_bill``); ``today`` is the
+    machine-local date, matching every other date default in this module."""
     repository = _require_repository(repository)
     row = payload.model_dump()
     row["currency"] = _require_base_currency(row["currency"], subject="Los pagos recurrentes")
+    row["anchor_due_date"] = _parse_date_field(
+        row["anchor_due_date"], detail="La fecha del primer vencimiento no es válida (usa AAAA-MM-DD)."
+    )
     try:
-        return repository.upsert_finance_recurring_bill(row)
+        return repository.upsert_finance_recurring_bill(row, today=_today())
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el pago recurrente") from None
 
@@ -382,18 +425,27 @@ def put_recurring_bill_payment(
     payload: FinanceRecurringBillPaymentPayload,
     repository: LocalPostgresRepository | None = Depends(get_repository),
 ):
+    """Record an occurrence's status. Settling it (``paid`` / ``skipped``)
+    also creates the bill's next pending occurrence; no ledger transaction is
+    created (``transaction_id`` stays an optional link)."""
     repository = _require_repository(repository)
     row = payload.model_dump(exclude_unset=True)
     row.setdefault("status", "pending")
-    if row.get("status") == "paid" and "paid_at" not in row:
-        # Business-level default, not a payload field: the caller only
-        # states the fact ("this got paid"); the timestamp is this router's
-        # job, not something a client should have to compute itself.
-        row["paid_at"] = datetime.now(UTC).isoformat()
+    row["due_date"] = _parse_date_field(
+        row["due_date"], detail="La fecha de vencimiento no es válida (usa AAAA-MM-DD)."
+    )
+    # `paid_at` is a business-level value, not a payload field: the caller
+    # only states the fact ("this got paid"); the timestamp is this router's
+    # job, not something a client should have to compute itself. Any other
+    # status clears it so a paid -> skipped correction leaves no stale time.
+    row["paid_at"] = datetime.now(UTC).isoformat() if row["status"] == "paid" else None
     try:
-        return repository.upsert_finance_recurring_bill_payment(row)
+        payment = repository.upsert_finance_recurring_bill_payment(row)
     except RuntimeError:
         raise HTTPException(status_code=503, detail="No se pudo guardar el pago") from None
+    if payment is None:
+        raise HTTPException(status_code=404, detail="El pago recurrente indicado no existe.")
+    return payment
 
 
 # -- Goals -------------------------------------------------------------
@@ -454,7 +506,8 @@ def get_summary(
     history yet: each section carries its own `data_sufficient` flag rather
     than the whole endpoint failing for a brand-new user with zero data."""
     repository = _require_repository(repository)
-    target_month = month or date.today().strftime("%Y-%m")
+    today = _today()
+    target_month = month or today.strftime("%Y-%m")
 
     try:
         categories = repository.get_finance_categories()
@@ -500,11 +553,13 @@ def get_summary(
         fire_number = compute_fire_number(liquid_net_worth_cents, avg_total_expense_cents * 12)
         investable_surplus = compute_investable_surplus(monthly_summary, emergency_fund_status)
 
-        recurring_bills = repository.get_finance_recurring_bills(include_inactive=False)
+        recurring_bills = _with_next_due_date(
+            repository.get_finance_recurring_bills(include_inactive=False), today=today
+        )
         subscriptions = compute_subscription_total(recurring_bills)
-        # Only each bill's NEXT scheduled occurrence feeds the forecast --
-        # 0008's own design has the app generate one pending row at a time
-        # per bill, so this is normally the complete near-term picture.
+        # Each bill's NEXT pending occurrence seeds the forecast (0008's
+        # design keeps one pending row per bill), and the forecast expands the
+        # bill's later occurrences inside the horizon from its anchor.
         # Amounts go in as BASE cents; a bill that cannot be converted
         # (legacy non-base row) is left out, same as in the subscription total.
         pending_bill_payments: list[dict[str, Any]] = []
@@ -512,8 +567,17 @@ def get_summary(
             bill_base_cents = base_amount_cents(bill)
             if bill.get("next_due_date") is None or bill_base_cents is None:
                 continue
-            pending_bill_payments.append({"due_date": bill["next_due_date"], "amount_cents": bill_base_cents})
-        cash_flow_forecast = compute_cash_flow_forecast(pending_bill_payments, avg_income_cents, horizon_days=30)
+            pending_bill_payments.append(
+                {
+                    "due_date": bill["next_due_date"],
+                    "amount_cents": bill_base_cents,
+                    "anchor_due_date": bill["anchor_due_date"],
+                    "frequency": bill["frequency"],
+                }
+            )
+        cash_flow_forecast = compute_cash_flow_forecast(
+            pending_bill_payments, avg_income_cents, horizon_days=30, today=today
+        )
 
         combined_sufficient = net_worth_sufficient and history_sufficient
 

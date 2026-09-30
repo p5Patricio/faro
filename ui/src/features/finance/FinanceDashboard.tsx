@@ -146,10 +146,9 @@ export function FinanceDashboard() {
         accounts={accounts.data}
         loading={recurringBills.loading}
         error={recurringBills.error}
-        onChanged={() => {
-          void recurringBills.refetch();
-          void summary.refetch();
-        }}
+        // Returned so the panel keeps a row's actions disabled until the list
+        // and the forecast are refreshed.
+        onChanged={() => Promise.all([recurringBills.refetch(), summary.refetch()])}
       />
     );
   } else if (section === 'metas') {

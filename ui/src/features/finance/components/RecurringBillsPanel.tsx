@@ -1,12 +1,18 @@
 import { useMemo, useState, type FormEvent } from 'react';
-import { AlertTriangle, CheckCircle2, Repeat } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Repeat, SkipForward } from 'lucide-react';
 import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonTable } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
 import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import { putRecurringBill, putRecurringBillPayment } from '../hooks/useFinanceApi.ts';
-import type { BillFrequency, FinanceAccount, FinanceCategory, RecurringBill } from '../types.ts';
+import type {
+  BillFrequency,
+  FinanceAccount,
+  FinanceCategory,
+  RecurringBill,
+  RecurringBillPaymentStatus,
+} from '../types.ts';
 
 const FREQUENCY_LABELS: Record<BillFrequency, string> = {
   weekly: 'Semanal',
@@ -24,13 +30,17 @@ interface RecurringBillsPanelProps {
   accounts: FinanceAccount[];
   loading?: boolean;
   error?: string | null;
-  onChanged: () => void;
+  // May return a promise: the row's actions stay disabled until it settles, so
+  // an already-settled occurrence is not shown as actionable while the list refreshes.
+  onChanged: () => void | Promise<unknown>;
 }
 
 /**
- * Recurring bills as understated rows -- plain gray "vence en N días" text,
- * switching to `--color-status-warning` only inside the bill's own
- * `reminder_days_before` window. Never a traffic-light status pill.
+ * Recurring bills as understated rows: the next due date plus a relative
+ * "vence en N días" line, gray by default and `--color-status-warning` inside
+ * the bill's own `reminder_days_before` window. An overdue bill says so in
+ * text with an icon (never color alone) and how many days late it is. Never a
+ * traffic-light status pill.
  */
 export function RecurringBillsPanel({
   bills,
@@ -40,17 +50,25 @@ export function RecurringBillsPanel({
   error,
   onChanged,
 }: RecurringBillsPanelProps) {
-  const [payingId, setPayingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const categoryById = useMemo(() => new Map(categories.map((category) => [category.id, category])), [categories]);
 
-  const markPaid = async (bill: RecurringBill) => {
+  const settle = async (bill: RecurringBill, status: Exclude<RecurringBillPaymentStatus, 'pending'>) => {
     if (!bill.next_due_date) return;
-    setPayingId(bill.id);
+    setBusyId(bill.id);
+    setActionError(null);
     try {
-      await putRecurringBillPayment({ bill_id: bill.id, due_date: bill.next_due_date, status: 'paid' });
-      onChanged();
+      await putRecurringBillPayment({ bill_id: bill.id, due_date: bill.next_due_date, status });
+      await onChanged();
+    } catch {
+      setActionError(
+        status === 'paid'
+          ? `No se pudo marcar «${bill.name}» como pagado.`
+          : `No se pudo omitir el pago de «${bill.name}».`,
+      );
     } finally {
-      setPayingId(null);
+      setBusyId(null);
     }
   };
 
@@ -77,12 +95,19 @@ export function RecurringBillsPanel({
               key={bill.id}
               bill={bill}
               category={bill.category_id ? categoryById.get(bill.category_id) : undefined}
-              paying={payingId === bill.id}
-              onMarkPaid={() => markPaid(bill)}
+              busy={busyId === bill.id}
+              onMarkPaid={() => settle(bill, 'paid')}
+              onSkip={() => settle(bill, 'skipped')}
             />
           ))}
         </div>
       )}
+
+      {actionError ? (
+        <p role="alert" className="mt-3 text-xs text-status-critical">
+          {actionError}
+        </p>
+      ) : null}
 
       <div className="mt-5 border-t border-hairline/60 pt-4">
         <RecurringBillForm categories={categories} accounts={accounts} onSaved={onChanged} />
@@ -94,16 +119,18 @@ export function RecurringBillsPanel({
 function BillRow({
   bill,
   category,
-  paying,
+  busy,
   onMarkPaid,
+  onSkip,
 }: {
   bill: RecurringBill;
   category?: FinanceCategory;
-  paying: boolean;
+  busy: boolean;
   onMarkPaid: () => void;
+  onSkip: () => void;
 }) {
   const due = describeDue(bill);
-  const canMarkPaid = bill.next_status === 'pending' && Boolean(bill.next_due_date);
+  const canSettle = bill.next_status === 'pending' && Boolean(bill.next_due_date);
 
   return (
     <div className="flex items-center gap-3 border-b border-hairline/60 py-2.5 last:border-b-0">
@@ -115,46 +142,74 @@ function BillRow({
       </span>
       <div className="min-w-0 flex-1">
         <p className="truncate text-[13.5px] font-medium text-ink">{bill.name}</p>
-        <p className={cn('text-xs', due.warn ? 'text-status-warning' : 'text-ink-muted')}>{due.text}</p>
+        <p
+          className={cn(
+            'flex items-center gap-1 text-xs',
+            due.tone === 'overdue' && 'font-medium text-status-critical',
+            due.tone === 'soon' && 'text-status-warning',
+            due.tone === 'calm' && 'text-ink-muted',
+          )}
+        >
+          {due.tone === 'overdue' ? <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" /> : null}
+          <span>{due.text}</span>
+        </p>
       </div>
       <span className="shrink-0 text-sm font-semibold tabular-nums text-ink">
         {formatCents(bill.amount_cents, bill.currency)}
       </span>
-      {canMarkPaid ? (
-        <button
-          type="button"
-          onClick={onMarkPaid}
-          disabled={paying}
-          aria-label={`Marcar ${bill.name} como pagado`}
-          title="Marcar como pagado"
-          className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:bg-white/5 hover:text-status-good disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
-        </button>
+      {canSettle ? (
+        <>
+          <button
+            type="button"
+            onClick={onMarkPaid}
+            disabled={busy}
+            aria-label={`Marcar ${bill.name} como pagado`}
+            title="Marcar como pagado"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:bg-white/5 hover:text-status-good disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <CheckCircle2 aria-hidden="true" className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={onSkip}
+            disabled={busy}
+            aria-label={`Omitir el pago de ${bill.name}`}
+            title="Omitir este pago"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-muted transition hover:bg-white/5 hover:text-ink disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <SkipForward aria-hidden="true" className="h-4 w-4" />
+          </button>
+        </>
       ) : null}
     </div>
   );
 }
 
-function describeDue(bill: RecurringBill): { text: string; warn: boolean } {
-  if (bill.next_status === 'paid') return { text: 'Pagado', warn: false };
-  if (bill.next_status === 'skipped') return { text: 'Omitido', warn: false };
-  if (!bill.next_due_date) return { text: 'Sin pendiente', warn: false };
+type DueTone = 'overdue' | 'soon' | 'calm';
+
+/**
+ * Next-due line for a bill. The API gives every active bill a pending
+ * occurrence, so a missing date only happens for a deactivated bill (or a
+ * response that cannot be trusted) and never reads as "nothing pending".
+ */
+function describeDue(bill: RecurringBill): { text: string; tone: DueTone } {
+  if (bill.next_status === 'paid') return { text: 'Pagado', tone: 'calm' };
+  if (bill.next_status === 'skipped') return { text: 'Omitido', tone: 'calm' };
+  if (!bill.next_due_date) {
+    return { text: bill.is_active ? 'Próximo vencimiento no disponible' : 'Inactivo', tone: 'calm' };
+  }
 
   const days = daysUntil(bill.next_due_date);
-  const warn = days <= bill.reminder_days_before;
-  let text: string;
+  const date = formatDueDate(bill.next_due_date);
   if (days < 0) {
-    const overdue = Math.abs(days);
-    text = `venció hace ${overdue} día${overdue === 1 ? '' : 's'}`;
-  } else if (days === 0) {
-    text = 'vence hoy';
-  } else if (days === 1) {
-    text = 'vence mañana';
-  } else {
-    text = `vence en ${days} días`;
+    const late = Math.abs(days);
+    return { text: `Vencido hace ${late} día${late === 1 ? '' : 's'} · ${date}`, tone: 'overdue' };
   }
-  return { text, warn };
+
+  const tone: DueTone = days <= bill.reminder_days_before ? 'soon' : 'calm';
+  if (days === 0) return { text: `Vence hoy · ${date}`, tone };
+  if (days === 1) return { text: `Vence mañana · ${date}`, tone };
+  return { text: `Vence en ${days} días · ${date}`, tone };
 }
 
 function daysUntil(dateOnly: string): number {
@@ -162,6 +217,14 @@ function daysUntil(dateOnly: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.round((due.getTime() - today.getTime()) / 86_400_000);
+}
+
+// A date-only string is a calendar day, not an instant: parse it as a LOCAL
+// date (like `daysUntil`) so it never renders a day early in UTC-negative zones.
+function formatDueDate(dateOnly: string): string {
+  return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', year: 'numeric' }).format(
+    new Date(`${dateOnly}T00:00:00`),
+  );
 }
 
 function RecurringBillForm({

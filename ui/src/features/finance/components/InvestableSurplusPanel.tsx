@@ -1,4 +1,4 @@
-import { Compass, PiggyBank, Repeat, Rocket } from 'lucide-react';
+import { AlertTriangle, Compass, PiggyBank, Repeat, Rocket } from 'lucide-react';
 import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { cn } from '../../../lib/cn.ts';
@@ -118,16 +118,26 @@ export function InvestableSurplusPanel({
             hint="Se necesitan meses previos con ingresos registrados para proyectar el flujo."
           />
         ) : (
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-            <ForecastStat label="Horizonte" value={`${cashFlowForecast.horizon_days} días`} />
-            <ForecastStat label="Ingreso esperado" value={formatCents(cashFlowForecast.expected_income_cents, BASE_CURRENCY)} />
-            <ForecastStat label="Pagos comprometidos" value={formatCents(cashFlowForecast.committed_bills_cents, BASE_CURRENCY)} />
-            <ForecastStat
-              label="Neto proyectado"
-              value={formatCents(cashFlowForecast.projected_net_cents, BASE_CURRENCY)}
-              valueClassName={cashFlowForecast.projected_net_cents >= 0 ? 'text-status-good' : 'text-status-critical'}
-            />
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+              <ForecastStat label="Horizonte" value={`${cashFlowForecast.horizon_days} días`} />
+              <ForecastStat label="Ingreso esperado" value={formatCents(cashFlowForecast.expected_income_cents, BASE_CURRENCY)} />
+              <ForecastStat label="Pagos comprometidos" value={formatCents(cashFlowForecast.committed_bills_cents, BASE_CURRENCY)} />
+              <ForecastStat
+                label="Neto proyectado"
+                value={formatCents(cashFlowForecast.projected_net_cents, BASE_CURRENCY)}
+                valueClassName={cashFlowForecast.projected_net_cents >= 0 ? 'text-status-good' : 'text-status-critical'}
+              />
+            </div>
+            {cashFlowForecast.overdue_bills_count > 0 ? (
+              <p className="mt-3 flex items-center gap-1.5 text-xs font-medium text-status-critical">
+                <AlertTriangle aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
+                Incluye {formatCents(cashFlowForecast.overdue_bills_cents, BASE_CURRENCY)} de{' '}
+                {cashFlowForecast.overdue_bills_count} pago
+                {cashFlowForecast.overdue_bills_count === 1 ? ' vencido' : 's vencidos'}
+              </p>
+            ) : null}
+          </>
         )}
       </div>
     </div>

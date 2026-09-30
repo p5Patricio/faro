@@ -4,7 +4,7 @@ import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
@@ -18,6 +18,12 @@ from psycopg.types.numeric import FloatLoader
 from psycopg_pool import ConnectionPool
 
 from brain.finance.currency import BASE_CURRENCY, base_amount_cents
+from brain.finance.recurrence import (
+    is_occurrence,
+    occurrence_after,
+    occurrence_on_or_after,
+    occurrences_between,
+)
 from collector.providers.base import AnalystConsensus
 
 
@@ -169,7 +175,19 @@ class LocalPostgresRepository:
         updates every column present in the payload."""
         if not rows:
             return 0
+        with self._cursor() as cur:
+            return self._upsert_batch_on(cur, table, rows, conflict_cols)
 
+    @staticmethod
+    def _upsert_batch_on(
+        cur: psycopg.Cursor[dict[str, Any]],
+        table: str,
+        rows: list[dict[str, Any]],
+        conflict_cols: tuple[str, ...],
+    ) -> int:
+        """``_upsert_batch`` on a cursor the caller already holds, so a caller
+        that needs several statements in ONE transaction (a pooled ``_cursor()``
+        block is one transaction; two of them are two) can compose it."""
         columns = list(rows[0].keys())
         update_cols = [column for column in columns if column not in conflict_cols]
 
@@ -204,8 +222,7 @@ class LocalPostgresRepository:
             )
 
         params = [tuple(row[column] for column in columns) for row in rows]
-        with self._cursor() as cur:
-            cur.executemany(query, params)
+        cur.executemany(query, params)
         # Preserves today's return semantics: the submitted row count, not
         # the affected-row count.
         return len(rows)
@@ -1423,34 +1440,42 @@ class LocalPostgresRepository:
         budgets, there's nothing else to conflict on. Every column present in
         ``row`` is overwritten on update, matching a UI that always submits
         the whole record."""
+        with self._cursor() as cur:
+            return self._upsert_by_id_on(cur, table, row)
+
+    @staticmethod
+    def _upsert_by_id_on(
+        cur: psycopg.Cursor[dict[str, Any]], table: str, row: dict[str, Any]
+    ) -> dict[str, Any]:
+        """``_upsert_by_id`` on a cursor the caller already holds (see
+        ``_upsert_batch_on`` for why)."""
         payload = dict(row)
         record_id = payload.pop("id", None)
         columns = list(payload.keys())
 
-        with self._cursor() as cur:
-            if record_id:
-                updates_sql = sql.SQL(", ").join(
-                    sql.SQL("{column} = {placeholder}").format(
-                        column=sql.Identifier(column), placeholder=sql.Placeholder()
-                    )
-                    for column in columns
+        if record_id:
+            updates_sql = sql.SQL(", ").join(
+                sql.SQL("{column} = {placeholder}").format(
+                    column=sql.Identifier(column), placeholder=sql.Placeholder()
                 )
-                query = sql.SQL(
-                    "UPDATE {table} SET {updates}, updated_at = now() WHERE id = {placeholder} RETURNING *"
-                ).format(table=sql.Identifier(table), updates=updates_sql, placeholder=sql.Placeholder())
-                cur.execute(query, (*payload.values(), record_id))
-                updated = cur.fetchone()
-                if updated is None:
-                    raise LocalPostgresError(f"{table} row not found: {record_id}")
-                return updated
-
-            insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)
-            placeholders_sql = sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+                for column in columns
+            )
             query = sql.SQL(
-                "INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING *"
-            ).format(table=sql.Identifier(table), cols=insert_cols_sql, placeholders=placeholders_sql)
-            cur.execute(query, tuple(payload.values()))
-            return cur.fetchone()
+                "UPDATE {table} SET {updates}, updated_at = now() WHERE id = {placeholder} RETURNING *"
+            ).format(table=sql.Identifier(table), updates=updates_sql, placeholder=sql.Placeholder())
+            cur.execute(query, (*payload.values(), record_id))
+            updated = cur.fetchone()
+            if updated is None:
+                raise LocalPostgresError(f"{table} row not found: {record_id}")
+            return updated
+
+        insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)
+        placeholders_sql = sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+        query = sql.SQL(
+            "INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING *"
+        ).format(table=sql.Identifier(table), cols=insert_cols_sql, placeholders=placeholders_sql)
+        cur.execute(query, tuple(payload.values()))
+        return cur.fetchone()
 
     def get_finance_transactions(
         self,
@@ -1744,22 +1769,152 @@ class LocalPostgresRepository:
             cur.execute(query)
             return cur.fetchall()
 
-    def upsert_finance_recurring_bill(self, row: dict[str, Any]) -> dict[str, Any]:
-        return self._upsert_by_id("finance_recurring_bills", row)
+    def upsert_finance_recurring_bill(self, row: dict[str, Any], *, today: date) -> dict[str, Any]:
+        """Save a bill (an edit when ``row`` carries an ``id``) and, for an
+        ACTIVE bill, make sure it has its one pending occurrence -- both in a
+        single transaction, so a bill never exists without its pending row.
 
-    def upsert_finance_recurring_bill_payment(self, row: dict[str, Any]) -> dict[str, Any]:
+        * The first pending occurrence is the earliest one on or after
+          ``today``, so an old anchor never fabricates an overdue row.
+        * On an edit, a pending row (no linked transaction) that the new
+          schedule no longer justifies is deleted and regenerated (see
+          ``_drop_stale_pending_payments``); a still-valid pending row --
+          including an overdue one -- is kept. Paid and skipped rows are
+          history and are never touched.
+        * Idempotent: re-saving an unchanged bill changes nothing.
+
+        The returned row carries ``next_due_date`` / ``next_status`` like a
+        ``get_finance_recurring_bills`` row does. An inactive bill keeps
+        whatever pending row it had, and reactivating it keeps that row (an old
+        one shows as overdue until it is paid or skipped)."""
+        with self._cursor() as cur:
+            bill = self._upsert_by_id_on(cur, "finance_recurring_bills", row)
+            next_due_date = None
+            if bill["is_active"]:
+                self._drop_stale_pending_payments(cur, bill, today=today)
+                next_due_date = self._ensure_pending_payment(cur, bill, not_before=today)
+        return {**bill, "next_due_date": next_due_date, "next_status": "pending" if next_due_date else None}
+
+    @staticmethod
+    def _drop_stale_pending_payments(
+        cur: psycopg.Cursor[dict[str, Any]], bill: dict[str, Any], *, today: date
+    ) -> None:
+        """Delete the bill's pending rows (without a linked transaction) that
+        its CURRENT schedule no longer justifies. A pending row is stale when
+
+        * its date is not one of the schedule's dates (the anchor or the
+          frequency changed), or
+        * it is dated ``today`` or later yet skips an earlier schedule date
+          that has no settled row (e.g. an annual bill edited to monthly:
+          the row sitting a year out would hide this month's payment).
+
+        An overdue row that is still a schedule date is kept: it is a
+        genuinely unpaid occurrence, not an artifact of the edit."""
+        cur.execute(
+            "SELECT id, due_date FROM finance_recurring_bill_payments "
+            "WHERE bill_id = %s AND status = 'pending' AND transaction_id IS NULL",
+            (bill["id"],),
+        )
+        pending = cur.fetchall()
+        if not pending:
+            return
+
+        cur.execute(
+            "SELECT due_date FROM finance_recurring_bill_payments WHERE bill_id = %s AND status <> 'pending'",
+            (bill["id"],),
+        )
+        settled = {payment["due_date"] for payment in cur.fetchall()}
+        anchor, frequency = bill["anchor_due_date"], bill["frequency"]
+
+        def is_stale(due_date: date) -> bool:
+            if not is_occurrence(anchor, frequency, due_date):
+                return True
+            if due_date < today:
+                return False
+            earlier = occurrences_between(anchor, frequency, today, due_date - timedelta(days=1))
+            return any(occurrence not in settled for occurrence in earlier)
+
+        stale_ids = [payment["id"] for payment in pending if is_stale(payment["due_date"])]
+        if stale_ids:
+            cur.execute("DELETE FROM finance_recurring_bill_payments WHERE id = ANY(%s::uuid[])", (stale_ids,))
+
+    @staticmethod
+    def _ensure_pending_payment(
+        cur: psycopg.Cursor[dict[str, Any]], bill: dict[str, Any], *, not_before: date
+    ) -> date:
+        """Guarantee the bill has a pending occurrence and return its due date.
+
+        The schema's design is ONE pending row per bill at a time (0008), so
+        when one already exists (the earliest wins) nothing is created.
+        Otherwise the new row is the earliest schedule date on or after
+        ``not_before`` that has no row yet -- skipping dates that already
+        exist as paid/skipped history, so settling an old occurrence never
+        collides with a later one that was settled first. Dates always come
+        from the anchor (``brain.finance.recurrence``), never by chaining."""
+        cur.execute(
+            "SELECT min(due_date) AS due_date FROM finance_recurring_bill_payments "
+            "WHERE bill_id = %s AND status = 'pending'",
+            (bill["id"],),
+        )
+        existing_pending = cur.fetchone()["due_date"]
+        if existing_pending is not None:
+            return existing_pending
+
+        cur.execute(
+            "SELECT due_date FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date >= %s",
+            (bill["id"], not_before),
+        )
+        taken = {payment["due_date"] for payment in cur.fetchall()}
+        anchor, frequency = bill["anchor_due_date"], bill["frequency"]
+        due_date = occurrence_on_or_after(anchor, frequency, not_before)
+        while due_date in taken:
+            due_date = occurrence_after(anchor, frequency, due_date)
+        cur.execute(
+            "INSERT INTO finance_recurring_bill_payments (bill_id, due_date) VALUES (%s, %s) "
+            "ON CONFLICT (bill_id, due_date) DO NOTHING",
+            (bill["id"], due_date),
+        )
+        return due_date
+
+    def upsert_finance_recurring_bill_payment(self, row: dict[str, Any]) -> dict[str, Any] | None:
         """Upsert one occurrence by its natural key (``bill_id``,
         ``due_date``) -- the unique index this targets is
-        ``finance_recurring_bill_payments_occurrence_key`` from 0008."""
-        self._upsert_batch(
-            "finance_recurring_bill_payments", [row], conflict_cols=("bill_id", "due_date")
-        )
+        ``finance_recurring_bill_payments_occurrence_key`` from 0008 -- and,
+        when it is settled (``paid`` or ``skipped``) on an ACTIVE bill, create
+        the bill's NEXT pending occurrence: the earliest schedule date
+        strictly after the settled one, even if that date is already past (a
+        genuinely unpaid occurrence stays visible as overdue). One
+        transaction; the bill row is locked so concurrent saves/settlements of
+        the same bill serialize.
+
+        Idempotent: repeating the same call keeps the original ``paid_at`` and
+        creates nothing new. ``None`` when the bill does not exist. No ledger
+        transaction is created; ``transaction_id`` is only an optional link."""
         with self._cursor() as cur:
+            cur.execute("SELECT * FROM finance_recurring_bills WHERE id = %s FOR UPDATE", (row["bill_id"],))
+            bill = cur.fetchone()
+            if bill is None:
+                return None
+
+            cur.execute(
+                "SELECT status FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date = %s",
+                (row["bill_id"], row["due_date"]),
+            )
+            stored = cur.fetchone()
+            if stored is not None and stored["status"] == "paid" and row.get("status") == "paid":
+                row = {column: value for column, value in row.items() if column != "paid_at"}
+
+            self._upsert_batch_on(cur, "finance_recurring_bill_payments", [row], ("bill_id", "due_date"))
             cur.execute(
                 "SELECT * FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date = %s",
                 (row["bill_id"], row["due_date"]),
             )
-            return cur.fetchone()
+            payment = cur.fetchone()
+            if payment["status"] in ("paid", "skipped") and bill["is_active"]:
+                self._ensure_pending_payment(
+                    cur, bill, not_before=payment["due_date"] + timedelta(days=1)
+                )
+            return payment
 
     def get_finance_goals(self) -> list[dict[str, Any]]:
         with self._cursor() as cur:

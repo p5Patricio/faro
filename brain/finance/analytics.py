@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from brain.finance.currency import base_amount_cents
+from brain.finance.recurrence import occurrences_between
 
 
 # The book's 50/30/20 rule: every expense category is bucketed into exactly
@@ -196,37 +197,86 @@ def compute_subscription_total(recurring_bills: list[dict[str, Any]]) -> dict[st
     }
 
 
+def _as_date(value: date | str) -> date:
+    return date.fromisoformat(value) if isinstance(value, str) else value
+
+
+def _round_half_up_div(numerator: int, denominator: int) -> int:
+    """``numerator / denominator`` rounded half up, in integers only -- money
+    never goes through a float on its way to a cents figure."""
+    return (2 * numerator + denominator) // (2 * denominator)
+
+
 def compute_cash_flow_forecast(
     pending_bill_payments: list[dict[str, Any]],
     avg_monthly_income_cents: int,
     horizon_days: int = 30,
+    *,
+    today: date,
 ) -> dict[str, Any]:
     """A NAIVE LINEAR projection, not a real forecasting model: income is
     smeared evenly across the horizon (``avg_monthly_income_cents *
-    horizon_days / 30``), and only bills with an already-scheduled pending
-    payment inside the horizon count as committed outflow -- discretionary
-    spending is not projected at all, by design (this is a bills-committed
-    view, not a full budget forecast). Every ``amount_cents`` passed in (and
-    the income average) must already be in the base currency; the caller
-    converts with ``base_amount_cents`` and drops what it cannot convert."""
-    expected_income_cents = avg_monthly_income_cents * horizon_days / 30
+    horizon_days / 30``, rounded half up to whole cents), and only bills
+    count as committed outflow -- discretionary spending is not projected at
+    all, by design (this is a bills-committed view, not a full budget
+    forecast). ``today`` is injected (the router passes the machine-local
+    date) so the function has no clock and is testable.
 
-    today = date.today()
+    Each entry of ``pending_bill_payments`` is one active bill's NEXT pending
+    occurrence: ``due_date``, ``amount_cents``, plus the bill's
+    ``anchor_due_date`` and ``frequency`` (needed to expand later
+    occurrences). Every amount (and the income average) must already be in the
+    base currency; the caller converts with ``base_amount_cents`` and drops
+    what it cannot convert.
+
+    Committed outflow, per bill, up to ``today + horizon_days`` (inclusive):
+
+    * a pending occurrence already due before ``today`` is OVERDUE: it is still
+      owed, so it counts once, and is also broken out as ``overdue_bills_*``;
+    * a pending occurrence due inside the horizon counts once;
+    * every LATER occurrence of the bill's schedule that falls inside the
+      horizon counts too (a weekly bill contributes four or five payments in
+      30 days, a monthly one usually one, an annual one usually none).
+
+    ``committed_bills_cents`` includes the overdue amount; the ``overdue_*``
+    fields are a breakdown, not an extra charge. Occurrences that were missed
+    between an overdue row and ``today`` have no row and are not projected:
+    the overdue row is what the user has to settle first.
+    """
     horizon_end = today + timedelta(days=horizon_days)
-    committed_bills_cents = 0
-    for payment in pending_bill_payments:
-        due_date = payment["due_date"]
-        if isinstance(due_date, str):
-            due_date = date.fromisoformat(due_date)
-        if today <= due_date <= horizon_end:
-            committed_bills_cents += payment["amount_cents"]
+    expected_income_cents = _round_half_up_div(avg_monthly_income_cents * horizon_days, 30)
 
-    projected_net_cents = expected_income_cents - committed_bills_cents
+    overdue_bills_cents = 0
+    overdue_bills_count = 0
+    upcoming_bills_cents = 0
+    for payment in pending_bill_payments:
+        due_date = _as_date(payment["due_date"])
+        if due_date > horizon_end:
+            continue
+
+        amount_cents = payment["amount_cents"]
+        if due_date < today:
+            overdue_bills_cents += amount_cents
+            overdue_bills_count += 1
+        else:
+            upcoming_bills_cents += amount_cents
+
+        later_occurrences = occurrences_between(
+            _as_date(payment["anchor_due_date"]),
+            payment["frequency"],
+            max(today, due_date + timedelta(days=1)),
+            horizon_end,
+        )
+        upcoming_bills_cents += amount_cents * len(later_occurrences)
+
+    committed_bills_cents = overdue_bills_cents + upcoming_bills_cents
     return {
         "horizon_days": horizon_days,
         "expected_income_cents": expected_income_cents,
         "committed_bills_cents": committed_bills_cents,
-        "projected_net_cents": projected_net_cents,
+        "overdue_bills_cents": overdue_bills_cents,
+        "overdue_bills_count": overdue_bills_count,
+        "projected_net_cents": expected_income_cents - committed_bills_cents,
     }
 
 

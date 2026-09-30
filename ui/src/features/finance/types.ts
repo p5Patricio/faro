@@ -258,7 +258,11 @@ export interface CashFlowForecastSummary {
   data_sufficient: boolean;
   horizon_days: number;
   expected_income_cents: number;
+  // Every bill payment due up to the horizon end, INCLUDING the overdue ones.
   committed_bills_cents: number;
+  // Breakdown of `committed_bills_cents`: pending payments already past due.
+  overdue_bills_cents: number;
+  overdue_bills_count: number;
   projected_net_cents: number;
 }
 

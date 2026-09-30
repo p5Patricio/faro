@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
+
+import pytest
 
 from brain.finance.analytics import (
     annualize_recurring_bill_amount,
@@ -225,27 +227,175 @@ def test_compute_subscription_total_empty_list_is_all_zero() -> None:
 # -- compute_cash_flow_forecast -------------------------------------------
 
 
+TODAY = date(2026, 9, 29)  # a Tuesday; a 30-day horizon therefore ends on 2026-10-29
+
+
+def _pending(due: date | str, amount_cents: int, *, anchor: date, frequency: str) -> dict[str, object]:
+    """One active bill's next pending occurrence, as the router builds it."""
+    return {"due_date": due, "amount_cents": amount_cents, "anchor_due_date": anchor, "frequency": frequency}
+
+
 def test_compute_cash_flow_forecast_counts_only_bills_due_within_horizon() -> None:
-    today = date.today()
     pending = [
-        {"due_date": (today + timedelta(days=5)).isoformat(), "amount_cents": 30_000},
-        {"due_date": (today + timedelta(days=45)).isoformat(), "amount_cents": 99_999},  # outside 30-day horizon
+        _pending("2026-10-04", 30_000, anchor=date(2025, 10, 4), frequency="annual"),
+        # Outside the 30-day horizon.
+        _pending("2026-11-13", 99_999, anchor=date(2026, 11, 13), frequency="annual"),
     ]
 
-    result = compute_cash_flow_forecast(pending, avg_monthly_income_cents=300_000, horizon_days=30)
+    result = compute_cash_flow_forecast(pending, avg_monthly_income_cents=300_000, horizon_days=30, today=TODAY)
 
     assert result["horizon_days"] == 30
     assert result["expected_income_cents"] == 300_000
     assert result["committed_bills_cents"] == 30_000
+    assert result["overdue_bills_cents"] == 0
+    assert result["overdue_bills_count"] == 0
     assert result["projected_net_cents"] == 270_000
 
 
 def test_compute_cash_flow_forecast_handles_no_pending_bills() -> None:
-    result = compute_cash_flow_forecast([], avg_monthly_income_cents=0, horizon_days=30)
+    result = compute_cash_flow_forecast([], avg_monthly_income_cents=0, horizon_days=30, today=TODAY)
 
     assert result["committed_bills_cents"] == 0
+    assert result["overdue_bills_cents"] == 0
+    assert result["overdue_bills_count"] == 0
     assert result["expected_income_cents"] == 0
     assert result["projected_net_cents"] == 0
+
+
+def test_compute_cash_flow_forecast_takes_today_as_a_required_keyword() -> None:
+    with pytest.raises(TypeError):
+        compute_cash_flow_forecast([], 0, 30)  # type: ignore[call-arg]
+
+
+def test_compute_cash_flow_forecast_result_depends_on_the_injected_today_only() -> None:
+    pending = [_pending("2026-10-05", 10_000, anchor=date(2026, 9, 5), frequency="monthly")]
+
+    inside = compute_cash_flow_forecast(pending, 0, 30, today=date(2026, 9, 29))
+    overdue = compute_cash_flow_forecast(pending, 0, 30, today=date(2026, 10, 20))
+    outside = compute_cash_flow_forecast(pending, 0, 30, today=date(2026, 9, 1))
+
+    assert (inside["committed_bills_cents"], inside["overdue_bills_cents"]) == (10_000, 0)
+    # Due 15 days ago is overdue, and the next monthly occurrence (Nov 5) is in the window.
+    assert (overdue["committed_bills_cents"], overdue["overdue_bills_cents"]) == (20_000, 10_000)
+    # Sep 1 + 30 days ends Oct 1: the Oct 5 occurrence is past the horizon.
+    assert (outside["committed_bills_cents"], outside["overdue_bills_cents"]) == (0, 0)
+
+
+def test_compute_cash_flow_forecast_expands_a_weekly_bill_into_every_occurrence_in_the_horizon() -> None:
+    five = [_pending("2026-09-30", 10_000, anchor=date(2026, 9, 2), frequency="weekly")]
+    four = [_pending("2026-10-02", 10_000, anchor=date(2026, 9, 4), frequency="weekly")]
+
+    # Sep 30, Oct 7, 14, 21, 28 -- the horizon end (Oct 29) is inclusive.
+    assert compute_cash_flow_forecast(five, 0, 30, today=TODAY)["committed_bills_cents"] == 5 * 10_000
+    # Oct 2, 9, 16, 23 -- the next one, Oct 30, is one day past the horizon.
+    assert compute_cash_flow_forecast(four, 0, 30, today=TODAY)["committed_bills_cents"] == 4 * 10_000
+
+
+def test_compute_cash_flow_forecast_expands_a_biweekly_bill() -> None:
+    pending = [_pending("2026-10-01", 20_000, anchor=date(2026, 9, 3), frequency="biweekly")]
+
+    # Oct 1, 15, 29.
+    assert compute_cash_flow_forecast(pending, 0, 30, today=TODAY)["committed_bills_cents"] == 3 * 20_000
+
+
+def test_compute_cash_flow_forecast_counts_a_monthly_bill_once_and_an_annual_bill_usually_zero() -> None:
+    monthly = [_pending("2026-10-05", 30_000, anchor=date(2026, 1, 5), frequency="monthly")]
+    annual_far = [_pending("2027-03-01", 60_000, anchor=date(2026, 3, 1), frequency="annual")]
+    annual_near = [_pending("2026-10-20", 60_000, anchor=date(2025, 10, 20), frequency="annual")]
+
+    assert compute_cash_flow_forecast(monthly, 0, 30, today=TODAY)["committed_bills_cents"] == 30_000
+    assert compute_cash_flow_forecast(annual_far, 0, 30, today=TODAY)["committed_bills_cents"] == 0
+    assert compute_cash_flow_forecast(annual_near, 0, 30, today=TODAY)["committed_bills_cents"] == 60_000
+
+
+def test_compute_cash_flow_forecast_counts_an_overdue_payment_once_and_breaks_it_out() -> None:
+    pending = [_pending("2026-09-15", 30_000, anchor=date(2026, 1, 15), frequency="monthly")]
+
+    result = compute_cash_flow_forecast(pending, 300_000, 30, today=TODAY)
+
+    # The overdue Sep 15 payment is owed (counted once) and the Oct 15 one is coming.
+    assert result["overdue_bills_cents"] == 30_000
+    assert result["overdue_bills_count"] == 1
+    assert result["committed_bills_cents"] == 60_000
+    assert result["projected_net_cents"] == 240_000
+
+
+def test_compute_cash_flow_forecast_does_not_project_occurrences_missed_before_an_overdue_row() -> None:
+    # Weekly, Thursdays. The row is Sep 17; Sep 24 was also missed but has no
+    # row of its own, so only the overdue row plus Oct 1, 8, 15, 22, 29 count.
+    pending = [_pending("2026-09-17", 10_000, anchor=date(2026, 9, 3), frequency="weekly")]
+
+    result = compute_cash_flow_forecast(pending, 0, 30, today=TODAY)
+
+    assert result["overdue_bills_count"] == 1
+    assert result["overdue_bills_cents"] == 10_000
+    assert result["committed_bills_cents"] == 6 * 10_000
+
+
+def test_compute_cash_flow_forecast_window_boundaries() -> None:
+    def committed(due: str) -> int:
+        return compute_cash_flow_forecast(
+            [_pending(due, 1_000, anchor=date.fromisoformat(due), frequency="annual")], 0, 30, today=TODAY
+        )["committed_bills_cents"]
+
+    assert committed("2026-09-28") == 1_000  # yesterday: overdue, still owed
+    assert committed("2026-09-29") == 1_000  # today: due, not overdue
+    assert committed("2026-10-29") == 1_000  # the horizon end is inclusive
+    assert committed("2026-10-30") == 0  # one day beyond
+
+    today_due = compute_cash_flow_forecast(
+        [_pending("2026-09-29", 1_000, anchor=date(2026, 9, 29), frequency="annual")], 0, 30, today=TODAY
+    )
+    assert today_due["overdue_bills_count"] == 0
+
+
+def test_compute_cash_flow_forecast_sums_several_bills_and_accepts_date_objects() -> None:
+    pending = [
+        _pending(date(2026, 10, 1), 10_000, anchor=date(2026, 9, 3), frequency="weekly"),
+        _pending("2026-10-05", 30_000, anchor=date(2026, 1, 5), frequency="monthly"),
+    ]
+
+    result = compute_cash_flow_forecast(pending, 500_000, 30, today=TODAY)
+
+    assert result["committed_bills_cents"] == 5 * 10_000 + 30_000
+    assert result["projected_net_cents"] == 500_000 - 80_000
+
+
+@pytest.mark.parametrize(
+    ("avg_income_cents", "horizon_days", "expected_cents"),
+    [
+        (100_001, 30, 100_001),
+        (100_001, 15, 50_001),  # 50,000.5 rounds half up
+        (1, 15, 1),  # 0.5
+        (1, 14, 0),  # 0.466...
+        (3, 10, 1),  # 1.0
+        (7, 10, 2),  # 2.33...
+        (0, 30, 0),
+    ],
+)
+def test_compute_cash_flow_forecast_income_projection_is_whole_cents_rounded_half_up(
+    avg_income_cents: int, horizon_days: int, expected_cents: int
+) -> None:
+    result = compute_cash_flow_forecast([], avg_income_cents, horizon_days, today=TODAY)
+
+    assert result["expected_income_cents"] == expected_cents
+
+
+def test_compute_cash_flow_forecast_returns_integer_cents_only() -> None:
+    pending = [_pending("2026-09-15", 33_333, anchor=date(2026, 1, 15), frequency="monthly")]
+
+    result = compute_cash_flow_forecast(pending, 100_001, 45, today=TODAY)
+
+    for key in (
+        "horizon_days",
+        "expected_income_cents",
+        "committed_bills_cents",
+        "overdue_bills_cents",
+        "overdue_bills_count",
+        "projected_net_cents",
+    ):
+        assert type(result[key]) is int, key
+    assert result["projected_net_cents"] == result["expected_income_cents"] - result["committed_bills_cents"]
 
 
 # -- compute_category_trend -----------------------------------------------

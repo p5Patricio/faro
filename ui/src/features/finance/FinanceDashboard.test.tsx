@@ -45,6 +45,8 @@ const EMPTY_SUMMARY = {
     horizon_days: 30,
     expected_income_cents: 0,
     committed_bills_cents: 0,
+    overdue_bills_cents: 0,
+    overdue_bills_count: 0,
     projected_net_cents: 0,
   },
 };

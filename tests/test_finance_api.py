@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import date
 from typing import Any
 
 import psycopg
@@ -9,6 +10,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app, get_repository
+from api.routers import finance as finance_router
 from collector.local_repository import LocalPostgresRepository
 
 MakeAccount = Callable[[str, str], str]
@@ -857,6 +859,323 @@ def test_summary_counts_but_does_not_add_a_foreign_transaction_without_a_base_am
 
     assert summary["expense_cents"] == 100_000
     assert summary["unconverted_transactions"] == 1
+
+
+# -- Recurring-bill lifecycle and forecast ------------------------------------------
+
+BILLS_URL = "/api/finance/recurring-bills"
+PAYMENTS_URL = "/api/finance/recurring-bills/payments"
+SUMMARY_URL = "/api/finance/summary"
+
+
+@pytest.fixture()
+def pin_today(monkeypatch: pytest.MonkeyPatch) -> Callable[[date], None]:
+    """Pin the router's machine-local clock (a Tuesday by default). Returns a
+    function that moves it, so one test can walk through several days."""
+
+    def _pin(day: date) -> None:
+        monkeypatch.setattr(finance_router, "_today", lambda: day)
+
+    _pin(date(2026, 9, 29))
+    return _pin
+
+
+def _put_bill(client: TestClient, **overrides: Any) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "name": "Netflix",
+        "amount_cents": 19_900,
+        "currency": "MXN",
+        "frequency": "monthly",
+        "anchor_due_date": "2026-01-05",
+    }
+    body.update(overrides)
+    response = client.put(BILLS_URL, json=body)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _put_payment(client: TestClient, bill_id: str, due_date: str, status: str) -> dict[str, Any]:
+    response = client.put(PAYMENTS_URL, json={"bill_id": bill_id, "due_date": due_date, "status": status})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _listed_bill(client: TestClient, bill_id: str, **params: Any) -> dict[str, Any]:
+    return next(row for row in client.get(BILLS_URL, params=params).json() if row["id"] == bill_id)
+
+
+def _occurrence_rows(db_connection: psycopg.Connection, bill_id: str) -> list[tuple[str, str]]:
+    rows = db_connection.execute(
+        "SELECT due_date, status FROM finance_recurring_bill_payments WHERE bill_id = %s ORDER BY due_date",
+        (bill_id,),
+    ).fetchall()
+    return [(row[0].isoformat(), row[1]) for row in rows]
+
+
+def _forecast(client: TestClient) -> dict[str, Any]:
+    return client.get(SUMMARY_URL, params={"month": "2026-09"}).json()["cash_flow_forecast"]
+
+
+def test_creating_a_bill_generates_its_pending_occurrence(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    bill = _put_bill(finance_client)
+
+    # Anchor Jan 5 is long past: the first pending row is the next occurrence, not a stale overdue one.
+    assert bill["next_due_date"] == "2026-10-05"
+    assert bill["next_status"] == "pending"
+    listed = _listed_bill(finance_client, bill["id"])
+    assert listed["next_due_date"] == "2026-10-05"
+    assert listed["next_status"] == "pending"
+    assert _occurrence_rows(db_connection, bill["id"]) == [("2026-10-05", "pending")]
+
+
+def test_editing_the_schedule_replaces_a_stale_pending_row_but_not_paid_history(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    bill = _put_bill(finance_client)
+    _put_payment(finance_client, bill["id"], "2026-09-05", "paid")
+
+    edited = finance_client.put(
+        BILLS_URL,
+        json={
+            "id": bill["id"],
+            "name": "Netflix",
+            "amount_cents": 19_900,
+            "currency": "MXN",
+            "frequency": "monthly",
+            "anchor_due_date": "2026-01-12",
+        },
+    )
+
+    assert edited.status_code == 200
+    assert edited.json()["next_due_date"] == "2026-10-12"
+    assert _occurrence_rows(db_connection, bill["id"]) == [("2026-09-05", "paid"), ("2026-10-12", "pending")]
+
+
+def test_editing_an_annual_bill_to_monthly_moves_its_payment_into_the_forecast_window(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    body = {
+        "name": "Seguro",
+        "amount_cents": 90_000,
+        "currency": "MXN",
+        "frequency": "annual",
+        "anchor_due_date": "2026-01-15",
+    }
+    bill = finance_client.put(BILLS_URL, json=body).json()
+    assert bill["next_due_date"] == "2027-01-15"
+    assert _forecast(finance_client)["committed_bills_cents"] == 0
+
+    edited = finance_client.put(BILLS_URL, json={**body, "id": bill["id"], "frequency": "monthly"}).json()
+
+    assert edited["next_due_date"] == "2026-10-15"
+    assert _forecast(finance_client)["committed_bills_cents"] == 90_000
+
+
+def test_marking_paid_creates_exactly_one_next_pending_occurrence_and_repeating_it_changes_nothing(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    bill = _put_bill(finance_client)
+
+    first = _put_payment(finance_client, bill["id"], "2026-10-05", "paid")
+    second = _put_payment(finance_client, bill["id"], "2026-10-05", "paid")
+
+    assert first["status"] == "paid"
+    assert first["paid_at"] is not None
+    assert second["paid_at"] == first["paid_at"]
+    assert _occurrence_rows(db_connection, bill["id"]) == [("2026-10-05", "paid"), ("2026-11-05", "pending")]
+    assert _listed_bill(finance_client, bill["id"])["next_due_date"] == "2026-11-05"
+
+
+def test_marking_skipped_behaves_like_paid_for_the_next_occurrence(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    bill = _put_bill(finance_client)
+
+    first = _put_payment(finance_client, bill["id"], "2026-10-05", "skipped")
+    _put_payment(finance_client, bill["id"], "2026-10-05", "skipped")
+
+    assert first["paid_at"] is None
+    assert _occurrence_rows(db_connection, bill["id"]) == [("2026-10-05", "skipped"), ("2026-11-05", "pending")]
+
+
+def test_settling_a_past_occurrence_leaves_the_next_one_visible_as_overdue(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    pin_today(date(2026, 7, 1))
+    bill = _put_bill(finance_client, anchor_due_date="2026-07-15")
+    pin_today(date(2026, 9, 29))
+
+    _put_payment(finance_client, bill["id"], "2026-07-15", "paid")
+
+    # Aug 15 is past but was never paid: it is the bill's pending occurrence, overdue.
+    assert _listed_bill(finance_client, bill["id"])["next_due_date"] == "2026-08-15"
+
+
+def test_marking_a_bill_paid_creates_no_ledger_transaction(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    bill = _put_bill(finance_client)
+
+    _put_payment(finance_client, bill["id"], "2026-10-05", "paid")
+
+    assert finance_client.get(TRANSACTIONS_URL).json() == []
+
+
+def test_a_deactivated_bill_leaves_the_list_and_the_forecast(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    bill = _put_bill(finance_client)
+    assert _forecast(finance_client)["committed_bills_cents"] == 19_900
+
+    deactivated = finance_client.put(
+        BILLS_URL,
+        json={
+            "id": bill["id"],
+            "name": "Netflix",
+            "amount_cents": 19_900,
+            "currency": "MXN",
+            "frequency": "monthly",
+            "anchor_due_date": "2026-01-05",
+            "is_active": False,
+        },
+    )
+
+    assert deactivated.status_code == 200
+    assert all(row["id"] != bill["id"] for row in finance_client.get(BILLS_URL).json())
+    assert _listed_bill(finance_client, bill["id"], include_inactive=True)["is_active"] is False
+    assert _forecast(finance_client)["committed_bills_cents"] == 0
+    summary = finance_client.get(SUMMARY_URL, params={"month": "2026-09"}).json()
+    assert summary["subscriptions"]["bills"] == []
+
+
+def test_the_payment_route_returns_404_for_an_unknown_bill(finance_client: TestClient) -> None:
+    response = finance_client.put(
+        PAYMENTS_URL, json={"bill_id": str(uuid.uuid4()), "due_date": "2026-10-05", "status": "paid"}
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize("bad_date", ["not-a-date", "2026-13-40", ""])
+def test_recurring_bill_routes_reject_an_invalid_date_with_422(
+    finance_client: TestClient, pin_today: Callable[[date], None], bad_date: str
+) -> None:
+    bill = _put_bill(finance_client)
+
+    bad_anchor = finance_client.put(
+        BILLS_URL,
+        json={
+            "name": "Luz",
+            "amount_cents": 8_000,
+            "currency": "MXN",
+            "frequency": "monthly",
+            "anchor_due_date": bad_date,
+        },
+    )
+    bad_due = finance_client.put(
+        PAYMENTS_URL, json={"bill_id": bill["id"], "due_date": bad_date, "status": "paid"}
+    )
+
+    assert bad_anchor.status_code == 422
+    assert bad_due.status_code == 422
+
+
+def test_an_active_bill_without_a_pending_row_still_has_a_next_due_date_and_can_be_paid(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    """A bill written before occurrences were generated (or inserted by hand):
+    the list and the forecast derive its next date read-only, and paying that
+    date persists it and creates the next one."""
+    bill_id = str(
+        db_connection.execute(
+            "INSERT INTO finance_recurring_bills (name, amount_cents, currency, frequency, anchor_due_date) "
+            "VALUES ('Legado', 5000, 'MXN', 'monthly', '2026-01-05') RETURNING id"
+        ).fetchone()[0]
+    )
+
+    assert _listed_bill(finance_client, bill_id)["next_due_date"] == "2026-10-05"
+    assert _forecast(finance_client)["committed_bills_cents"] == 5_000
+    assert _occurrence_rows(db_connection, bill_id) == []
+
+    _put_payment(finance_client, bill_id, "2026-10-05", "paid")
+
+    assert _occurrence_rows(db_connection, bill_id) == [("2026-10-05", "paid"), ("2026-11-05", "pending")]
+    assert _listed_bill(finance_client, bill_id)["next_due_date"] == "2026-11-05"
+
+
+# -- Forecast through the API ----------------------------------------------------------
+
+
+def test_summary_forecast_counts_a_monthly_bill_once_and_an_annual_bill_outside_the_horizon_zero_times(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    _put_bill(finance_client, name="Netflix", amount_cents=19_900, frequency="monthly", anchor_due_date="2026-01-05")
+    _put_bill(finance_client, name="Seguro", amount_cents=900_000, frequency="annual", anchor_due_date="2026-03-01")
+
+    forecast = _forecast(finance_client)
+
+    assert forecast["committed_bills_cents"] == 19_900
+    assert forecast["overdue_bills_cents"] == 0
+    assert forecast["overdue_bills_count"] == 0
+
+
+def test_summary_forecast_reports_overdue_bills_separately_and_includes_them_in_committed(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    pin_today(date(2026, 8, 20))
+    _put_bill(finance_client, name="Renta", amount_cents=100_000, frequency="monthly", anchor_due_date="2026-01-15")
+    pin_today(date(2026, 9, 29))
+
+    forecast = _forecast(finance_client)
+
+    # Sep 15 is overdue (owed once) and Oct 15 falls inside the 30-day window.
+    assert forecast["overdue_bills_cents"] == 100_000
+    assert forecast["overdue_bills_count"] == 1
+    assert forecast["committed_bills_cents"] == 200_000
+    assert forecast["projected_net_cents"] == forecast["expected_income_cents"] - 200_000
+
+
+def test_summary_forecast_payload_is_integer_cents(
+    finance_client: TestClient, pin_today: Callable[[date], None]
+) -> None:
+    _put_bill(finance_client, amount_cents=33_333, frequency="weekly", anchor_due_date="2026-09-02")
+
+    forecast = _forecast(finance_client)
+
+    for key in (
+        "expected_income_cents",
+        "committed_bills_cents",
+        "overdue_bills_cents",
+        "overdue_bills_count",
+        "projected_net_cents",
+    ):
+        assert type(forecast[key]) is int, key
+
+
+def test_runtime_scenario_a_weekly_bill_flows_through_the_forecast_and_advances_when_paid(
+    finance_client: TestClient, db_connection: psycopg.Connection, pin_today: Callable[[date], None]
+) -> None:
+    """End to end through the real HTTP stack and SQL, with the clock pinned
+    to Tuesday 2026-09-29 (30-day horizon ends 2026-10-29): create a weekly
+    bill, read the forecast, pay the pending occurrence, and watch the next
+    due date move exactly one week."""
+    amount_cents = 15_000
+    bill = _put_bill(
+        finance_client, name="Gimnasio", amount_cents=amount_cents, frequency="weekly", anchor_due_date="2026-09-02"
+    )
+
+    # Wednesdays: Sep 30, Oct 7, 14, 21, 28 -> five occurrences inside the horizon.
+    assert bill["next_due_date"] == "2026-09-30"
+    assert _forecast(finance_client)["committed_bills_cents"] == 5 * amount_cents
+
+    _put_payment(finance_client, bill["id"], "2026-09-30", "paid")
+
+    assert _listed_bill(finance_client, bill["id"])["next_due_date"] == "2026-10-07"
+    assert _occurrence_rows(db_connection, bill["id"]) == [("2026-09-30", "paid"), ("2026-10-07", "pending")]
+    # Oct 7, 14, 21, 28 remain.
+    assert _forecast(finance_client)["committed_bills_cents"] == 4 * amount_cents
 
 
 # -- repository is None -> 503 (matching PUT /api/risk-profile's pattern) ----
