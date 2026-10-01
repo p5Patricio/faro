@@ -671,6 +671,36 @@ class LocalPostgresRepository:
             cur.execute(query, (asset_id,))
             return cur.fetchone()
 
+    # -- Market caps (db/migrations/0015_asset_market_caps.sql) ----------------
+
+    def insert_asset_market_cap(self, asset_id: str, market_cap: float, currency: str, source: str) -> None:
+        """Append one market-cap reading (a new row per fetch, never an overwrite).
+        ``clock_timestamp()`` rather than the column default ``now()``, which is
+        frozen per transaction and would collide on the ``(asset_id, fetched_at)``
+        key for two readings inside one transaction."""
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO asset_market_caps (asset_id, fetched_at, market_cap, currency, source) "
+                "VALUES (%s, clock_timestamp(), %s, %s, %s)",
+                (asset_id, market_cap, currency, source),
+            )
+
+    def get_latest_market_caps(self, asset_ids: list[str]) -> dict[str, float]:
+        """Latest stored market cap per asset, in ONE query (assets without a row
+        are absent). Returns ``{}`` while ``asset_market_caps`` does not exist yet
+        (migration 0015 not applied), so the heatmap keeps serving its flagged
+        placeholder estimate instead of failing."""
+        if not asset_ids or not self.relation_exists("asset_market_caps"):
+            return {}
+        query = (
+            "SELECT DISTINCT ON (asset_id) asset_id, market_cap FROM asset_market_caps "
+            "WHERE asset_id = ANY(%s) ORDER BY asset_id, fetched_at DESC"
+        )
+        with self._cursor() as cur:
+            cur.execute(query, (list(asset_ids),))
+            rows = cur.fetchall()
+        return {row["asset_id"]: float(row["market_cap"]) for row in rows}
+
     # -- Model runs / predictions --------------------------------------------
 
     def create_model_run(

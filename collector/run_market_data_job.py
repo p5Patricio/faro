@@ -16,8 +16,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--assets-file", help="JSON file with asset collection configs")
     parser.add_argument(
         "--markets-file",
-        help="Universe document of market-context instruments (indices/FX/commodities/yields): "
-        "collected next to --assets-file, never materialized",
+        action="append",
+        help="Universe document of price-only instruments (market-context indices/FX/commodities/yields, "
+        "or the Mexican/Canadian heatmap stocks): collected next to --assets-file, never materialized. "
+        "Repeat the flag for several files",
     )
     parser.add_argument("--tickers", help="Comma-separated tickers to process")
     parser.add_argument("--start", help="Override start date for collection")
@@ -46,8 +48,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     configs = load_asset_configs(args.assets_file)
-    if args.markets_file:
-        configs = [*configs, *load_asset_configs(args.markets_file)]
+    for markets_file in args.markets_file or []:
+        configs = [*configs, *load_asset_configs(markets_file)]
     assets = apply_date_overrides(configs, start=args.start, end=args.end)
     with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
         repository = LocalPostgresRepository(connection=connection)

@@ -8,7 +8,7 @@ from brain.materialize_dataset import MaterializationConfig, materialize_asset_d
 from collector.main import AssetCollectionConfig, ProviderFactory, collect_asset
 from collector.local_repository import LocalPostgresRepository
 from collector.providers import get_provider
-from collector.universe import MARKET_ASSET_CLASSES
+from collector.universe import PRICE_ONLY_ASSET_CLASSES
 
 
 def run_market_data_job(
@@ -38,11 +38,12 @@ def run_market_data_job(
 
     selected_assets = filter_assets(assets, materialize_tickers)
 
-    # Market-context instruments (indices, FX, commodities, yields) are price-
-    # collected like everything else but are never ML targets: they are left out
-    # of analyst consensus and materialization, even when named via --tickers.
+    # Market-context instruments (indices, FX, commodities, yields) and the
+    # Mexican/Canadian heatmap stocks are price-collected like everything else but
+    # are never ML targets: they are left out of analyst consensus and
+    # materialization, even when named via --tickers.
     market_tickers = {
-        asset.asset_ticker.upper() for asset in assets if (asset.asset_class or "").lower() in MARKET_ASSET_CLASSES
+        asset.asset_ticker.upper() for asset in assets if (asset.asset_class or "").lower() in PRICE_ONLY_ASSET_CLASSES
     }
     model_assets = [asset for asset in selected_assets if asset.asset_ticker.upper() not in market_tickers]
     tickers_to_materialize = [

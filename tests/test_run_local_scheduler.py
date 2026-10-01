@@ -136,7 +136,8 @@ def test_run_step_never_invokes_subprocess_with_shell_true(tmp_path: Path) -> No
         ("retraining", ["retraining"]),
         # The daily cycles also refresh the macro series, last (non-fatal).
         ("full", ["market_data", "inference", "paper_trading", "macro"]),
-        ("full_retrain", ["market_data", "retraining", "inference", "paper_trading", "macro"]),
+        # Only the weekly cycle also stores the heatmap's market caps, after macro (non-fatal).
+        ("full_retrain", ["market_data", "retraining", "inference", "paper_trading", "macro", "market_cap"]),
     ],
 )
 def test_steps_for_job_mirrors_retired_workflow_job_mode(job: str, expected_steps: list[str]) -> None:
@@ -278,6 +279,32 @@ def test_run_treats_a_failing_macro_step_as_non_fatal(tmp_path: Path) -> None:
     assert exit_code == 0
     assert captured_notify_argv[captured_notify_argv.index("--status") + 1] == "success"
     assert "--failed-steps" not in captured_notify_argv
+
+
+def test_run_treats_a_failing_market_cap_step_as_non_fatal(tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    class _Completed:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_runner(argv: list[str], **kwargs: object) -> _Completed:
+        calls.append(argv[2])
+        return _Completed(1 if argv[2] == "collector.run_market_cap_job" else 0)
+
+    exit_code = run(parse_args(["--job", "full_retrain"]), cwd=tmp_path, runner=fake_runner)
+
+    assert "collector.run_market_cap_job" in calls
+    assert exit_code == 0
+
+
+def test_market_data_argv_collects_the_price_only_heatmap_universes() -> None:
+    argv = build_market_data_argv(parse_args(["--job", "market_data"]), Path("reports"))
+
+    markets_files = [argv[i + 1] for i, item in enumerate(argv) if item == "--markets-file"]
+    assert markets_files == ["config/universe.markets.json", "config/universe.mx.json", "config/universe.ca.json"]
 
 
 def test_run_writes_inference_report_with_the_dispatcher_expected_filename(tmp_path: Path) -> None:

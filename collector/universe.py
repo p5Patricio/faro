@@ -3,13 +3,36 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 # Market-context instruments (config/universe.markets.json): collected and shown
 # on the markets overview, but never ML targets -- the daily job skips their
 # materialization and the ticker-picker listing hides them.
 MARKET_ASSET_CLASSES = frozenset({"index", "fx", "commodity", "yield"})
+
+# Everything that is collected for its prices only: the market-context
+# instruments above plus the Mexican and Canadian heatmap stocks
+# (config/universe.mx.json, config/universe.ca.json). None of them is an ML
+# target, so the daily job skips their materialization and consensus and the
+# ticker picker hides them. The markets overview keeps using
+# MARKET_ASSET_CLASSES, so these stocks never show up there.
+PRICE_ONLY_ASSET_CLASSES = MARKET_ASSET_CLASSES | frozenset({"stock_mx", "stock_ca"})
+
+
+class HeatmapMarket(NamedTuple):
+    universe_file: str
+    asset_class: str
+    currency: str
+
+
+# The markets covered by the heatmap (`GET /api/heatmap?market=`) and by the
+# market-cap job, in display order.
+HEATMAP_MARKETS: dict[str, HeatmapMarket] = {
+    "us": HeatmapMarket("config/universe.sp100.json", "stock", "USD"),
+    "mx": HeatmapMarket("config/universe.mx.json", "stock_mx", "MXN"),
+    "ca": HeatmapMarket("config/universe.ca.json", "stock_ca", "CAD"),
+}
 
 
 @dataclass(frozen=True)

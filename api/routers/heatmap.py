@@ -26,18 +26,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from api.main import get_app_config, get_repository
 from app_config import AppConfig
 from collector.local_repository import LocalPostgresRepository
-from collector.universe import load_universe_document
+from collector.universe import HEATMAP_MARKETS, HeatmapMarket, load_universe_document
 
 router = APIRouter()
 
 logger = logging.getLogger("faro.api")
 
-DEFAULT_UNIVERSE_FILE = "config/universe.sp100.json"
-
 # Fallback used only if config/universe.sp100.json itself can't be read (it
 # is checked into the repo, so this should never trigger in practice) --
 # mirrors api/main.py's demo_assets() in spirit: a tiny, clearly-synthetic
 # set so the endpoint still renders something instead of an empty page.
+# The Mexican and Canadian universes have no such fallback: they render empty.
 _FALLBACK_DEMO_MEMBERS: tuple[dict[str, str], ...] = (
     {"ticker": "AAPL", "name": "Apple Inc."},
     {"ticker": "MSFT", "name": "Microsoft Corp."},
@@ -50,7 +49,9 @@ _FALLBACK_DEMO_MEMBERS: tuple[dict[str, str], ...] = (
 # about what business each company is in -- NOT sourced from the database,
 # because neither `assets` nor `prices` stores a sector column (see
 # db/migrations/0001_core_market.sql). Keep in sync manually if the
-# universe snapshot's membership changes.
+# universe snapshot's membership changes. The Mexican and Canadian universes
+# carry their own `sector` per member instead (config/universe.mx.json,
+# config/universe.ca.json).
 SECTOR_BY_TICKER: dict[str, str] = {
     "AAPL": "Information Technology", "ABBV": "Health Care", "ABT": "Health Care",
     "ACN": "Information Technology", "ADBE": "Information Technology", "AMAT": "Information Technology",
@@ -118,23 +119,17 @@ def _ticker_seed(key: str) -> int:
 def _placeholder_market_cap(ticker: str, price: float) -> float:
     """PLACEHOLDER market-cap estimate -- NOT real data.
 
-    Real market capitalization (shares outstanding x price) is not stored
-    anywhere in this schema: `assets` has no `market_cap`/`shares_outstanding`
-    column (db/migrations/0001_core_market.sql), and `prices` is OHLCV-only.
-    A genuine figure would require reusing brain/fundamental_factors.py's
-    point-in-time SEC-XBRL concept-chain resolution (`shares_outstanding_mve`),
-    which is built for one-asset-at-a-time backtest research (fiscal-period
-    fallback, as-of cutoffs, restatement handling) -- not a cheap ~100-ticker
-    batch read for a live UI endpoint. Reusing it here would be exactly the
-    "new data-ingestion pipeline" this feature was told to avoid building.
+    Used only for a ticker with no stored real market cap (`asset_market_caps`,
+    db/migrations/0015_asset_market_caps.sql, filled weekly by
+    `collector.run_market_cap_job`): while that table is missing or empty, or
+    before the job has covered the ticker. `_tile` flags every such tile with
+    `market_cap_estimated: true`.
 
-    So: a deterministic, per-ticker pseudo share count (stable across
-    requests, NOT sourced from any real filing) scaled into a plausible
-    large-cap range (300M-15.3B shares), multiplied by the REAL latest close
-    price. This gives the treemap varied tile sizes instead of one flat
-    placeholder for every ticker, but the resulting number must never be
-    read as a real market cap -- a future phase should replace this with
-    ingested shares-outstanding data.
+    A deterministic, per-ticker pseudo share count (stable across requests,
+    NOT sourced from any real filing) scaled into a plausible large-cap range
+    (300M-15.3B shares), multiplied by the REAL latest close price. This gives
+    the treemap varied tile sizes instead of one flat placeholder for every
+    ticker, but the resulting number must never be read as a real market cap.
     """
     placeholder_shares = 300_000_000 + (_ticker_seed(f"{ticker}|shares") % 15_000_000_000)
     return round(price * placeholder_shares, 2)
@@ -149,37 +144,61 @@ def _synthetic_demo_change_pct(ticker: str) -> float:
     return round(((_ticker_seed(f"{ticker}|chg") % 1201) - 600) / 100, 2)
 
 
-def _tile(*, ticker: str, name: str, price: float, change_pct: float) -> dict:
+def _tile(
+    *,
+    ticker: str,
+    name: str,
+    sector: str,
+    price: float,
+    change_pct: float,
+    currency: str,
+    market_cap: float | None,
+) -> dict:
+    """`market_cap` is the latest stored real value; `None` means none is stored
+    yet, and the tile then carries the placeholder estimate, flagged."""
+    estimated = not market_cap
     return {
         "ticker": ticker,
         "name": name,
-        "sector": SECTOR_BY_TICKER.get(ticker, "Other"),
-        "market_cap": _placeholder_market_cap(ticker, price),
+        "sector": sector,
+        "market_cap": _placeholder_market_cap(ticker, price) if estimated else market_cap,
         "change_pct": round(change_pct, 4),
         "price": round(price, 4),
+        "currency": currency,
+        "market_cap_estimated": estimated,
     }
 
 
-def _tracked_us_tickers() -> frozenset[str]:
+def _members(market: HeatmapMarket) -> tuple[dict, ...]:
     try:
-        doc = load_universe_document(DEFAULT_UNIVERSE_FILE)
+        return load_universe_document(market.universe_file).members
     except (OSError, ValueError):
-        return frozenset()
-    return frozenset(str(member["ticker"]).upper() for member in doc.members)
+        return ()
 
 
-def _build_live_heatmap(repository: LocalPostgresRepository) -> list[dict]:
-    tracked_tickers = _tracked_us_tickers()
+def _sectors(market_key: str, members: tuple[dict, ...]) -> dict[str, str]:
+    if market_key == "us":
+        return SECTOR_BY_TICKER
+    return {str(member["ticker"]).upper(): str(member.get("sector") or "Other") for member in members}
+
+
+def _build_live_heatmap(repository: LocalPostgresRepository, market_key: str) -> list[dict]:
+    market = HEATMAP_MARKETS[market_key]
+    members = _members(market)
+    tracked_tickers = frozenset(str(member["ticker"]).upper() for member in members)
+    sectors = _sectors(market_key, members)
     assets = [
         asset
         for asset in repository.get_assets()
-        if (asset.get("asset_class") or "").lower() == "stock"
+        if (asset.get("asset_class") or "").lower() == market.asset_class
         and (not tracked_tickers or (asset.get("ticker") or "").upper() in tracked_tickers)
     ]
     if not assets:
         return []
 
-    price_pairs = repository.get_latest_price_pairs([asset["id"] for asset in assets])
+    asset_ids = [asset["id"] for asset in assets]
+    price_pairs = repository.get_latest_price_pairs(asset_ids)
+    market_caps = repository.get_latest_market_caps(asset_ids)
 
     tiles: list[dict] = []
     for asset in assets:
@@ -196,15 +215,24 @@ def _build_live_heatmap(repository: LocalPostgresRepository) -> list[dict]:
             change_pct = ((price - closes[1]) / closes[1]) * 100
 
         ticker = (asset.get("ticker") or "").upper()
-        tiles.append(_tile(ticker=ticker, name=asset.get("name") or ticker, price=price, change_pct=change_pct))
+        tiles.append(
+            _tile(
+                ticker=ticker,
+                name=asset.get("name") or ticker,
+                sector=sectors.get(ticker, "Other"),
+                price=price,
+                change_pct=change_pct,
+                currency=market.currency,
+                market_cap=market_caps.get(asset["id"]),
+            )
+        )
     return tiles
 
 
-def _demo_heatmap() -> list[dict]:
-    try:
-        members = load_universe_document(DEFAULT_UNIVERSE_FILE).members
-    except (OSError, ValueError):
-        members = _FALLBACK_DEMO_MEMBERS
+def _demo_heatmap(market_key: str) -> list[dict]:
+    market = HEATMAP_MARKETS[market_key]
+    members = _members(market) or (_FALLBACK_DEMO_MEMBERS if market_key == "us" else ())
+    sectors = _sectors(market_key, members)
 
     tiles = []
     for member in members:
@@ -212,7 +240,17 @@ def _demo_heatmap() -> list[dict]:
         name = str(member.get("name") or ticker)
         price = _synthetic_demo_price(ticker)
         change_pct = _synthetic_demo_change_pct(ticker)
-        tiles.append(_tile(ticker=ticker, name=name, price=price, change_pct=change_pct))
+        tiles.append(
+            _tile(
+                ticker=ticker,
+                name=name,
+                sector=sectors.get(ticker, "Other"),
+                price=price,
+                change_pct=change_pct,
+                currency=market.currency,
+                market_cap=None,
+            )
+        )
     return tiles
 
 
@@ -222,23 +260,26 @@ def get_heatmap(
     repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):
-    """S&P-100-universe heatmap tiles: `{ticker, name, sector, market_cap,
-    change_pct, price}` per tracked US stock. US market only for this pass
-    -- Mexico/.MX and China are explicitly out of scope (later phases), so
-    any other `market` value is rejected rather than silently ignored."""
-    if market.strip().lower() != "us":
+    """Heatmap tiles for `market` (`us` S&P 100, `mx` IPC, `ca` S&P/TSX 60):
+    `{ticker, name, sector, market_cap, change_pct, price, currency,
+    market_cap_estimated}` per tracked stock. `market_cap` is the latest stored
+    real value (`asset_market_caps`); `market_cap_estimated` is true only when
+    none is stored and the placeholder estimate is used instead. Any other
+    `market` value is rejected rather than silently ignored."""
+    market_key = market.strip().lower()
+    if market_key not in HEATMAP_MARKETS:
         raise HTTPException(
             status_code=422,
-            detail="Solo 'us' esta soportado en esta fase (Mexico/.MX y China quedan fuera de alcance)",
+            detail=f"Mercado no soportado: '{market}'. Valores validos: {', '.join(HEATMAP_MARKETS)}",
         )
 
     if repository is None:
         _require_demo_fallback(config)
-        return _demo_heatmap()
+        return _demo_heatmap(market_key)
 
     try:
-        return _build_live_heatmap(repository)
+        return _build_live_heatmap(repository, market_key)
     except RuntimeError as error:
         _log_repo_error(error)
         _require_demo_fallback(config)
-        return _demo_heatmap()
+        return _demo_heatmap(market_key)
