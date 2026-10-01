@@ -153,33 +153,33 @@ id and evidence under Progress.
 
 ### P2 Macro module (slices S4, S5, S6)
 
-- [ ] T2.1 Macro storage (~350): migration for `macro_series` and `macro_observations`
+- [x] T2.1 (eb290d2) Macro storage (~350): migration for `macro_series` and `macro_observations`
       (restatement-as-new-row, `observation_date`, `release_date`, `fetched_at`); repository methods;
       freshness query.
-- [ ] T2.2 US providers, keyless (~400): Treasury par/real/bill CSV, FRED `fredgraph.csv` (T10YIE, T5YIE,
+- [x] T2.2 (eb290d2, FRED only: CPI/core/fed funds/breakeven) US providers, keyless (~400): Treasury par/real/bill CSV, FRED `fredgraph.csv` (T10YIE, T5YIE,
       DFF, DFEDTARU/L, CPI/PCE series), BLS v1 CPI; fixtures; mockable HTTP; typed errors.
-- [ ] T2.3 Canada providers, keyless (~300): Bank of Canada Valet (policy rate, yields, CPI trim/median/
+- [-] T2.3 (dropped: Canada not requested) Canada providers, keyless (~300): Bank of Canada Valet (policy rate, yields, CPI trim/median/
       common), Statistics Canada WDS CPI.
-- [ ] T2.4 Banxico provider (~450): `BANXICO_TOKEN`; series SP30578, SP74662, SF61745, SF43783,
+- [x] T2.4 (eb290d2, needs BANXICO_TOKEN to run live) Banxico provider (~450): `BANXICO_TOKEN`; series SP30578, SP74662, SF61745, SF43783,
       SF43936/39/42/45, SF45470-73, SF349889, FIX SF43718; 200-per-5-minutes limit handling; fixtures;
       typed "not configured".
-- [ ] T2.5 China provider (~400): lazy optional `akshare` (CPI, PPI, LPR, government bond yields),
+- [ ] T2.5 (pending: needs akshare installed by the user) China provider (~400): lazy optional `akshare` (CPI, PPI, LPR, government bond yields),
       last-date freshness assertion and stale flag; optional requirements file.
-- [ ] T2.6 Macro ingestion job and scheduling (~400): `collector/run_macro_job.py`, daily cadence plus
+- [x] T2.6 (eb290d2, last non-fatal step of the daily cycle) Macro ingestion job and scheduling (~400): `collector/run_macro_job.py`, daily cadence plus
       release-day polling, freshness assertions, `ingestion_runs`, `--job macro` in `ops/run_local_scheduler.py`
       and the daily cycle, stale-data notification.
-- [ ] T2.7 Pure analytics (~450): real rate, term comparison with day-count normalization (CETES 360 simple
+- [~] T2.7 (partial: real rate computed server-side; term comparison and inversion pending) Pure analytics (~450): real rate, term comparison with day-count normalization (CETES 360 simple
       vs Treasury bond-equivalent), inversion indicators (3M-10Y, 2s10s, CETES 28d vs 364d), breakeven
       proxies (US T10YIE, MX Bono10y vs Udibono10y, CA long minus RRB), CETES vs T-bill breakeven
       depreciation; known-value tests.
 - [ ] T2.8 Release calendar seed (~250): `config/macro_calendar.yaml` (Banxico, FOMC, BoC, PBoC LPR on the
       20th, INEGI/BLS/StatCan where dates are published; unverified dates marked), loader, tests.
-- [ ] T2.9 Macro API (~500): `/api/macro/*` (inflation, rates, curves, calendar, term-comparison) with
+- [x] T2.9 (eb290d2) Macro API (~500): `/api/macro/*` (inflation, rates, curves, calendar, term-comparison) with
       freshness and source attribution ("Fuente: INEGI / Banxico / FRED / ..."); D4 behavior; documented in
       `AGENTS.md`.
-- [ ] T2.10 Inflation tracker UI (~600): MX/US/CA/CN last official print, YoY, core, next release date,
+- [x] T2.10 (382ec69, one Macro view) Inflation tracker UI (~600): MX/US/CA/CN last official print, YoY, core, next release date,
       market-implied proxy chart; explicit note that official inflation is biweekly/monthly.
-- [ ] T2.11 Rates and curves UI (~600): policy rates, CETES primary/secondary table, yield-curve charts
+- [x] T2.11 (382ec69, same view) Rates and curves UI (~600): policy rates, CETES primary/secondary table, yield-curve charts
       (US, CA, MX CETES), inversion badges.
 - [ ] T2.12 Term calculator and calendar UI (~500): user-entered amount and term, real rate, CETES vs
       T-bill in MXN with FX risk, disclaimer (D9), release calendar panel.
@@ -312,6 +312,12 @@ database via `db.migrate`; data-source claims verified with live read-only reque
 - Simplified on purpose (lean workflow): no per-ticker health-check machinery (staleness is computed in the API from the last bar date, 4 days), `stooq_provider` not touched yet, no sparklines, no market-cap/heatmap work yet. ASHR is a USD price (unit "price") standing in for CSI 300.
 - The overview endpoint carries `is_demo`; the broader trust layer (T1.1: demo flag on the older ticker routes, source badges) is still open.
 
+## P2a (Macro) status
+
+- Commits eb290d2 (backend) and 382ec69 (Macro view). Full suites once: backend 931 passed, ui lint clean, vitest 140 passed, scratch build ok. FRED provider smoke-tested live (US CPI YoY 3.40%, core 2.45%, matching the official figures; non-seasonally-adjusted series on purpose).
+- Not verified live: Banxico (needs the user's BANXICO_TOKEN in `.env`). Migration 0014 must be applied by the user (`py -3.14 -m db.migrate`).
+- Pending: China inflation/LPR (needs akshare), calendar, calculators, term comparison.
+
 ## Next step
 
-Merge P1a (PR), then the macro module (T2.1-T2.6 as lean blocks: storage + US/CA keyless providers first, Banxico and China after, then one API and one screen).
+Merge P2a (PR); then, depending on the user, China macro (after installing akshare), the heatmap with real market caps, or the investment ledger.
