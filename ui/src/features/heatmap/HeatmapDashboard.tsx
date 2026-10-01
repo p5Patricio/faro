@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import * as ReactEChartsCoreModule from 'echarts-for-react/lib/core';
 
 // `echarts-for-react/lib/core` is CJS, compiled by TypeScript as
@@ -24,10 +24,23 @@ const ReactEChartsCore = unwrapDefault<typeof import('echarts-for-react/lib/core
 import { LayoutGrid } from 'lucide-react';
 import { Panel } from '../../components/ui/Panel.tsx';
 import { EmptyState } from '../../components/ui/EmptyState.tsx';
+import { SegmentedControl, type SegmentOption } from '../../components/ui/SegmentedControl.tsx';
 import { SkeletonLines } from '../../components/ui/Skeleton.tsx';
 import { useHeatmap } from './hooks/useHeatmapApi.ts';
 import echarts from './lib/echartsCore.ts';
-import type { HeatmapTile } from './types.ts';
+import type { HeatmapMarket, HeatmapTile } from './types.ts';
+
+const MARKET_OPTIONS: SegmentOption<HeatmapMarket>[] = [
+  { value: 'us', label: 'EE. UU.' },
+  { value: 'mx', label: 'México' },
+  { value: 'ca', label: 'Canadá' },
+];
+
+const MARKET_TITLES: Record<HeatmapMarket, string> = {
+  us: 'S&P 100, EE. UU.',
+  mx: 'México',
+  ca: 'Canadá',
+};
 
 // Diverging red -> neutral gray -> green scale keyed to `change_pct` --
 // the Finviz convention (green = up, red = down). The poles reuse this
@@ -50,6 +63,8 @@ interface TreemapNode {
   price: number;
   change_pct: number;
   market_cap: number;
+  currency: HeatmapTile['currency'];
+  market_cap_estimated: boolean;
 }
 
 function toTreemapNode(tile: HeatmapTile): TreemapNode {
@@ -66,6 +81,8 @@ function toTreemapNode(tile: HeatmapTile): TreemapNode {
     price: tile.price,
     change_pct: tile.change_pct,
     market_cap: tile.market_cap,
+    currency: tile.currency,
+    market_cap_estimated: tile.market_cap_estimated,
   };
 }
 
@@ -93,10 +110,10 @@ function buildTreemapOption(tiles: HeatmapTile[]) {
         return [
           `<strong>${node.ticker}</strong> &middot; ${node.companyName}`,
           node.sector,
-          `Precio: $${node.price.toFixed(2)} &nbsp; Cambio: ${formatChangePct(node.change_pct)}`,
-          // "estimada": see the market_cap doc comment in ../types.ts --
-          // this is a placeholder proxy, not sourced market-cap data.
-          `Cap. de mercado (estimada): ${formatMarketCap(node.market_cap)}`,
+          `Precio: $${node.price.toFixed(2)} ${node.currency} &nbsp; Cambio: ${formatChangePct(node.change_pct)}`,
+          // "estimada" only while the value is a placeholder proxy, not
+          // sourced market-cap data: see the market_cap doc in ../types.ts.
+          `Cap. de mercado${node.market_cap_estimated ? ' (estimada)' : ''}: ${formatMarketCap(node.market_cap)} ${node.currency}`,
         ].join('<br/>');
       },
     },
@@ -142,49 +159,69 @@ function buildTreemapOption(tiles: HeatmapTile[]) {
 }
 
 /**
- * Finviz-style S&P-100 market heatmap: one treemap tile per US ticker,
- * sized by (estimated) market cap and colored by the day's %% change.
- * Mirrors `features/finance/FinanceDashboard.tsx`'s container shape: owns
- * the data fetch via `hooks/useHeatmapApi.ts` and hands it to the chart.
+ * Finviz-style market heatmap: one treemap tile per ticker of the selected
+ * market (EE. UU., México or Canadá), sized by market cap and colored by the
+ * day's %% change. The selection lives here, so it survives while the user
+ * stays on this view. Mirrors `features/finance/FinanceDashboard.tsx`'s
+ * container shape: owns the data fetch via `hooks/useHeatmapApi.ts` and hands
+ * it to the chart.
  */
 export function HeatmapDashboard() {
-  const { data: tiles, loading, error, refetch } = useHeatmap('us');
+  const [market, setMarket] = useState<HeatmapMarket>('us');
+  const { data: tiles, loading, error, refetch } = useHeatmap(market);
   const option = useMemo(() => buildTreemapOption(tiles), [tiles]);
   const firstLoad = loading && tiles.length === 0;
+  const allEstimated = tiles.length > 0 && tiles.every((tile) => tile.market_cap_estimated);
 
   return (
     <Panel
-      title="Mapa de mercado (S&P 100, EE. UU.)"
+      title={`Mapa de mercado (${MARKET_TITLES[market]})`}
       icon={<LayoutGrid aria-hidden="true" className="h-4 w-4 text-cobalt" />}
       actions={tiles.length > 0 ? <span className="text-xs text-slate-500">{tiles.length} tickers</span> : null}
     >
-      {firstLoad ? (
-        <div className="space-y-3">
-          <SkeletonLines rows={2} className="max-w-xs" />
-          <div className="h-[520px] rounded-lg border border-hairline/60 bg-inset" />
-        </div>
-      ) : error && tiles.length === 0 ? (
-        <EmptyState
-          variant="error"
-          icon={<LayoutGrid aria-hidden="true" className="h-6 w-6" />}
-          title={error}
-          onRetry={() => void refetch()}
+      <div className="space-y-3">
+        <SegmentedControl
+          label="Mercado"
+          value={market}
+          onChange={setMarket}
+          options={MARKET_OPTIONS}
+          className="max-w-sm"
         />
-      ) : tiles.length === 0 ? (
-        <EmptyState
-          icon={<LayoutGrid aria-hidden="true" className="h-6 w-6" />}
-          title="Sin datos de mercado para mostrar."
-        />
-      ) : (
-        <ReactEChartsCore
-          echarts={echarts}
-          option={option}
-          notMerge
-          lazyUpdate
-          style={{ height: 560, width: '100%' }}
-          opts={{ renderer: 'canvas' }}
-        />
-      )}
+        {firstLoad ? (
+          <div className="space-y-3">
+            <SkeletonLines rows={2} className="max-w-xs" />
+            <div className="h-[520px] rounded-lg border border-hairline/60 bg-inset" />
+          </div>
+        ) : error && tiles.length === 0 ? (
+          <EmptyState
+            variant="error"
+            icon={<LayoutGrid aria-hidden="true" className="h-6 w-6" />}
+            title={error}
+            onRetry={() => void refetch()}
+          />
+        ) : tiles.length === 0 ? (
+          <EmptyState
+            icon={<LayoutGrid aria-hidden="true" className="h-6 w-6" />}
+            title="Sin datos de mercado para mostrar."
+          />
+        ) : (
+          <>
+            {allEstimated ? (
+              <p className="text-xs text-slate-400">
+                Capitalización estimada: aún no hay datos reales para este mercado.
+              </p>
+            ) : null}
+            <ReactEChartsCore
+              echarts={echarts}
+              option={option}
+              notMerge
+              lazyUpdate
+              style={{ height: 560, width: '100%' }}
+              opts={{ renderer: 'canvas' }}
+            />
+          </>
+        )}
+      </div>
     </Panel>
   );
 }
