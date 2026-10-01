@@ -134,8 +134,9 @@ def test_run_step_never_invokes_subprocess_with_shell_true(tmp_path: Path) -> No
         ("inference", ["inference"]),
         ("paper_trading", ["paper_trading"]),
         ("retraining", ["retraining"]),
-        ("full", ["market_data", "inference", "paper_trading"]),
-        ("full_retrain", ["market_data", "retraining", "inference", "paper_trading"]),
+        # The daily cycles also refresh the macro series, last (non-fatal).
+        ("full", ["market_data", "inference", "paper_trading", "macro"]),
+        ("full_retrain", ["market_data", "retraining", "inference", "paper_trading", "macro"]),
     ],
 )
 def test_steps_for_job_mirrors_retired_workflow_job_mode(job: str, expected_steps: list[str]) -> None:
@@ -252,9 +253,31 @@ def test_run_executes_full_job_mode_steps_in_order_and_notifies(tmp_path: Path) 
         "collector.run_market_data_job",
         "brain.run_inference_job",
         "brain.run_paper_trading_job",
+        "collector.run_macro_job",
         "ops.notify_operational_job",
     ]
     assert exit_code == 0
+
+
+def test_run_treats_a_failing_macro_step_as_non_fatal(tmp_path: Path) -> None:
+    captured_notify_argv: list[str] = []
+
+    class _Completed:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+            self.stdout = ""
+            self.stderr = ""
+
+    def fake_runner(argv: list[str], **kwargs: object) -> _Completed:
+        if argv[2] == "ops.notify_operational_job":
+            captured_notify_argv.extend(argv)
+        return _Completed(1 if argv[2] == "collector.run_macro_job" else 0)
+
+    exit_code = run(parse_args(["--job", "full"]), cwd=tmp_path, runner=fake_runner)
+
+    assert exit_code == 0
+    assert captured_notify_argv[captured_notify_argv.index("--status") + 1] == "success"
+    assert "--failed-steps" not in captured_notify_argv
 
 
 def test_run_writes_inference_report_with_the_dispatcher_expected_filename(tmp_path: Path) -> None:

@@ -47,6 +47,11 @@ JOB_MODES = ("market_data", "inference", "paper_trading", "retraining", "full", 
 # and would silently starve the P0 signal-transition trigger of any input).
 INFERENCE_JOB_REPORT_NAME = "inference_job.json"
 
+# Steps whose failure never fails the run or reaches the job-failure notifier:
+# they run, are logged, and are otherwise ignored. The macro data job is
+# optional (it skips by itself until db/migrations/0014 is applied).
+NON_FATAL_STEPS = frozenset({"macro"})
+
 Runner = Callable[..., Any]
 
 
@@ -88,6 +93,10 @@ def steps_for_job(job: str) -> list[str]:
         steps.append("inference")
     if job in ("paper_trading", "full", "full_retrain"):
         steps.append("paper_trading")
+    # The daily cycle also refreshes the Mexico/US macro series. Last, so the ML
+    # steps never wait on it, and non-fatal (see NON_FATAL_STEPS).
+    if job in ("full", "full_retrain"):
+        steps.append("macro")
     return steps
 
 
@@ -147,11 +156,16 @@ def build_paper_trading_argv(ns: argparse.Namespace, reports_dir: Path) -> list[
     return argv
 
 
+def build_macro_argv(ns: argparse.Namespace, reports_dir: Path) -> list[str]:
+    return ["--out", str(reports_dir / "macro_job.json")]
+
+
 _STEP_BUILDERS: dict[str, tuple[str, Callable[[argparse.Namespace, Path], list[str]]]] = {
     "market_data": ("collector.run_market_data_job", build_market_data_argv),
     "retraining": ("brain.run_retraining_job", build_retraining_argv),
     "inference": ("brain.run_inference_job", build_inference_argv),
     "paper_trading": ("brain.run_paper_trading_job", build_paper_trading_argv),
+    "macro": ("collector.run_macro_job", build_macro_argv),
 }
 
 
@@ -267,7 +281,7 @@ def run(ns: argparse.Namespace, *, cwd: Path = REPO_ROOT, runner: Runner = subpr
             args = builder(ns, reports_dir)
             results.append(run_step(step_name, module, args, cwd=cwd, runner=runner))
 
-    primary_ok = all(result.ok for result in results)
+    primary_ok = all(result.ok for result in results if result.name not in NON_FATAL_STEPS)
     status = "success" if primary_ok else "failure"
 
     # Task 7.3 (design.md section 7-A): a step that exits non-zero *before*
@@ -279,7 +293,9 @@ def run(ns: argparse.Namespace, *, cwd: Path = REPO_ROOT, runner: Runner = subpr
     # still fires; a step whose own report already shows `failed > 0` needs
     # no help here.
     pre_report_failed_steps = [
-        result.name for result in results if result.returncode != 0 and result.report_failed == 0
+        result.name
+        for result in results
+        if result.name not in NON_FATAL_STEPS and result.returncode != 0 and result.report_failed == 0
     ]
 
     notify_ok = True

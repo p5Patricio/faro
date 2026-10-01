@@ -158,6 +158,12 @@ from api.routers.markets import router as markets_router  # noqa: E402
 
 app.include_router(markets_router, prefix="/api")
 
+# Same deferred-import reasoning; its route is "/macro/overview", so prefix "/api"
+# yields `GET /api/macro/overview`.
+from api.routers.macro import router as macro_router  # noqa: E402
+
+app.include_router(macro_router, prefix="/api")
+
 
 @app.get("/")
 def read_root():
