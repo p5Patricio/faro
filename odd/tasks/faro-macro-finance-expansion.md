@@ -138,7 +138,7 @@ id and evidence under Progress.
 - [ ] T1.2 Asset metadata and market-cap storage (~350): migration adds nullable currency, exchange,
       country, timezone to `assets` and a restatement-style `asset_market_caps` table keyed by
       `(asset_id, fetched_at)`; repository methods; universe format gains `yahoo_ticker`.
-- [ ] T1.3 Index, FX, commodity, yield ingestion (~600): universe file with about 20 tickers (US/MX/CA/CN/HK
+- [x] T1.3 (e62a3c4, simplified) Index, FX, commodity, yield ingestion (~600): universe file with about 20 tickers (US/MX/CA/CN/HK
       indices, MXN=X, CNY=X, CAD=X, CL=F, GC=F, ^TNX, ^IRX, ^FVX, ^TYX), asset classes `index`, `fx`,
       `commodity`, `yield`; keep them out of the ticker picker and ML training; ASHR proxy for CSI 300;
       keep NaN-close rows from silently lagging Asian series; schedule after Asian close and next morning;
@@ -147,9 +147,9 @@ id and evidence under Progress.
       cap, not shares outstanding); heatmap uses real values, placeholder only when missing and flagged.
 - [ ] T1.5 Multi-market heatmap backend (~500): universe snapshots for IPC, S&P/TSX 60, Hang Seng under
       `config/`, per-market sector maps, `GET /api/heatmap?market=us|mx|ca|hk`, currency labels.
-- [ ] T1.6 Markets overview API (~350): `GET /api/markets/overview` (index cards with last, change %,
+- [x] T1.6 (e62a3c4) Markets overview API (~350): `GET /api/markets/overview` (index cards with last, change %,
       freshness; FX; commodities; yields).
-- [ ] T1.7 Markets UI (~400): "Mercados" view with cards, sparklines, badges; market switcher in the heatmap.
+- [x] T1.7 (10ba964, as the "Panorama" view, no sparklines) Markets UI (~400): "Mercados" view with cards, sparklines, badges; market switcher in the heatmap.
 
 ### P2 Macro module (slices S4, S5, S6)
 
@@ -305,6 +305,13 @@ database via `db.migrate`; data-source claims verified with live read-only reque
 - For the user, in order: apply migrations 0012 (data-only, a no-op on the real database) and 0013 (is_liquid + one-pending-bill index) with `py -3.14 -m db.migrate`; restart the always-on app (`ops/run_local_app.ps1 -Stop`, then run it again) so the API and the UI build match.
 - Known gaps: T0.6 deferred; no UI to edit an existing snapshot's liquid flags; goal PUT with an unknown id still answers 503; reactivating an old bill keeps its overdue row (D16); the Categorías tab has no unconverted warning.
 
+## S1 merged; slice P1a (Mercados) evidence
+
+- S1 merged to main as PR #12 (8e57f25) after CI green (backend and frontend jobs).
+- P1a commits: e62a3c4 (backend: 18 instruments in `config/universe.markets.json`, collected by the daily job via `--markets-file`, kept out of ML materialization/training and the ticker picker; `GET /api/markets/overview`) and 10ba964 (Panorama view). Full suites once: backend 921 passed, ui lint clean, vitest 139 passed, scratch build ok.
+- Simplified on purpose (lean workflow): no per-ticker health-check machinery (staleness is computed in the API from the last bar date, 4 days), `stooq_provider` not touched yet, no sparklines, no market-cap/heatmap work yet. ASHR is a USD price (unit "price") standing in for CSI 300.
+- The overview endpoint carries `is_demo`; the broader trust layer (T1.1: demo flag on the older ticker routes, source badges) is still open.
+
 ## Next step
 
-Ask the user to push S1 (branch push and PR to main), then start P1 (Mercados) per Plan v2.
+Merge P1a (PR), then the macro module (T2.1-T2.6 as lean blocks: storage + US/CA keyless providers first, Banxico and China after, then one API and one screen).

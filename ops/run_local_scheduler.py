@@ -100,6 +100,7 @@ def _first_feature_set(feature_sets: str) -> str:
 def build_market_data_argv(ns: argparse.Namespace, reports_dir: Path) -> list[str]:
     argv = [
         "--assets-file", "config/assets.core.json",
+        "--markets-file", "config/universe.markets.json",
         "--feature-sets", ns.feature_sets,
         "--out", str(reports_dir / "market_data_job.json"),
     ]

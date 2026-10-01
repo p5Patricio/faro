@@ -79,7 +79,7 @@ def expand_universe_document(raw: dict[str, Any]) -> list[AssetCollectionConfig]
             ticker=member["ticker"],
             asset_ticker=member["ticker"],
             name=member["name"],
-            asset_class=asset_class,
+            asset_class=member.get("asset_class", asset_class),
             interval=interval,
             start=start,
         )

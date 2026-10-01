@@ -52,6 +52,9 @@ const EquityCurveChart = lazy(() =>
 const HeatmapDashboard = lazy(() =>
   import('./features/heatmap/HeatmapDashboard.tsx').then((module) => ({ default: module.HeatmapDashboard })),
 );
+const MarketsOverview = lazy(() =>
+  import('./features/markets/MarketsOverview.tsx').then((module) => ({ default: module.MarketsOverview })),
+);
 
 type Signal = 'BUY' | 'SELL' | 'HOLD' | string;
 type RiskProfileScopeType = 'default' | 'asset_class' | 'ticker';
@@ -319,10 +322,11 @@ const DEFAULT_RISK_PROFILE: RiskProfile = {
   allow_short: true,
 };
 
-type AppView = 'markets' | 'heatmap' | 'finance';
+type AppView = 'markets' | 'overview' | 'heatmap' | 'finance';
 
 const VIEW_OPTIONS: SegmentOption<AppView>[] = [
   { value: 'markets', label: 'Mercados' },
+  { value: 'overview', label: 'Panorama' },
   { value: 'heatmap', label: 'Mapa de calor' },
   { value: 'finance', label: 'Finanzas' },
 ];
@@ -740,7 +744,7 @@ function App() {
           value={view}
           onChange={setView}
           options={VIEW_OPTIONS}
-          className="max-w-xs"
+          className="max-w-md"
         />
 
         {view === 'markets' && (
@@ -811,6 +815,12 @@ function App() {
           </div>
         )}
           </>
+        )}
+
+        {view === 'overview' && (
+          <Suspense fallback={<ChartLoadingState height={420} />}>
+            <MarketsOverview />
+          </Suspense>
         )}
 
         {view === 'heatmap' && (

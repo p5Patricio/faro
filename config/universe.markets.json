@@ -1,0 +1,27 @@
+{
+  "index": "Faro market instruments",
+  "snapshot_date": "2026-09-30",
+  "source": "Yahoo Finance tickers, collected through the yfinance provider",
+  "membership_bias": "Not a stock universe: reference instruments (indices, FX, commodities, yields) kept for market context only. They are never ML targets and are excluded from materialization, training and inference.",
+  "defaults": {"provider": "yfinance", "interval": "1d", "start": "2020-01-01"},
+  "members": [
+    {"ticker": "^GSPC", "name": "S&P 500", "asset_class": "index", "group": "indices_us", "currency": null, "unit": "points"},
+    {"ticker": "^IXIC", "name": "Nasdaq", "asset_class": "index", "group": "indices_us", "currency": null, "unit": "points"},
+    {"ticker": "^DJI", "name": "Dow Jones", "asset_class": "index", "group": "indices_us", "currency": null, "unit": "points"},
+    {"ticker": "^RUT", "name": "Russell 2000", "asset_class": "index", "group": "indices_us", "currency": null, "unit": "points"},
+    {"ticker": "^VIX", "name": "VIX", "asset_class": "index", "group": "indices_us", "currency": null, "unit": "points"},
+    {"ticker": "^MXX", "name": "IPC", "asset_class": "index", "group": "indices_mx", "currency": null, "unit": "points"},
+    {"ticker": "^GSPTSE", "name": "S&P/TSX", "asset_class": "index", "group": "indices_ca", "currency": null, "unit": "points"},
+    {"ticker": "000001.SS", "name": "Shanghai", "asset_class": "index", "group": "indices_cn", "currency": null, "unit": "points"},
+    {"ticker": "399001.SZ", "name": "Shenzhen", "asset_class": "index", "group": "indices_cn", "currency": null, "unit": "points"},
+    {"ticker": "^HSI", "name": "Hang Seng", "asset_class": "index", "group": "indices_cn", "currency": null, "unit": "points"},
+    {"ticker": "ASHR", "name": "CSI 300 (ETF ASHR)", "asset_class": "index", "group": "indices_cn", "currency": "USD", "unit": "price"},
+    {"ticker": "MXN=X", "name": "USD/MXN", "asset_class": "fx", "group": "fx", "currency": null, "unit": "price"},
+    {"ticker": "CNY=X", "name": "USD/CNY", "asset_class": "fx", "group": "fx", "currency": null, "unit": "price"},
+    {"ticker": "CAD=X", "name": "USD/CAD", "asset_class": "fx", "group": "fx", "currency": null, "unit": "price"},
+    {"ticker": "CL=F", "name": "Crudo WTI", "asset_class": "commodity", "group": "commodities", "currency": "USD", "unit": "price"},
+    {"ticker": "GC=F", "name": "Oro", "asset_class": "commodity", "group": "commodities", "currency": "USD", "unit": "price"},
+    {"ticker": "^TNX", "name": "Bono EE.UU. 10 años", "asset_class": "yield", "group": "yields", "currency": null, "unit": "percent"},
+    {"ticker": "^IRX", "name": "T-Bill EE.UU. 13 semanas", "asset_class": "yield", "group": "yields", "currency": null, "unit": "percent"}
+  ]
+}
