@@ -14,6 +14,11 @@ from collector.market_data_job import run_market_data_job
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Collect prices and materialize ML datasets")
     parser.add_argument("--assets-file", help="JSON file with asset collection configs")
+    parser.add_argument(
+        "--markets-file",
+        help="Universe document of market-context instruments (indices/FX/commodities/yields): "
+        "collected next to --assets-file, never materialized",
+    )
     parser.add_argument("--tickers", help="Comma-separated tickers to process")
     parser.add_argument("--start", help="Override start date for collection")
     parser.add_argument("--end", help="Override end date for collection")
@@ -40,11 +45,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    assets = apply_date_overrides(
-        load_asset_configs(args.assets_file),
-        start=args.start,
-        end=args.end,
-    )
+    configs = load_asset_configs(args.assets_file)
+    if args.markets_file:
+        configs = [*configs, *load_asset_configs(args.markets_file)]
+    assets = apply_date_overrides(configs, start=args.start, end=args.end)
     with psycopg.connect(LocalPostgresConfig.from_env().dsn, autocommit=True) as connection:
         repository = LocalPostgresRepository(connection=connection)
         payload = run_market_data_job(

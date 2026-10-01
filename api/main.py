@@ -22,7 +22,7 @@ from brain.paper_trading import PaperTradingConfig, run_paper_trading
 from brain.risk import RiskPolicy, apply_risk_policy
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.schema_check import check_relations
-from collector.universe import load_universe_document, universe_disclosure
+from collector.universe import MARKET_ASSET_CLASSES, load_universe_document, universe_disclosure
 from ops.notification_rules import (
     DEFAULT_MAX_PRICE_AGE_HOURS,
     DEFAULT_MIN_ACCURACY,
@@ -152,6 +152,12 @@ from api.routers.heatmap import router as heatmap_router  # noqa: E402
 
 app.include_router(heatmap_router, prefix="/api")
 
+# Same deferred-import reasoning as heatmap_router; its route is "/markets/overview",
+# so prefix "/api" yields `GET /api/markets/overview`.
+from api.routers.markets import router as markets_router  # noqa: E402
+
+app.include_router(markets_router, prefix="/api")
+
 
 @app.get("/")
 def read_root():
@@ -202,7 +208,13 @@ def get_assets(
         return demo_assets()
 
     try:
-        return repository.get_assets()
+        # Market-context instruments (indices, FX, commodities, yields) are not
+        # tradable tickers: they live on /api/markets/overview, not in the picker.
+        return [
+            asset
+            for asset in repository.get_assets()
+            if (asset.get("asset_class") or "").lower() not in MARKET_ASSET_CLASSES
+        ]
     except RuntimeError as error:
         log_repo_error(error)
         require_demo_fallback(config)

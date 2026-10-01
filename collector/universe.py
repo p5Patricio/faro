@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Any
 
 
+# Market-context instruments (config/universe.markets.json): collected and shown
+# on the markets overview, but never ML targets -- the daily job skips their
+# materialization and the ticker-picker listing hides them.
+MARKET_ASSET_CLASSES = frozenset({"index", "fx", "commodity", "yield"})
+
+
 @dataclass(frozen=True)
 class UniverseDocument:
     index: str

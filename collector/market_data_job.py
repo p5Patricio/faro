@@ -8,6 +8,7 @@ from brain.materialize_dataset import MaterializationConfig, materialize_asset_d
 from collector.main import AssetCollectionConfig, ProviderFactory, collect_asset
 from collector.local_repository import LocalPostgresRepository
 from collector.providers import get_provider
+from collector.universe import MARKET_ASSET_CLASSES
 
 
 def run_market_data_job(
@@ -37,6 +38,19 @@ def run_market_data_job(
 
     selected_assets = filter_assets(assets, materialize_tickers)
 
+    # Market-context instruments (indices, FX, commodities, yields) are price-
+    # collected like everything else but are never ML targets: they are left out
+    # of analyst consensus and materialization, even when named via --tickers.
+    market_tickers = {
+        asset.asset_ticker.upper() for asset in assets if (asset.asset_class or "").lower() in MARKET_ASSET_CLASSES
+    }
+    model_assets = [asset for asset in selected_assets if asset.asset_ticker.upper() not in market_tickers]
+    tickers_to_materialize = [
+        ticker
+        for ticker in (materialize_tickers or [asset.asset_ticker for asset in model_assets])
+        if ticker.upper() not in market_tickers
+    ]
+
     if collect_prices:
         for asset in selected_assets:
             try:
@@ -60,7 +74,7 @@ def run_market_data_job(
     # `collect_asset`. Defaults to off so existing callers (and their cadence
     # expectations) are unaffected; opt in with `collect_analyst_consensus=True`.
     if collect_analyst_consensus:
-        for asset in selected_assets:
+        for asset in model_assets:
             try:
                 provider = provider_factory(asset.provider)
                 consensus = provider.fetch_analyst_consensus(asset.ticker)
@@ -85,8 +99,7 @@ def run_market_data_job(
                     raise
 
     if materialize:
-        tickers = materialize_tickers or [asset.asset_ticker for asset in selected_assets]
-        for ticker in tickers:
+        for ticker in tickers_to_materialize:
             for feature_set in feature_sets or ["technical_v1"]:
                 try:
                     result = materialize_asset_dataset(
@@ -129,15 +142,14 @@ def run_market_data_job(
             "results": collection_results,
         },
         "materialization": {
-            "attempted": len((materialize_tickers or [asset.asset_ticker for asset in selected_assets]))
-            * len(feature_sets or ["technical_v1"])
+            "attempted": len(tickers_to_materialize) * len(feature_sets or ["technical_v1"])
             if materialize
             else 0,
             "succeeded": len(materialization_results),
             "results": materialization_results,
         },
         "analyst_consensus": {
-            "attempted": len(selected_assets) if collect_analyst_consensus else 0,
+            "attempted": len(model_assets) if collect_analyst_consensus else 0,
             "succeeded": len(analyst_consensus_results),
             "results": analyst_consensus_results,
         },

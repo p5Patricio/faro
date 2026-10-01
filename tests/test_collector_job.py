@@ -232,6 +232,29 @@ def test_run_market_data_job_collects_and_materializes() -> None:
     assert repository.labels_loaded[0]["horizon"] == 3
 
 
+def test_run_market_data_job_collects_market_instruments_but_never_materializes_them() -> None:
+    provider = FakeProvider()
+    repository = FakeRepository()
+    assets = [
+        AssetCollectionConfig(provider="fake", ticker="AAPL", asset_ticker="AAPL", name="Apple", asset_class="stock"),
+        AssetCollectionConfig(provider="fake", ticker="^GSPC", asset_ticker="^GSPC", name="S&P 500", asset_class="index"),
+    ]
+
+    result = run_market_data_job(
+        repository=repository,  # type: ignore[arg-type]
+        assets=assets,
+        provider_factory=lambda _: provider,
+        feature_sets=["technical_v1"],
+        collect_analyst_consensus=True,
+    )
+
+    assert result["collection"]["succeeded"] == 2
+    assert [item["ticker"] for item in result["materialization"]["results"]] == ["AAPL"]
+    assert result["materialization"]["attempted"] == 1
+    assert provider.analyst_consensus_requests == ["AAPL"]
+    assert result["failed"] == 0
+
+
 def test_run_market_data_job_records_materialization_errors() -> None:
     repository = FakeRepository()
     assets = [
