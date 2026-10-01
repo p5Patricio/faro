@@ -49,8 +49,9 @@ INFERENCE_JOB_REPORT_NAME = "inference_job.json"
 
 # Steps whose failure never fails the run or reaches the job-failure notifier:
 # they run, are logged, and are otherwise ignored. The macro data job is
-# optional (it skips by itself until db/migrations/0014 is applied).
-NON_FATAL_STEPS = frozenset({"macro"})
+# optional (it skips by itself until db/migrations/0014 is applied), and so is
+# the market-cap job (it skips until db/migrations/0015 is applied).
+NON_FATAL_STEPS = frozenset({"macro", "market_cap"})
 
 Runner = Callable[..., Any]
 
@@ -97,6 +98,10 @@ def steps_for_job(job: str) -> list[str]:
     # steps never wait on it, and non-fatal (see NON_FATAL_STEPS).
     if job in ("full", "full_retrain"):
         steps.append("macro")
+    # The weekly cycle also refreshes the heatmap's real market caps. Last and
+    # non-fatal as well; shares outstanding barely move, so weekly is plenty.
+    if job == "full_retrain":
+        steps.append("market_cap")
     return steps
 
 
@@ -110,6 +115,9 @@ def build_market_data_argv(ns: argparse.Namespace, reports_dir: Path) -> list[st
     argv = [
         "--assets-file", "config/assets.core.json",
         "--markets-file", "config/universe.markets.json",
+        # Price-only heatmap stocks (asset classes stock_mx / stock_ca): never materialized.
+        "--markets-file", "config/universe.mx.json",
+        "--markets-file", "config/universe.ca.json",
         "--feature-sets", ns.feature_sets,
         "--out", str(reports_dir / "market_data_job.json"),
     ]
@@ -160,12 +168,17 @@ def build_macro_argv(ns: argparse.Namespace, reports_dir: Path) -> list[str]:
     return ["--out", str(reports_dir / "macro_job.json")]
 
 
+def build_market_cap_argv(ns: argparse.Namespace, reports_dir: Path) -> list[str]:
+    return ["--out", str(reports_dir / "market_cap_job.json")]
+
+
 _STEP_BUILDERS: dict[str, tuple[str, Callable[[argparse.Namespace, Path], list[str]]]] = {
     "market_data": ("collector.run_market_data_job", build_market_data_argv),
     "retraining": ("brain.run_retraining_job", build_retraining_argv),
     "inference": ("brain.run_inference_job", build_inference_argv),
     "paper_trading": ("brain.run_paper_trading_job", build_paper_trading_argv),
     "macro": ("collector.run_macro_job", build_macro_argv),
+    "market_cap": ("collector.run_market_cap_job", build_market_cap_argv),
 }
 
 
@@ -316,7 +329,10 @@ def run(ns: argparse.Namespace, *, cwd: Path = REPO_ROOT, runner: Runner = subpr
 
 def main(argv: list[str] | None = None) -> int:
     ns = parse_args(argv)
-    return run(ns)
+    # `subprocess.run` is looked up here, at call time, not frozen into `run`'s
+    # default argument: a test that patches `subprocess.run` must reach it, or
+    # `main()` would launch the real jobs against the real database.
+    return run(ns, runner=subprocess.run)
 
 
 if __name__ == "__main__":

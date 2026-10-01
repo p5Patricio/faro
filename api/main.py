@@ -22,7 +22,7 @@ from brain.paper_trading import PaperTradingConfig, run_paper_trading
 from brain.risk import RiskPolicy, apply_risk_policy
 from collector.local_repository import LocalPostgresConfig, LocalPostgresRepository
 from collector.schema_check import check_relations
-from collector.universe import MARKET_ASSET_CLASSES, load_universe_document, universe_disclosure
+from collector.universe import PRICE_ONLY_ASSET_CLASSES, load_universe_document, universe_disclosure
 from ops.notification_rules import (
     DEFAULT_MAX_PRICE_AGE_HOURS,
     DEFAULT_MIN_ACCURACY,
@@ -216,10 +216,11 @@ def get_assets(
     try:
         # Market-context instruments (indices, FX, commodities, yields) are not
         # tradable tickers: they live on /api/markets/overview, not in the picker.
+        # The Mexican/Canadian heatmap stocks are price-only too (no model).
         return [
             asset
             for asset in repository.get_assets()
-            if (asset.get("asset_class") or "").lower() not in MARKET_ASSET_CLASSES
+            if (asset.get("asset_class") or "").lower() not in PRICE_ONLY_ASSET_CLASSES
         ]
     except RuntimeError as error:
         log_repo_error(error)

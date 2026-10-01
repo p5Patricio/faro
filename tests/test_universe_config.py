@@ -9,6 +9,7 @@ import pytest
 from collector.main import AssetCollectionConfig, expand_universe_document, load_asset_configs, run_collection
 from collector.providers import HistoricalPriceRequest
 from collector.universe import (
+    PRICE_ONLY_ASSET_CLASSES,
     UniverseDocument,
     load_universe_document,
     universe_disclosure,
@@ -236,3 +237,32 @@ def test_full_universe_expansion_resolves_every_asset_without_configuration_erro
     assert len(fake_repository.assets) == 101
     assert {asset["ticker"] for asset in fake_repository.assets} == {config.asset_ticker for config in configs}
     assert all(asset["asset_class"] == "stock" for asset in fake_repository.assets)
+
+
+# -- Heatmap universes for Mexico and Canada (price-only, never ML targets) ---
+
+
+@pytest.mark.parametrize(
+    "name,suffix,asset_class",
+    [("mx", ".MX", "stock_mx"), ("ca", ".TO", "stock_ca")],
+)
+def test_heatmap_market_universe_files_load_and_expand_to_price_only_stocks(
+    name: str, suffix: str, asset_class: str
+) -> None:
+    path = UNIVERSE_PATH.parent / f"universe.{name}.json"
+
+    doc = load_universe_document(path)
+    configs = expand_universe_document(json.loads(path.read_text(encoding="utf-8")))
+
+    assert len(doc.members) >= 25
+    assert all(member["ticker"].endswith(suffix) for member in doc.members)
+    assert all(member["name"] and member["sector"] for member in doc.members)
+    assert len({member["ticker"] for member in doc.members}) == len(doc.members)
+    assert {config.asset_class for config in configs} == {asset_class}
+    assert asset_class in PRICE_ONLY_ASSET_CLASSES
+
+
+def test_canadian_universe_keeps_the_na_symbol_as_a_ticker() -> None:
+    doc = load_universe_document(UNIVERSE_PATH.parent / "universe.ca.json")
+
+    assert "NA.TO" in {member["ticker"] for member in doc.members}  # National Bank, not a missing value
