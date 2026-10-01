@@ -135,7 +135,7 @@ id and evidence under Progress.
 
 - [ ] T1.1 Trust layer (~350): API marks demo responses (header or payload flag) on ticker/market routes;
       `DataSourceBadge` (source, as-of, stale), loud DEMO banner, "not financial advice" footer.
-- [ ] T1.2 Asset metadata and market-cap storage (~350): migration adds nullable currency, exchange,
+- [x] T1.2 (53f67ee, simplified: asset_market_caps only) Asset metadata and market-cap storage (~350): migration adds nullable currency, exchange,
       country, timezone to `assets` and a restatement-style `asset_market_caps` table keyed by
       `(asset_id, fetched_at)`; repository methods; universe format gains `yahoo_ticker`.
 - [x] T1.3 (e62a3c4, simplified) Index, FX, commodity, yield ingestion (~600): universe file with about 20 tickers (US/MX/CA/CN/HK
@@ -143,9 +143,9 @@ id and evidence under Progress.
       `commodity`, `yield`; keep them out of the ticker picker and ML training; ASHR proxy for CSI 300;
       keep NaN-close rows from silently lagging Asian series; schedule after Asian close and next morning;
       per-ticker health check into `ingestion_runs`; mark `stooq_provider` unavailable (D5).
-- [ ] T1.4 Real market caps (~350): weekly job with `fast_info.marketCap` and `.info` fallback (store market
+- [x] T1.4 (53f67ee, weekly job in full_retrain) Real market caps (~350): weekly job with `fast_info.marketCap` and `.info` fallback (store market
       cap, not shares outstanding); heatmap uses real values, placeholder only when missing and flagged.
-- [ ] T1.5 Multi-market heatmap backend (~500): universe snapshots for IPC, S&P/TSX 60, Hang Seng under
+- [x] T1.5 (53f67ee, MX and CA only; HK deferred; selector in 131b413) Multi-market heatmap backend (~500): universe snapshots for IPC, S&P/TSX 60, Hang Seng under
       `config/`, per-market sector maps, `GET /api/heatmap?market=us|mx|ca|hk`, currency labels.
 - [x] T1.6 (e62a3c4) Markets overview API (~350): `GET /api/markets/overview` (index cards with last, change %,
       freshness; FX; commodities; yields).
@@ -318,6 +318,13 @@ database via `db.migrate`; data-source claims verified with live read-only reque
 - Not verified live: Banxico (needs the user's BANXICO_TOKEN in `.env`). Migration 0014 must be applied by the user (`py -3.14 -m db.migrate`).
 - Pending: China inflation/LPR (needs akshare), calendar, calculators, term comparison.
 
+## P1b (heatmap) status
+
+- Commits 53f67ee (backend) and 131b413 (selector UI). Full suites once: backend 943 passed in 53 s (it was 250-390 s), ui lint clean, vitest 141 passed.
+- Discovery: `tests/test_run_local_scheduler.py::test_main_returns_run_exit_code` was executing the REAL market-data job (network and the configured database) on every full run because `run` froze `subprocess.run` as a default argument; fixed in `main()`. Earlier full-suite runs and CI ran it too (benign price upserts, the same work as the scheduled job).
+- Dropped tickers (no Yahoo data): ALFAA.MX, ELEKTRA.MX. The user applies migration 0015 (`py -3.14 -m db.migrate`); until then tiles keep the flagged placeholder.
+- Still open: HK/CN heatmap, China macro (akshare), release calendar, term calculator, investment ledger (P3), trust layer T1.1, T0.6, alerts/readiness/backup (P4).
+
 ## Next step
 
-Merge P2a (PR); then, depending on the user, China macro (after installing akshare), the heatmap with real market caps, or the investment ledger.
+Merge P1b; then ask the user what comes next (investment ledger, trust layer, China macro, alerts).
