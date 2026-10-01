@@ -1,23 +1,38 @@
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 import psycopg
 from dotenv import load_dotenv
-from psycopg import sql
+from psycopg import pq, sql
 from psycopg.adapt import Loader
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg.types.numeric import FloatLoader
 from psycopg_pool import ConnectionPool
 
+from brain.finance.currency import BASE_CURRENCY, base_amount_cents
+from brain.finance.liquidity import default_is_liquid
+from brain.finance.recurrence import (
+    is_occurrence,
+    occurrence_after,
+    occurrence_on_or_after,
+    occurrences_between,
+)
 from collector.providers.base import AnalystConsensus
+
+logger = logging.getLogger(__name__)
+
+# The ledger's calendar: "which month is this?" is answered in the user's
+# local time, not in whatever zone the database server happens to use.
+LEDGER_TIMEZONE = "America/Mexico_City"
 
 
 class _UUIDStrLoader(Loader):
@@ -62,6 +77,38 @@ class LocalPostgresError(RuntimeError):
     Subclasses ``RuntimeError`` so existing ``except RuntimeError`` call
     sites in ``api/main.py`` keep working unchanged.
     """
+
+
+class LocalPostgresRecordNotFound(LocalPostgresError):
+    """An edit named an ``id`` that has no row. Still a ``LocalPostgresError``
+    (so generic ``except RuntimeError`` sites keep working), but distinct so a
+    router can answer 404 instead of 503."""
+
+
+class PendingOccurrenceConflict(Exception):
+    """A recurring bill may have only ONE pending occurrence, and a write
+    asked for a second one (a ``pending`` status on a due date other than the
+    bill's current pending row).
+
+    Deliberately NOT a ``RuntimeError``: it is a client mistake the router
+    turns into a 422, not a database failure that ``except RuntimeError``
+    call sites turn into a 503.
+    """
+
+    def __init__(self, *, bill_id: str, existing_due_date: date, requested_due_date: date) -> None:
+        super().__init__(
+            f"bill {bill_id} already has a pending occurrence on {existing_due_date.isoformat()}; "
+            f"cannot leave {requested_due_date.isoformat()} pending too"
+        )
+        self.bill_id = bill_id
+        self.existing_due_date = existing_due_date
+        self.requested_due_date = requested_due_date
+
+
+# Name of the attribute where the "is_liquid column exists" answer is cached
+# on the pool (production) or the injected connection (tests). See
+# `LocalPostgresRepository.net_worth_liquidity_flags_available`.
+_LIQUIDITY_PROBE_ATTR = "_faro_net_worth_is_liquid_present"
 
 
 # SEC XBRL fact store (db/migrations/0006_fundamental_facts.sql). The natural key
@@ -140,6 +187,23 @@ class LocalPostgresRepository:
         # _UUIDStrLoader) to match PostgREST's JSON contract.
         conn.adapters.register_loader("numeric", FloatLoader)
         conn.adapters.register_loader("uuid", _UUIDStrLoader)
+        LocalPostgresRepository._pin_session_timezone(conn)
+
+    @staticmethod
+    def _pin_session_timezone(conn: psycopg.Connection) -> None:
+        """Pin the session to ``LEDGER_TIMEZONE`` so month boundaries (a
+        ``timestamptz`` compared with a ``date``) never depend on the server's
+        configured zone. A no-op once pinned. ``set_config`` (not ``SET``) so
+        the value can be a bound parameter. On a connection that is idle and
+        not autocommit (a fresh pool connection) the setting is committed so
+        the pool does not discard it; a connection already inside a caller's
+        transaction is left alone, never committed on the caller's behalf."""
+        if conn.info.parameter_status("TimeZone") == LEDGER_TIMEZONE:
+            return
+        was_idle = conn.info.transaction_status == pq.TransactionStatus.IDLE
+        conn.execute("SELECT set_config('TimeZone', %s, false)", (LEDGER_TIMEZONE,))
+        if was_idle and not conn.autocommit:
+            conn.commit()
 
     @contextmanager
     def _cursor(self) -> Iterator[psycopg.Cursor[dict[str, Any]]]:
@@ -168,7 +232,19 @@ class LocalPostgresRepository:
         updates every column present in the payload."""
         if not rows:
             return 0
+        with self._cursor() as cur:
+            return self._upsert_batch_on(cur, table, rows, conflict_cols)
 
+    @staticmethod
+    def _upsert_batch_on(
+        cur: psycopg.Cursor[dict[str, Any]],
+        table: str,
+        rows: list[dict[str, Any]],
+        conflict_cols: tuple[str, ...],
+    ) -> int:
+        """``_upsert_batch`` on a cursor the caller already holds, so a caller
+        that needs several statements in ONE transaction (a pooled ``_cursor()``
+        block is one transaction; two of them are two) can compose it."""
         columns = list(rows[0].keys())
         update_cols = [column for column in columns if column not in conflict_cols]
 
@@ -203,8 +279,7 @@ class LocalPostgresRepository:
             )
 
         params = [tuple(row[column] for column in columns) for row in rows]
-        with self._cursor() as cur:
-            cur.executemany(query, params)
+        cur.executemany(query, params)
         # Preserves today's return semantics: the submitted row count, not
         # the affected-row count.
         return len(rows)
@@ -1326,6 +1401,17 @@ class LocalPostgresRepository:
             )
             return cur.fetchall()
 
+    def get_finance_account(self, account_id: str) -> dict[str, Any] | None:
+        """One account by id, ACTIVE OR NOT: an edit of an old transaction
+        must still resolve the account it was booked to, even if that account
+        has since been retired. ``None`` when the id does not exist."""
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, name, account_type, currency, is_active FROM finance_accounts WHERE id = %s",
+                (account_id,),
+            )
+            return cur.fetchone()
+
     def get_finance_sync_cursor(self, source: str) -> int | None:
         """The current high-water mark for ``source`` -- ``max`` over
         non-failed batches only, so a crashed pull never advances it (the
@@ -1386,6 +1472,23 @@ class LocalPostgresRepository:
 
     # -- Personal finance (dashboard reads/writes, db/migrations/0009) ------
 
+    @staticmethod
+    def _base_amount_sql(alias: str = "") -> str:
+        """SQL twin of ``brain.finance.currency.base_amount_cents``: the
+        materialized base amount, else the raw amount when the row is already
+        in the base currency, else NULL (which ``SUM`` skips). Rows written
+        before base amounts were materialized have a NULL
+        ``amount_base_cents``, so a bare ``SUM(amount_cents)`` -- or a bare
+        ``SUM(amount_base_cents)`` -- would be wrong for them. ``BASE_CURRENCY``
+        is a module constant, never user input, so inlining it is safe."""
+        prefix = f"{alias}." if alias else ""
+        # upper(trim()): `currency` is char(3), and a legacy value can be
+        # lower-case or space-padded; Python's normalize_currency does the same.
+        return (
+            f"COALESCE({prefix}amount_base_cents, "
+            f"CASE WHEN upper(trim({prefix}currency)) = '{BASE_CURRENCY}' THEN {prefix}amount_cents END)"
+        )
+
     def _upsert_by_id(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
         """Update-by-id when the caller supplies one (an edit), else INSERT a
         fresh row. This is the shape for tables with no natural business key
@@ -1394,34 +1497,42 @@ class LocalPostgresRepository:
         budgets, there's nothing else to conflict on. Every column present in
         ``row`` is overwritten on update, matching a UI that always submits
         the whole record."""
+        with self._cursor() as cur:
+            return self._upsert_by_id_on(cur, table, row)
+
+    @staticmethod
+    def _upsert_by_id_on(
+        cur: psycopg.Cursor[dict[str, Any]], table: str, row: dict[str, Any]
+    ) -> dict[str, Any]:
+        """``_upsert_by_id`` on a cursor the caller already holds (see
+        ``_upsert_batch_on`` for why)."""
         payload = dict(row)
         record_id = payload.pop("id", None)
         columns = list(payload.keys())
 
-        with self._cursor() as cur:
-            if record_id:
-                updates_sql = sql.SQL(", ").join(
-                    sql.SQL("{column} = {placeholder}").format(
-                        column=sql.Identifier(column), placeholder=sql.Placeholder()
-                    )
-                    for column in columns
+        if record_id:
+            updates_sql = sql.SQL(", ").join(
+                sql.SQL("{column} = {placeholder}").format(
+                    column=sql.Identifier(column), placeholder=sql.Placeholder()
                 )
-                query = sql.SQL(
-                    "UPDATE {table} SET {updates}, updated_at = now() WHERE id = {placeholder} RETURNING *"
-                ).format(table=sql.Identifier(table), updates=updates_sql, placeholder=sql.Placeholder())
-                cur.execute(query, (*payload.values(), record_id))
-                updated = cur.fetchone()
-                if updated is None:
-                    raise LocalPostgresError(f"{table} row not found: {record_id}")
-                return updated
-
-            insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)
-            placeholders_sql = sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+                for column in columns
+            )
             query = sql.SQL(
-                "INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING *"
-            ).format(table=sql.Identifier(table), cols=insert_cols_sql, placeholders=placeholders_sql)
-            cur.execute(query, tuple(payload.values()))
-            return cur.fetchone()
+                "UPDATE {table} SET {updates}, updated_at = now() WHERE id = {placeholder} RETURNING *"
+            ).format(table=sql.Identifier(table), updates=updates_sql, placeholder=sql.Placeholder())
+            cur.execute(query, (*payload.values(), record_id))
+            updated = cur.fetchone()
+            if updated is None:
+                raise LocalPostgresRecordNotFound(f"{table} row not found: {record_id}")
+            return updated
+
+        insert_cols_sql = sql.SQL(", ").join(sql.Identifier(column) for column in columns)
+        placeholders_sql = sql.SQL(", ").join(sql.Placeholder() for _ in columns)
+        query = sql.SQL(
+            "INSERT INTO {table} ({cols}) VALUES ({placeholders}) RETURNING *"
+        ).format(table=sql.Identifier(table), cols=insert_cols_sql, placeholders=placeholders_sql)
+        cur.execute(query, tuple(payload.values()))
+        return cur.fetchone()
 
     def get_finance_transactions(
         self,
@@ -1457,6 +1568,14 @@ class LocalPostgresRepository:
             cur.execute(query, params)
             return cur.fetchall()
 
+    def get_finance_transaction_by_client_id(self, client_id: str) -> dict[str, Any] | None:
+        """The stored row for an idempotency key, tombstoned or not -- the
+        PUT handler compares it with an incoming edit to decide whether the
+        materialized base amount has to be recomputed."""
+        with self._cursor() as cur:
+            cur.execute("SELECT * FROM finance_transactions WHERE client_id = %s", (client_id,))
+            return cur.fetchone()
+
     def upsert_finance_transaction(self, row: dict[str, Any]) -> dict[str, Any]:
         """Single-row wrapper over ``upsert_finance_transactions``'s batch
         upsert, for the dashboard's one-row-at-a-time PUT. Re-reads the row
@@ -1483,11 +1602,15 @@ class LocalPostgresRepository:
 
         ``month`` defaults to the current calendar month: "how am I doing on
         budget" is meaningless for an unspecified month.
+
+        ``actual_cents`` sums BASE amounts (budgets are base-currency-only in
+        v1), so a foreign-currency expense counts at its converted value and
+        one with no usable base amount is skipped rather than added raw.
         """
         month = month or date.today().strftime("%Y-%m")
         month_start = f"{month}-01"
 
-        query = """
+        query = f"""
             WITH effective_budgets AS (
                 SELECT DISTINCT ON (category_id) *
                 FROM finance_budgets
@@ -1495,7 +1618,7 @@ class LocalPostgresRepository:
                 ORDER BY category_id, (period_month IS NOT NULL) DESC
             ),
             month_spend AS (
-                SELECT category_id, SUM(amount_cents) AS actual_cents
+                SELECT category_id, SUM({self._base_amount_sql()})::bigint AS actual_cents
                 FROM finance_transactions
                 WHERE kind = 'expense'
                   AND deleted_at IS NULL
@@ -1560,17 +1683,21 @@ class LocalPostgresRepository:
         """Snapshots with totals computed at read time via a filtered
         aggregate over ``finance_net_worth_items`` -- 0008 deliberately does
         not store totals on the snapshot row (see its comment), so this is
-        the one place that formula lives."""
-        query = """
+        the one place that formula lives.
+
+        Totals are in the BASE currency: each item contributes its base
+        amount (see ``_base_amount_sql``), never its raw native amount."""
+        base_amount = self._base_amount_sql("i")
+        query = f"""
             SELECT
                 s.id,
                 s.snapshot_date,
                 s.notes,
                 s.created_at,
-                COALESCE(SUM(i.amount_cents) FILTER (WHERE i.is_asset), 0) AS total_assets_cents,
-                COALESCE(SUM(i.amount_cents) FILTER (WHERE NOT i.is_asset), 0) AS total_liabilities_cents,
-                COALESCE(SUM(i.amount_cents) FILTER (WHERE i.is_asset), 0)
-                    - COALESCE(SUM(i.amount_cents) FILTER (WHERE NOT i.is_asset), 0) AS net_worth_cents
+                COALESCE(SUM({base_amount}) FILTER (WHERE i.is_asset), 0)::bigint AS total_assets_cents,
+                COALESCE(SUM({base_amount}) FILTER (WHERE NOT i.is_asset), 0)::bigint AS total_liabilities_cents,
+                (COALESCE(SUM({base_amount}) FILTER (WHERE i.is_asset), 0)
+                    - COALESCE(SUM({base_amount}) FILTER (WHERE NOT i.is_asset), 0))::bigint AS net_worth_cents
             FROM finance_net_worth_snapshots s
             LEFT JOIN finance_net_worth_items i ON i.snapshot_id = s.id
             GROUP BY s.id
@@ -1594,10 +1721,73 @@ class LocalPostgresRepository:
 
         items_by_snapshot: dict[str, list[dict[str, Any]]] = {}
         for item in items:
+            # A database without migration 0013 has no `is_liquid` column, and
+            # `SELECT *` then simply omits it: the key is always present in
+            # the API contract, null meaning "not classified".
+            item.setdefault("is_liquid", None)
             items_by_snapshot.setdefault(item["snapshot_id"], []).append(item)
         for row in snapshots:
             row["items"] = items_by_snapshot.get(row["id"], [])
         return snapshots
+
+    def net_worth_liquidity_flags_available(self) -> bool:
+        """Whether ``finance_net_worth_items.is_liquid`` exists, i.e. whether
+        migration 0013 is applied to THIS database. Code that reads or writes
+        the flag checks this first and degrades to the legacy behavior when it
+        is False (the scheduled jobs and the always-on API run this working
+        tree before the user applies the migration).
+
+        A positive answer is cached for the life of the pool (or the injected
+        connection): a column does not disappear. A negative answer is NOT
+        cached, so applying the migration takes effect on the next request
+        without restarting anything; the probe is one catalog lookup."""
+        target = self.connection if self.connection is not None else self.pool
+        if getattr(target, _LIQUIDITY_PROBE_ATTR, False) is True:
+            return True
+
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'finance_net_worth_items'
+                      AND column_name = 'is_liquid'
+                ) AS present
+                """
+            )
+            present = bool(cur.fetchone()["present"])
+
+        if present:
+            try:
+                setattr(target, _LIQUIDITY_PROBE_ATTR, True)
+            except AttributeError:  # an object that refuses attributes: just probe again next time
+                pass
+        return present
+
+    @staticmethod
+    def _resolve_liquidity_flag(
+        item: dict[str, Any], stored_flags: dict[tuple[bool, str], bool]
+    ) -> bool | None:
+        """The ``is_liquid`` value to store for one item of a snapshot write.
+
+        * A liability is never classified: ``None``.
+        * A flag the client sent (``True``, ``False`` or an explicit ``None``
+          for "not classified") is stored as given.
+        * A flag the client did not send keeps the classification the same
+          item (same kind and label) already had in this snapshot -- a repeat
+          write of the worksheet must not silently flip a choice -- and only a
+          genuinely new item, or one still unclassified, gets the default for
+          its ``item_type`` (``brain.finance.liquidity.default_is_liquid``).
+        """
+        if not item["is_asset"]:
+            return None
+        if "is_liquid" in item:
+            return item["is_liquid"]
+        stored = stored_flags.get((True, item["label"].strip().lower()))
+        if stored is not None:
+            return stored
+        return default_is_liquid(item.get("item_type", "other"), is_asset=True)
 
     def upsert_finance_net_worth_snapshot(
         self,
@@ -1612,7 +1802,18 @@ class LocalPostgresRepository:
         as a unit (see ``_cursor()``'s docstring). Replacing rather than
         diffing items is deliberately simple -- the dashboard always submits
         the full worksheet, matching the book's paper-form workflow, not a
-        line-item editor."""
+        line-item editor.
+
+        Each item carries ``fx_rate_to_base`` and ``amount_base_cents``,
+        resolved by the caller (``api/routers/finance.py`` validates that a
+        foreign-currency item has a rate); this method stores them as given.
+        The returned totals are base-currency totals.
+
+        ``is_liquid`` (see ``_resolve_liquidity_flag``) is stored only when
+        the database has the column; without it the flag is ignored, with a
+        warning if the client asked for one, and every returned item reports
+        ``is_liquid: None``."""
+        flags_available = self.net_worth_liquidity_flags_available()
         with self._cursor() as cur:
             cur.execute(
                 """
@@ -1626,30 +1827,73 @@ class LocalPostgresRepository:
             snapshot = cur.fetchone()
             snapshot_id = snapshot["id"]
 
+            # The classifications this snapshot already holds, read before the
+            # wholesale replace below wipes them (see `_resolve_liquidity_flag`).
+            stored_flags: dict[tuple[bool, str], bool] = {}
+            if flags_available:
+                cur.execute(
+                    "SELECT is_asset, label, is_liquid FROM finance_net_worth_items "
+                    "WHERE snapshot_id = %s AND is_liquid IS NOT NULL",
+                    (snapshot_id,),
+                )
+                stored_flags = {
+                    (row["is_asset"], row["label"].strip().lower()): row["is_liquid"] for row in cur.fetchall()
+                }
+
             cur.execute("DELETE FROM finance_net_worth_items WHERE snapshot_id = %s", (snapshot_id,))
+
+            if not flags_available and any(item.get("is_liquid") is not None for item in items):
+                logger.warning(
+                    "finance_net_worth_liquidity_ignored: finance_net_worth_items.is_liquid does not exist "
+                    "(migration 0013 is not applied); the liquidity flags of this write were not stored"
+                )
 
             prepared_items: list[dict[str, Any]] = []
             for item in items:
-                cur.execute(
-                    """
-                    INSERT INTO finance_net_worth_items
-                        (snapshot_id, is_asset, label, item_type, amount_cents, currency)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING *
-                    """,
-                    (
-                        snapshot_id,
-                        item["is_asset"],
-                        item["label"],
-                        item.get("item_type", "other"),
-                        item["amount_cents"],
-                        item["currency"],
-                    ),
+                values = (
+                    snapshot_id,
+                    item["is_asset"],
+                    item["label"],
+                    item.get("item_type", "other"),
+                    item["amount_cents"],
+                    item["currency"],
+                    item.get("fx_rate_to_base"),
+                    item.get("amount_base_cents"),
                 )
-                prepared_items.append(cur.fetchone())
+                if flags_available:
+                    cur.execute(
+                        """
+                        INSERT INTO finance_net_worth_items
+                            (snapshot_id, is_asset, label, item_type, amount_cents, currency,
+                             fx_rate_to_base, amount_base_cents, is_liquid)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING *
+                        """,
+                        (*values, self._resolve_liquidity_flag(item, stored_flags)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO finance_net_worth_items
+                            (snapshot_id, is_asset, label, item_type, amount_cents, currency,
+                             fx_rate_to_base, amount_base_cents)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING *
+                        """,
+                        values,
+                    )
+                prepared_item = cur.fetchone()
+                prepared_item.setdefault("is_liquid", None)
+                prepared_items.append(prepared_item)
 
-        total_assets_cents = sum(item["amount_cents"] for item in prepared_items if item["is_asset"])
-        total_liabilities_cents = sum(item["amount_cents"] for item in prepared_items if not item["is_asset"])
+        # Same rule as the read query: an item with no usable base amount
+        # contributes nothing rather than its raw native amount.
+        total_assets_cents = sum(
+            base_amount_cents(item) or 0 for item in prepared_items if item["is_asset"]
+        )
+        total_liabilities_cents = sum(
+            base_amount_cents(item) or 0 for item in prepared_items if not item["is_asset"]
+        )
         return {
             **snapshot,
             "items": prepared_items,
@@ -1685,22 +1929,177 @@ class LocalPostgresRepository:
             cur.execute(query)
             return cur.fetchall()
 
-    def upsert_finance_recurring_bill(self, row: dict[str, Any]) -> dict[str, Any]:
-        return self._upsert_by_id("finance_recurring_bills", row)
+    def upsert_finance_recurring_bill(self, row: dict[str, Any], *, today: date) -> dict[str, Any]:
+        """Save a bill (an edit when ``row`` carries an ``id``) and, for an
+        ACTIVE bill, make sure it has its one pending occurrence -- both in a
+        single transaction, so a bill never exists without its pending row.
 
-    def upsert_finance_recurring_bill_payment(self, row: dict[str, Any]) -> dict[str, Any]:
+        * The first pending occurrence is the earliest one on or after
+          ``today``, so an old anchor never fabricates an overdue row.
+        * On an edit, a pending row (no linked transaction) that the new
+          schedule no longer justifies is deleted and regenerated (see
+          ``_drop_stale_pending_payments``); a still-valid pending row --
+          including an overdue one -- is kept. Paid and skipped rows are
+          history and are never touched.
+        * Idempotent: re-saving an unchanged bill changes nothing.
+
+        The returned row carries ``next_due_date`` / ``next_status`` like a
+        ``get_finance_recurring_bills`` row does. An inactive bill keeps
+        whatever pending row it had, and reactivating it keeps that row (an old
+        one shows as overdue until it is paid or skipped)."""
+        with self._cursor() as cur:
+            bill = self._upsert_by_id_on(cur, "finance_recurring_bills", row)
+            next_due_date = None
+            if bill["is_active"]:
+                self._drop_stale_pending_payments(cur, bill, today=today)
+                next_due_date = self._ensure_pending_payment(cur, bill, not_before=today)
+        return {**bill, "next_due_date": next_due_date, "next_status": "pending" if next_due_date else None}
+
+    @staticmethod
+    def _drop_stale_pending_payments(
+        cur: psycopg.Cursor[dict[str, Any]], bill: dict[str, Any], *, today: date
+    ) -> None:
+        """Delete the bill's pending rows (without a linked transaction) that
+        its CURRENT schedule no longer justifies. A pending row is stale when
+
+        * its date is not one of the schedule's dates (the anchor or the
+          frequency changed), or
+        * it is dated ``today`` or later yet skips an earlier schedule date
+          that has no settled row (e.g. an annual bill edited to monthly:
+          the row sitting a year out would hide this month's payment).
+
+        An overdue row that is still a schedule date is kept: it is a
+        genuinely unpaid occurrence, not an artifact of the edit."""
+        cur.execute(
+            "SELECT id, due_date FROM finance_recurring_bill_payments "
+            "WHERE bill_id = %s AND status = 'pending' AND transaction_id IS NULL",
+            (bill["id"],),
+        )
+        pending = cur.fetchall()
+        if not pending:
+            return
+
+        cur.execute(
+            "SELECT due_date FROM finance_recurring_bill_payments WHERE bill_id = %s AND status <> 'pending'",
+            (bill["id"],),
+        )
+        settled = {payment["due_date"] for payment in cur.fetchall()}
+        anchor, frequency = bill["anchor_due_date"], bill["frequency"]
+
+        def is_stale(due_date: date) -> bool:
+            if not is_occurrence(anchor, frequency, due_date):
+                return True
+            if due_date < today:
+                return False
+            earlier = occurrences_between(anchor, frequency, today, due_date - timedelta(days=1))
+            return any(occurrence not in settled for occurrence in earlier)
+
+        stale_ids = [payment["id"] for payment in pending if is_stale(payment["due_date"])]
+        if stale_ids:
+            cur.execute("DELETE FROM finance_recurring_bill_payments WHERE id = ANY(%s::uuid[])", (stale_ids,))
+
+    @staticmethod
+    def _ensure_pending_payment(
+        cur: psycopg.Cursor[dict[str, Any]], bill: dict[str, Any], *, not_before: date
+    ) -> date:
+        """Guarantee the bill has a pending occurrence and return its due date.
+
+        The schema's design is ONE pending row per bill at a time (0008, now
+        also enforced by 0013's partial unique index), so when one already
+        exists (the earliest wins) nothing is created. This check is what
+        keeps the rule correct on a database without that index.
+        Otherwise the new row is the earliest schedule date on or after
+        ``not_before`` that has no row yet -- skipping dates that already
+        exist as paid/skipped history, so settling an old occurrence never
+        collides with a later one that was settled first. Dates always come
+        from the anchor (``brain.finance.recurrence``), never by chaining."""
+        cur.execute(
+            "SELECT min(due_date) AS due_date FROM finance_recurring_bill_payments "
+            "WHERE bill_id = %s AND status = 'pending'",
+            (bill["id"],),
+        )
+        existing_pending = cur.fetchone()["due_date"]
+        if existing_pending is not None:
+            return existing_pending
+
+        cur.execute(
+            "SELECT due_date FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date >= %s",
+            (bill["id"], not_before),
+        )
+        taken = {payment["due_date"] for payment in cur.fetchall()}
+        anchor, frequency = bill["anchor_due_date"], bill["frequency"]
+        due_date = occurrence_on_or_after(anchor, frequency, not_before)
+        while due_date in taken:
+            due_date = occurrence_after(anchor, frequency, due_date)
+        cur.execute(
+            "INSERT INTO finance_recurring_bill_payments (bill_id, due_date) VALUES (%s, %s) "
+            "ON CONFLICT (bill_id, due_date) DO NOTHING",
+            (bill["id"], due_date),
+        )
+        return due_date
+
+    def upsert_finance_recurring_bill_payment(self, row: dict[str, Any]) -> dict[str, Any] | None:
         """Upsert one occurrence by its natural key (``bill_id``,
         ``due_date``) -- the unique index this targets is
-        ``finance_recurring_bill_payments_occurrence_key`` from 0008."""
-        self._upsert_batch(
-            "finance_recurring_bill_payments", [row], conflict_cols=("bill_id", "due_date")
-        )
+        ``finance_recurring_bill_payments_occurrence_key`` from 0008 -- and,
+        when it is settled (``paid`` or ``skipped``) on an ACTIVE bill, create
+        the bill's NEXT pending occurrence: the earliest schedule date
+        strictly after the settled one, even if that date is already past (a
+        genuinely unpaid occurrence stays visible as overdue). One
+        transaction; the bill row is locked so concurrent saves/settlements of
+        the same bill serialize.
+
+        Idempotent: repeating the same call keeps the original ``paid_at`` and
+        creates nothing new. ``None`` when the bill does not exist. No ledger
+        transaction is created; ``transaction_id`` is only an optional link.
+
+        One pending occurrence per bill. A ``pending`` write on a due date
+        other than the bill's current pending row (including reopening a paid
+        or skipped date) raises ``PendingOccurrenceConflict`` before anything
+        is written: the bill row is locked, so the check cannot race, and it
+        holds whether or not migration 0013's partial unique index exists
+        (the index is only a backstop for writers that bypass this method).
+        Repeating the write on the pending row's own date stays a plain
+        idempotent update."""
         with self._cursor() as cur:
+            cur.execute("SELECT * FROM finance_recurring_bills WHERE id = %s FOR UPDATE", (row["bill_id"],))
+            bill = cur.fetchone()
+            if bill is None:
+                return None
+
+            if row.get("status", "pending") == "pending":
+                cur.execute(
+                    "SELECT due_date FROM finance_recurring_bill_payments "
+                    "WHERE bill_id = %s AND status = 'pending' ORDER BY due_date",
+                    (row["bill_id"],),
+                )
+                pending_dates = [payment["due_date"] for payment in cur.fetchall()]
+                if pending_dates and row["due_date"] not in pending_dates:
+                    raise PendingOccurrenceConflict(
+                        bill_id=str(row["bill_id"]),
+                        existing_due_date=pending_dates[0],
+                        requested_due_date=row["due_date"],
+                    )
+
+            cur.execute(
+                "SELECT status FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date = %s",
+                (row["bill_id"], row["due_date"]),
+            )
+            stored = cur.fetchone()
+            if stored is not None and stored["status"] == "paid" and row.get("status") == "paid":
+                row = {column: value for column, value in row.items() if column != "paid_at"}
+
+            self._upsert_batch_on(cur, "finance_recurring_bill_payments", [row], ("bill_id", "due_date"))
             cur.execute(
                 "SELECT * FROM finance_recurring_bill_payments WHERE bill_id = %s AND due_date = %s",
                 (row["bill_id"], row["due_date"]),
             )
-            return cur.fetchone()
+            payment = cur.fetchone()
+            if payment["status"] in ("paid", "skipped") and bill["is_active"]:
+                self._ensure_pending_payment(
+                    cur, bill, not_before=payment["due_date"] + timedelta(days=1)
+                )
+            return payment
 
     def get_finance_goals(self) -> list[dict[str, Any]]:
         with self._cursor() as cur:

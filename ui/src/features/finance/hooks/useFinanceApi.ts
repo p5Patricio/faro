@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import { API_BASE_URL } from '../../../lib/apiBase.ts';
 import type {
@@ -29,6 +29,35 @@ interface ResourceState<T> {
   refetch: () => Promise<void>;
 }
 
+interface RequestGuard {
+  /** Starts a request; the returned check is true only while no newer request has begun. */
+  begin: () => () => boolean;
+  /** Marks every in-flight request stale (inputs changed or the component unmounted). */
+  invalidate: () => void;
+}
+
+/**
+ * Sequence guard: responses can arrive out of order (flipping months quickly),
+ * and only the latest request may write state, so a slow reply for month A never
+ * lands under month B.
+ */
+function useRequestGuard(): RequestGuard {
+  const latest = useRef(0);
+  return useMemo(
+    () => ({
+      begin: () => {
+        latest.current += 1;
+        const id = latest.current;
+        return () => id === latest.current;
+      },
+      invalidate: () => {
+        latest.current += 1;
+      },
+    }),
+    [],
+  );
+}
+
 /**
  * One small useState+useEffect+axios wrapper per GET resource — mirrors
  * `App.tsx`'s own imperative fetch style (no react-query in this repo).
@@ -38,19 +67,27 @@ export function useFinanceSummary(month: string): ResourceState<FinanceSummary |
   const [data, setData] = useState<FinanceSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
+  const loadedMonth = useRef<string | null>(null);
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
+    // Another month's figures must not sit under this month's heading while it loads.
+    if (loadedMonth.current !== month) setData(null);
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<FinanceSummary>(`${FINANCE_BASE_URL}/summary`, { params: { month } });
+      if (!isCurrent()) return;
+      loadedMonth.current = month;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudo cargar el resumen del mes.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [month]);
+  }, [guard, month]);
 
   useEffect(() => {
     let disposed = false;
@@ -59,8 +96,9 @@ export function useFinanceSummary(month: string): ResourceState<FinanceSummary |
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }
@@ -69,19 +107,23 @@ export function useFinanceCategories(): ResourceState<FinanceCategory[]> {
   const [data, setData] = useState<FinanceCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<FinanceCategory[]>(`${FINANCE_BASE_URL}/categories`);
+      if (!isCurrent()) return;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudieron cargar las categorías.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [guard]);
 
   useEffect(() => {
     let disposed = false;
@@ -90,8 +132,9 @@ export function useFinanceCategories(): ResourceState<FinanceCategory[]> {
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }
@@ -100,19 +143,23 @@ export function useFinanceAccounts(): ResourceState<FinanceAccount[]> {
   const [data, setData] = useState<FinanceAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<FinanceAccount[]>(`${FINANCE_BASE_URL}/accounts`);
+      if (!isCurrent()) return;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudieron cargar las cuentas.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [guard]);
 
   useEffect(() => {
     let disposed = false;
@@ -121,8 +168,9 @@ export function useFinanceAccounts(): ResourceState<FinanceAccount[]> {
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }
@@ -132,21 +180,30 @@ export function useFinanceTransactions(filters: TransactionFilters = {}): Resour
   const [data, setData] = useState<FinanceTransaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
+  const loadedFilters = useRef<string | null>(null);
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
+    const filtersKey = JSON.stringify([month, categoryId, accountId, limit]);
+    // Rows of other filters (another month) must not be shown while these load.
+    if (loadedFilters.current !== filtersKey) setData([]);
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<FinanceTransaction[]>(`${FINANCE_BASE_URL}/transactions`, {
         params: { month, category_id: categoryId, account_id: accountId, limit },
       });
+      if (!isCurrent()) return;
+      loadedFilters.current = filtersKey;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudieron cargar las transacciones.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [month, categoryId, accountId, limit]);
+  }, [guard, month, categoryId, accountId, limit]);
 
   useEffect(() => {
     let disposed = false;
@@ -155,39 +212,9 @@ export function useFinanceTransactions(filters: TransactionFilters = {}): Resour
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
-
-  return { data, loading, error, refetch };
-}
-
-export function useFinanceBudgets(month: string): ResourceState<FinanceBudget[]> {
-  const [data, setData] = useState<FinanceBudget[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const refetch = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await axios.get<FinanceBudget[]>(`${FINANCE_BASE_URL}/budgets`, { params: { month } });
-      setData(response.data);
-    } catch {
-      setError('No se pudieron cargar los presupuestos.');
-    } finally {
-      setLoading(false);
-    }
-  }, [month]);
-
-  useEffect(() => {
-    let disposed = false;
-    queueMicrotask(() => {
-      if (!disposed) void refetch();
-    });
-    return () => {
-      disposed = true;
-    };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }
@@ -196,19 +223,23 @@ export function useFinanceNetWorth(limit = 24): ResourceState<NetWorthSnapshot[]
   const [data, setData] = useState<NetWorthSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<NetWorthSnapshot[]>(`${FINANCE_BASE_URL}/net-worth`, { params: { limit } });
+      if (!isCurrent()) return;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudieron cargar los patrimonios.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [limit]);
+  }, [guard, limit]);
 
   useEffect(() => {
     let disposed = false;
@@ -217,8 +248,9 @@ export function useFinanceNetWorth(limit = 24): ResourceState<NetWorthSnapshot[]
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }
@@ -227,21 +259,25 @@ export function useFinanceRecurringBills(includeInactive = false): ResourceState
   const [data, setData] = useState<RecurringBill[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<RecurringBill[]>(`${FINANCE_BASE_URL}/recurring-bills`, {
         params: { include_inactive: includeInactive },
       });
+      if (!isCurrent()) return;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudieron cargar los pagos recurrentes.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [includeInactive]);
+  }, [guard, includeInactive]);
 
   useEffect(() => {
     let disposed = false;
@@ -250,8 +286,9 @@ export function useFinanceRecurringBills(includeInactive = false): ResourceState
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }
@@ -260,19 +297,23 @@ export function useFinanceGoals(): ResourceState<FinanceGoal[]> {
   const [data, setData] = useState<FinanceGoal[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const guard = useRequestGuard();
 
   const refetch = useCallback(async () => {
+    const isCurrent = guard.begin();
     setLoading(true);
     setError(null);
     try {
       const response = await axios.get<FinanceGoal[]>(`${FINANCE_BASE_URL}/goals`);
+      if (!isCurrent()) return;
       setData(response.data);
     } catch {
+      if (!isCurrent()) return;
       setError('No se pudieron cargar las metas.');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, []);
+  }, [guard]);
 
   useEffect(() => {
     let disposed = false;
@@ -281,8 +322,9 @@ export function useFinanceGoals(): ResourceState<FinanceGoal[]> {
     });
     return () => {
       disposed = true;
+      guard.invalidate();
     };
-  }, [refetch]);
+  }, [guard, refetch]);
 
   return { data, loading, error, refetch };
 }

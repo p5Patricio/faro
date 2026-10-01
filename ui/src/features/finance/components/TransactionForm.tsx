@@ -1,6 +1,6 @@
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import { putTransaction } from '../hooks/useFinanceApi.ts';
-import { DEFAULT_CURRENCY } from '../lib/format.ts';
+import { BASE_CURRENCY } from '../lib/format.ts';
 import type { FinanceAccount, FinanceCategory, FinanceCategoryKind, FinanceTransaction, TransactionPayload } from '../types.ts';
 
 const KIND_LABELS: Record<FinanceCategoryKind, string> = {
@@ -39,6 +39,7 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
   const [categoryId, setCategoryId] = useState(initial?.category_id ?? '');
   const [accountId, setAccountId] = useState(initial?.account_id ?? '');
   const [amount, setAmount] = useState(initial ? String(initial.amount_cents / 100) : '');
+  const [fxRate, setFxRate] = useState(initial?.fx_rate_to_base ? String(initial.fx_rate_to_base) : '');
   const [occurredAt, setOccurredAt] = useState(() =>
     toDatetimeLocalValue(initial?.occurred_at ?? new Date().toISOString()),
   );
@@ -49,12 +50,25 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
 
   const selectedCategory = useMemo(() => categories.find((c) => c.id === categoryId), [categories, categoryId]);
   const selectedAccount = useMemo(() => accounts.find((a) => a.id === accountId), [accounts, accountId]);
-  const currency = selectedAccount?.currency ?? initial?.currency ?? DEFAULT_CURRENCY;
+  // The currency is never a free choice. A new transaction takes its
+  // account's currency; an edit keeps the transaction's own currency (and the
+  // account choices below are limited to accounts in it), so saving an edit
+  // can never relabel what was recorded.
+  const currency = initial ? initial.currency : (selectedAccount?.currency ?? BASE_CURRENCY);
+  const isForeign = currency !== BASE_CURRENCY;
+  const selectableAccounts = initial
+    ? accounts.filter((a) => a.currency === initial.currency || a.id === initial.account_id)
+    : accounts;
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!selectedCategory || !accountId || !amount) {
-      setError('Completá categoría, cuenta y monto.');
+      setError('Completa categoría, cuenta y monto.');
+      return;
+    }
+    const fx = Number(fxRate);
+    if (isForeign && !(fx > 0)) {
+      setError(`Ingresa el tipo de cambio a ${BASE_CURRENCY}; debe ser mayor que cero.`);
       return;
     }
     setSaving(true);
@@ -67,6 +81,7 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
         kind: selectedCategory.kind,
         amount_cents: Math.round(Number(amount) * 100),
         currency,
+        ...(isForeign ? { fx_rate_to_base: fx } : {}),
         occurred_at: new Date(occurredAt).toISOString(),
         merchant: merchant || undefined,
         notes: notes || undefined,
@@ -95,7 +110,7 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
           className={FIELD_CLASS}
         >
           <option value="" disabled>
-            Elegí una categoría
+            Elige una categoría
           </option>
           {categories.map((category) => (
             <option key={category.id} value={category.id}>
@@ -124,14 +139,19 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
           className={FIELD_CLASS}
         >
           <option value="" disabled>
-            Elegí una cuenta
+            Elige una cuenta
           </option>
-          {accounts.map((account) => (
+          {selectableAccounts.map((account) => (
             <option key={account.id} value={account.id}>
               {account.name} ({account.currency})
             </option>
           ))}
         </select>
+        {selectedAccount || initial ? (
+          <p className="mt-1.5 text-xs text-ink-muted">
+            Moneda: <span className="font-medium text-ink-secondary">{currency}</span> (según la cuenta elegida)
+          </p>
+        ) : null}
       </div>
 
       <div>
@@ -149,6 +169,29 @@ export function TransactionForm({ categories, accounts, initial, onSaved, onCanc
           className={`${FIELD_CLASS} text-right`}
         />
       </div>
+
+      {isForeign ? (
+        <div>
+          <label htmlFor={`${idPrefix}-fx`} className={LABEL_CLASS}>
+            Tipo de cambio a {BASE_CURRENCY}
+          </label>
+          <input
+            id={`${idPrefix}-fx`}
+            type="number"
+            inputMode="decimal"
+            min="0"
+            step="any"
+            value={fxRate}
+            onChange={(event) => setFxRate(event.target.value)}
+            required
+            aria-describedby={`${idPrefix}-fx-hint`}
+            className={`${FIELD_CLASS} text-right`}
+          />
+          <p id={`${idPrefix}-fx-hint`} className="mt-1.5 text-xs text-ink-muted">
+            Cuántos {BASE_CURRENCY} vale 1 {currency}. Los totales de finanzas se calculan en {BASE_CURRENCY}.
+          </p>
+        </div>
+      ) : null}
 
       <div>
         <label htmlFor={`${idPrefix}-occurred-at`} className={LABEL_CLASS}>

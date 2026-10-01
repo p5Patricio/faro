@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 # Run the suite as the "test" environment. Among other things this disables
 # the API rate limiter (app_config.AppConfig.rate_limiting_enabled) so the
@@ -58,3 +58,23 @@ def db_connection(test_database_url: str) -> Iterator[psycopg.Connection]:
 @pytest.fixture()
 def repository(db_connection: psycopg.Connection) -> LocalPostgresRepository:
     return LocalPostgresRepository(connection=db_connection)
+
+
+@pytest.fixture()
+def make_finance_account(db_connection: psycopg.Connection) -> Callable[[str, str], str]:
+    """Insert a personal-finance account and return its id.
+
+    Finance tests build the accounts they need instead of relying on the
+    ones 0008 seeds: a transaction's currency must equal its account's, and
+    the seed's currency is a data decision (0012 moves it from USD to MXN),
+    not something these tests should depend on. Rolled back with the test.
+    """
+
+    def _make(name: str, currency: str) -> str:
+        row = db_connection.execute(
+            "INSERT INTO finance_accounts (name, account_type, currency) VALUES (%s, 'cash', %s) RETURNING id",
+            (name, currency),
+        ).fetchone()
+        return str(row[0])
+
+    return _make

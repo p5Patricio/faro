@@ -1,18 +1,34 @@
 /**
- * Fallback currency for aggregate figures the API computes server-side
- * without echoing a `currency` field (e.g. `monthly_summary`, the
- * net-worth snapshot totals, `GET /budgets` rows). Every one of this
- * user's real accounts is MXN today, so this is a safe assumption for
- * those specific aggregates only — everywhere the API DOES return a
- * `currency` on the record (transactions, accounts, net-worth items,
- * recurring bills, goals) that field is used instead, never this
- * constant.
+ * The ledger's base currency. Mirrors `BASE_CURRENCY` in
+ * `brain/finance/currency.py` (decision D1). Every aggregate the API
+ * computes — monthly summary, net-worth totals, budget actuals,
+ * subscription and forecast figures — is expressed in it, so those
+ * figures are formatted with it. A record that carries its own native
+ * `currency` (a transaction, a net-worth item) is formatted with that
+ * currency instead.
  */
-export const DEFAULT_CURRENCY = 'MXN';
+export const BASE_CURRENCY = 'MXN';
 
-/** Format integer cents as a localized currency string. */
-export function formatCents(amountCents: number, currency: string): string {
+/**
+ * Currencies offered where a foreign amount can be entered (transactions
+ * take theirs from the account; net-worth items pick one). The four
+ * markets the app follows; the API accepts any ISO code given an FX rate.
+ */
+export const SELECTABLE_CURRENCIES = [BASE_CURRENCY, 'USD', 'CAD', 'CNY'] as const;
+
+/** Format integer cents as a localized currency string (base currency by default). */
+export function formatCents(amountCents: number, currency: string = BASE_CURRENCY): string {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency }).format(amountCents / 100);
+}
+
+/**
+ * `formatCents` with an explicit "+" on positive amounts (negatives already
+ * carry "-"), so the direction of a difference reads from the sign and not
+ * from a colour alone.
+ */
+export function formatSignedCents(amountCents: number, currency: string = BASE_CURRENCY): string {
+  const formatted = formatCents(amountCents, currency);
+  return amountCents > 0 ? `+${formatted}` : formatted;
 }
 
 /** "YYYY-MM" for the given date (defaults to now). */
@@ -48,7 +64,27 @@ export function shiftMonth(month: string, delta: number): string {
   return formatMonth(date);
 }
 
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parses a date-only ("YYYY-MM-DD") string as a LOCAL calendar day and anything
+ * else (an ISO timestamp) as the instant it names. `new Date("2026-10-01")` is
+ * UTC midnight, which is still Sep 30 in any UTC-negative zone (Mexico), so a
+ * bare date must never go through it.
+ */
+export function parseDateValue(value: string): Date {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return new Date(value);
+  return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+}
+
+/** "YYYY-MM-DD" from the LOCAL date parts (`toISOString` is UTC: tomorrow after 6 pm in Mexico). */
+export function formatDateOnly(date: Date = new Date()): string {
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${formatMonth(date)}-${day}`;
+}
+
 /** Short date label for a date-only or ISO-timestamp string. */
 export function formatShortDate(value: string): string {
-  return new Intl.DateTimeFormat('es-MX', { month: 'short', day: 'numeric' }).format(new Date(value));
+  return new Intl.DateTimeFormat('es-MX', { month: 'short', day: 'numeric' }).format(parseDateValue(value));
 }

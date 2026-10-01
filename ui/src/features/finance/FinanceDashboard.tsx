@@ -7,7 +7,6 @@ import { Drawer } from '../../components/ui/Drawer.tsx';
 import { cn } from '../../lib/cn.ts';
 import {
   useFinanceAccounts,
-  useFinanceBudgets,
   useFinanceCategories,
   useFinanceGoals,
   useFinanceNetWorth,
@@ -88,17 +87,17 @@ export function FinanceDashboard() {
   const summary = useFinanceSummary(month);
   const categories = useFinanceCategories();
   const accounts = useFinanceAccounts();
-  const budgets = useFinanceBudgets(month);
   const netWorth = useFinanceNetWorth();
   const recurringBills = useFinanceRecurringBills();
   const goals = useFinanceGoals();
   const transactions = useFinanceTransactions({ month, limit: 100 });
 
+  // The category breakdown (budgets included) comes with the summary, so one
+  // refetch keeps every panel that depends on the month's numbers in step.
   const refetchAfterTransaction = useCallback(() => {
     void transactions.refetch();
     void summary.refetch();
-    void budgets.refetch();
-  }, [transactions, summary, budgets]);
+  }, [transactions, summary]);
 
   const firstLoad = summary.loading && !summary.data && categories.loading;
   const referenceDataFailed = Boolean(categories.error || accounts.error);
@@ -115,15 +114,12 @@ export function FinanceDashboard() {
   } else if (section === 'categorias') {
     sectionContent = (
       <CategoryBreakdownPanel
-        budgets={budgets.data}
+        breakdown={summary.data?.category_breakdown ?? []}
         categories={categories.data}
         month={month}
-        loading={budgets.loading}
-        error={budgets.error}
-        onSaved={() => {
-          void budgets.refetch();
-          void summary.refetch();
-        }}
+        loading={summary.loading}
+        error={summary.error}
+        onSaved={() => void summary.refetch()}
       />
     );
   } else if (section === 'patrimonio') {
@@ -146,10 +142,9 @@ export function FinanceDashboard() {
         accounts={accounts.data}
         loading={recurringBills.loading}
         error={recurringBills.error}
-        onChanged={() => {
-          void recurringBills.refetch();
-          void summary.refetch();
-        }}
+        // Returned so the panel keeps a row's actions disabled until the list
+        // and the forecast are refreshed.
+        onChanged={() => Promise.all([recurringBills.refetch(), summary.refetch()])}
       />
     );
   } else if (section === 'metas') {
@@ -170,6 +165,8 @@ export function FinanceDashboard() {
         subscriptions={summary.data.subscriptions}
         cashFlowForecast={summary.data.cash_flow_forecast}
         emergencyFund={summary.data.emergency_fund}
+        history={summary.data.history}
+        netWorth={summary.data.net_worth}
       />
     ) : (
       <Panel title="Excedente invertible">

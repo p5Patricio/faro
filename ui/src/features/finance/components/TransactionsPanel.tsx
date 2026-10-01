@@ -56,6 +56,7 @@ export function TransactionsPanel({
 }: TransactionsPanelProps) {
   const [editing, setEditing] = useState<FinanceTransaction | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
   const accountById = useMemo(() => new Map(accounts.map((a) => [a.id, a])), [accounts]);
@@ -63,6 +64,7 @@ export function TransactionsPanel({
   const softDelete = async (transaction: FinanceTransaction) => {
     if (!window.confirm(`¿Eliminar el movimiento "${transaction.merchant || transaction.id}"?`)) return;
     setDeletingId(transaction.id);
+    setActionError(null);
     try {
       await putTransaction({
         client_id: transaction.client_id,
@@ -78,6 +80,8 @@ export function TransactionsPanel({
         deleted_at: new Date().toISOString(),
       });
       onChanged();
+    } catch {
+      setActionError('No se pudo eliminar el movimiento. Inténtalo de nuevo.');
     } finally {
       setDeletingId(null);
     }
@@ -99,7 +103,7 @@ export function TransactionsPanel({
         <EmptyState
           icon={<Receipt aria-hidden="true" className="h-6 w-6" />}
           title="Sin movimientos este mes"
-          hint="Usá “+ Nueva transacción” para empezar a registrar tus finanzas."
+          hint="Usa “+ Nueva transacción” para empezar a registrar tus finanzas."
         />
       ) : (
         <div className="max-h-[420px] overflow-auto rounded-xl border border-hairline [overflow-anchor:none]">
@@ -183,6 +187,12 @@ export function TransactionsPanel({
           </table>
         </div>
       )}
+
+      {actionError ? (
+        <p role="alert" className="mt-3 text-xs text-status-critical">
+          {actionError}
+        </p>
+      ) : null}
 
       <Drawer open={editing !== null} onClose={() => setEditing(null)} title="Editar transacción">
         {editing ? (

@@ -82,7 +82,7 @@ Write-Host "Before the first run, make sure the root .env has:"
 Write-Host "  TELEGRAM_BOT_TOKEN=<your bot token>"
 Write-Host "  TELEGRAM_CHAT_ID=<your allowed chat id>"
 Write-Host "  LOCAL_DATABASE_URL=<local Postgres DSN>"
-Write-Host "  (optional) FINANCE_DEFAULT_ACCOUNT_NAME, FINANCE_DEFAULT_CURRENCY"
+Write-Host "  (optional) FINANCE_DEFAULT_ACCOUNT_NAME (currency always comes from the account)"
 Write-Host ""
 Write-Host "The task runs only while you are logged in (/RL LIMITED, no stored password)." `
     "To keep it running while logged off, re-create it with an added" `

@@ -4,7 +4,7 @@ import { Panel } from '../../../components/ui/Panel.tsx';
 import { EmptyState } from '../../../components/ui/EmptyState.tsx';
 import { SkeletonLines } from '../../../components/ui/Skeleton.tsx';
 import { cn } from '../../../lib/cn.ts';
-import { DEFAULT_CURRENCY, formatCents } from '../lib/format.ts';
+import { BASE_CURRENCY, formatCents } from '../lib/format.ts';
 import { putGoal } from '../hooks/useFinanceApi.ts';
 import type { EmergencyFundSummary, FinanceGoal } from '../types.ts';
 
@@ -43,7 +43,7 @@ export function GoalsPanel({ goals, emergencyFund, loading, error, onChanged }: 
               <EmptyState
                 icon={<Target aria-hidden="true" className="h-6 w-6" />}
                 title="Sin metas registradas"
-                hint="Creá tu primera meta con el formulario de abajo."
+                hint="Crea tu primera meta con el formulario de abajo."
               />
             </div>
           ) : (
@@ -97,6 +97,20 @@ function GoalRow({ name, targetLabel, ratio, leftFigure, rightFigure, badge, fil
 }
 
 function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSummary | null }) {
+  // Nothing was measured because no asset is marked liquid yet: name the next
+  // action instead of a coverage level ("Por debajo" would claim a measurement).
+  if (emergencyFund?.status === 'unclassified') {
+    return (
+      <div className="flex items-start gap-2 text-sm text-ink-muted">
+        <Target aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Fondo de emergencia: todavía no se puede medir. Marca cuáles de tus activos son líquidos en la pestaña
+          Patrimonio para calcularlo.
+        </span>
+      </div>
+    );
+  }
+
   if (!emergencyFund || !emergencyFund.data_sufficient) {
     return (
       <div className="flex items-start gap-2 text-sm text-ink-muted">
@@ -109,8 +123,22 @@ function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSumma
     );
   }
 
-  const ratio =
-    emergencyFund.months_covered == null ? null : emergencyFund.months_covered / emergencyFund.target_max_months;
+  // No essential-expense baseline (the counted months logged no necesidad
+  // spending): the coverage cannot be measured, so there is no status to
+  // badge -- "below" would claim a measurement that does not exist.
+  if (emergencyFund.months_covered == null) {
+    return (
+      <div className="flex items-start gap-2 text-sm text-ink-muted">
+        <Target aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          Fondo de emergencia: todavía no hay suficiente historial para estimarlo. Los meses anteriores no tienen
+          gastos esenciales registrados con los que medir cuántos meses cubre tu patrimonio.
+        </span>
+      </div>
+    );
+  }
+
+  const ratio = emergencyFund.months_covered / emergencyFund.target_max_months;
   const badge =
     emergencyFund.status === 'above' ? 'Sobre el objetivo' : emergencyFund.status === 'below' ? 'Por debajo' : null;
   const fillClassName =
@@ -121,25 +149,30 @@ function EmergencyFundRow({ emergencyFund }: { emergencyFund: EmergencyFundSumma
         : 'bg-beam';
 
   return (
-    <GoalRow
-      name="Fondo de emergencia"
-      targetLabel={`${emergencyFund.target_min_months} a ${emergencyFund.target_max_months} meses de gasto fijo`}
-      ratio={ratio}
-      leftFigure={emergencyFund.months_covered != null ? `${emergencyFund.months_covered.toFixed(1)} meses cubiertos` : 'N/D'}
-      rightFigure={`objetivo ${emergencyFund.target_max_months} meses`}
-      badge={badge}
-      fillClassName={fillClassName}
-    />
+    <div>
+      <GoalRow
+        name="Fondo de emergencia"
+        targetLabel={`${emergencyFund.target_min_months} a ${emergencyFund.target_max_months} meses de gasto fijo`}
+        ratio={ratio}
+        leftFigure={`${emergencyFund.months_covered.toFixed(1)} meses cubiertos`}
+        rightFigure={`objetivo ${emergencyFund.target_max_months} meses`}
+        badge={badge}
+        fillClassName={fillClassName}
+      />
+      <p className="mt-1.5 text-xs text-ink-muted">Calculado con los activos que marcaste como líquidos.</p>
+    </div>
   );
 }
 
 function GoalCard({ goal, onChanged }: { goal: FinanceGoal; onChanged: () => void }) {
   const [current, setCurrent] = useState(String(goal.current_amount_cents / 100));
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const ratio = goal.target_amount_cents > 0 ? goal.current_amount_cents / goal.target_amount_cents : null;
 
   const save = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       await putGoal({
         id: goal.id,
@@ -152,6 +185,8 @@ function GoalCard({ goal, onChanged }: { goal: FinanceGoal; onChanged: () => voi
         is_achieved: goal.target_amount_cents > 0 && Math.round(Number(current) * 100) >= goal.target_amount_cents,
       });
       onChanged();
+    } catch {
+      setSaveError(`No se pudo actualizar el monto de «${goal.name}». Inténtalo de nuevo.`);
     } finally {
       setSaving(false);
     }
@@ -188,6 +223,11 @@ function GoalCard({ goal, onChanged }: { goal: FinanceGoal; onChanged: () => voi
           {saving ? 'Guardando' : 'Actualizar monto'}
         </button>
       </div>
+      {saveError ? (
+        <p role="alert" className="mt-2 text-xs text-status-critical">
+          {saveError}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -196,7 +236,6 @@ function GoalForm({ onSaved }: { onSaved: () => void }) {
   const [name, setName] = useState('');
   const [targetAmount, setTargetAmount] = useState('');
   const [currentAmount, setCurrentAmount] = useState('0');
-  const [currency, setCurrency] = useState(DEFAULT_CURRENCY);
   const [targetDate, setTargetDate] = useState('');
   const [purposeNote, setPurposeNote] = useState('');
   const [saving, setSaving] = useState(false);
@@ -212,7 +251,8 @@ function GoalForm({ onSaved }: { onSaved: () => void }) {
         name: name.trim(),
         target_amount_cents: Math.round(Number(targetAmount) * 100),
         current_amount_cents: Math.round(Number(currentAmount || '0') * 100),
-        currency,
+        // Goals are base-currency only in v1; the API rejects anything else.
+        currency: BASE_CURRENCY,
         target_date: targetDate || undefined,
         purpose_note: purposeNote || undefined,
         is_achieved: false,
@@ -249,12 +289,9 @@ function GoalForm({ onSaved }: { onSaved: () => void }) {
         Moneda
         <input
           type="text"
-          value={currency}
-          onChange={(event) => setCurrency(event.target.value.toUpperCase())}
-          maxLength={3}
-          minLength={3}
-          required
-          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink outline-none transition focus:border-cobalt/40"
+          value={BASE_CURRENCY}
+          readOnly
+          className="mt-1 h-9 w-full rounded-lg border border-hairline bg-canvas px-2 text-sm uppercase text-ink-muted outline-none"
         />
       </label>
 
