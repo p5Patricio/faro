@@ -164,6 +164,11 @@ from api.routers.macro import router as macro_router  # noqa: E402
 
 app.include_router(macro_router, prefix="/api")
 
+# Same deferred-import reasoning; `/api/finance/cfdi` is not a finance-router path.
+from api.routers.cfdi import router as cfdi_router  # noqa: E402
+
+app.include_router(cfdi_router, prefix="/api/finance/cfdi")
+
 
 @app.get("/")
 def read_root():
