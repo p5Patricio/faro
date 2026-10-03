@@ -55,6 +55,7 @@ def main() -> None:
         n_splits=args.splits,
         model_name=args.model_name,
         feature_columns=feature_columns,
+        embargo_rows=args.horizon,
     )
     model = train_final_model(dataset, model_name=args.model_name, feature_columns=feature_columns)
     model_spec = get_model_spec(args.model_name)

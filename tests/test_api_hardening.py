@@ -38,6 +38,18 @@ def test_rate_limiter_keys_are_independent() -> None:
     assert limiter.check("a", now=0).allowed is False
 
 
+def test_forwarded_for_is_ignored_unless_a_proxy_is_trusted() -> None:
+    assert AppConfig().trust_proxy is False
+
+
+def test_unexpected_host_header_is_rejected() -> None:
+    # DNS rebinding: a hostile domain resolving to 127.0.0.1 keeps its own Host.
+    client = TestClient(app)
+
+    assert client.get("/api/health", headers={"host": "evil.example"}).status_code == 400
+    assert client.get("/api/health", headers={"host": "localhost:47318"}).status_code == 200
+
+
 def test_client_key_prefers_first_forwarded_for_hop() -> None:
     assert client_key_for(forwarded_for="1.1.1.1, 2.2.2.2", client_host="10.0.0.1") == "1.1.1.1"
     assert client_key_for(forwarded_for=None, client_host="10.0.0.1") == "10.0.0.1"
