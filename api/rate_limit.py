@@ -49,9 +49,9 @@ class FixedWindowRateLimiter:
 
 
 def client_key_for(*, forwarded_for: str | None, client_host: str | None) -> str:
-    """Best-effort client identity. Trusts the first `X-Forwarded-For` hop
-    when present (the app is meant to sit behind a local reverse proxy or
-    nothing at all); otherwise the socket peer."""
+    """Best-effort client identity: the first `X-Forwarded-For` hop when the
+    caller passes one (only when API_TRUST_PROXY is set, see
+    `app_config.AppConfig.trust_proxy`); otherwise the socket peer."""
     if forwarded_for:
         first = forwarded_for.split(",")[0].strip()
         if first:

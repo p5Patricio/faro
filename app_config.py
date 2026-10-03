@@ -21,6 +21,12 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:5173",
 )
 DEFAULT_RATE_LIMIT_PER_MINUTE = 240
+# Host headers the API answers to. CORS does not stop DNS rebinding (a hostile
+# page whose domain re-resolves to 127.0.0.1 is "same origin" for the
+# browser), so the API also rejects any Host it does not expect. Set
+# API_ALLOWED_HOSTS (comma-separated, "*" disables the check) to reach it
+# under another name, e.g. a LAN address.
+DEFAULT_ALLOWED_HOSTS = ("localhost", "127.0.0.1")
 
 
 @dataclass(frozen=True)
@@ -29,6 +35,11 @@ class AppConfig:
     allow_demo_fallback: bool = True
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
     rate_limit_per_minute: int = DEFAULT_RATE_LIMIT_PER_MINUTE
+    allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
+    # Trust the first X-Forwarded-For hop as the client identity only when
+    # the API really sits behind a reverse proxy; otherwise any client could
+    # dodge the rate limiter by rotating that header.
+    trust_proxy: bool = False
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -43,6 +54,8 @@ class AppConfig:
             rate_limit_per_minute=parse_int_env(
                 "API_RATE_LIMIT_PER_MINUTE", default=DEFAULT_RATE_LIMIT_PER_MINUTE
             ),
+            allowed_hosts=parse_csv_env("API_ALLOWED_HOSTS", default=DEFAULT_ALLOWED_HOSTS),
+            trust_proxy=parse_bool_env("API_TRUST_PROXY", default=False),
         )
 
     @property
@@ -54,6 +67,14 @@ class AppConfig:
         """Credentialed CORS is only valid with an explicit origin allow-list.
         `Access-Control-Allow-Origin: *` and credentials cannot be combined."""
         return "*" not in self.cors_origins
+
+    @property
+    def trusted_hosts(self) -> list[str]:
+        """``allowed_hosts`` plus Starlette's TestClient host under APP_ENV=test."""
+        hosts = list(self.allowed_hosts)
+        if self.environment == "test" and "*" not in hosts:
+            hosts.append("testserver")
+        return hosts
 
     @property
     def rate_limiting_enabled(self) -> bool:
