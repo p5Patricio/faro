@@ -21,6 +21,7 @@ frontend:
 |---|---|---|
 | API | `api/main.py` | Ticker-scoped market-data routes (`/api/prices/{ticker}`, `/api/analysis/{ticker}`, `/api/analyst-consensus/{ticker}`, ...). Has a **demo-data fallback** for every route: if Postgres is unreachable, or `ALLOW_DEMO_FALLBACK=true` (dev default) and the repo raises, it serves synthetic data instead of a 500. |
 | API | `api/routers/finance.py` | Personal-finance-ledger routes, mounted at `/api/finance`. **No demo fallback** — a personal ledger has no meaningful demo mode; always 503s in clear text when the DB is down. |
+| API | `api/routers/investments.py` | Investment ledger, mounted at `/api/investments` (accounts, idempotent operations, positions, yearly worksheet JSON/CSV). Derived figures come from the pure `brain/investments/ledger.py` (average cost per account, MXN with dated FX, `Decimal`). **No demo fallback**; 503 "falta aplicar la migración 0016" until `0016_investment_ledger.sql` is applied. Informational only: no tax computed, no INPC update. |
 | API | `api/routers/heatmap.py` | `/api/heatmap` — S&P-100 treemap tiles. |
 | DB | `db/migrations/*.sql` | Sequential, hand-written SQL, applied manually (there is no migration runner — see Gotchas). |
 | DB access | `collector/local_repository.py` | `LocalPostgresRepository`, thin `psycopg3` wrapper. Time-series tables (prices, fundamentals, analyst consensus) follow a **restatement-is-a-new-row** philosophy: never overwrite a historical reading, key on `(asset_id, timestamp/fetched_at)`, read the latest with `ORDER BY ... DESC LIMIT 1`. |
