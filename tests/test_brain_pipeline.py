@@ -1320,3 +1320,24 @@ def test_apply_risk_policy_blocks_short_when_disabled() -> None:
 
     assert adjusted.loc[0, "action"] == "HOLD"
     assert "short_disabled" in adjusted.loc[0, "metadata"]["risk"]["blocked_reasons"]
+
+
+def test_buy_and_hold_pays_one_round_trip_and_sharpe_is_annualized_per_stride() -> None:
+    from brain.backtesting import BacktestConfig, annualized_for_stride, run_prediction_backtest
+
+    feedback = pd.DataFrame(
+        {
+            "timestamp": pd.date_range("2026-01-01", periods=4, freq="7D", tz="UTC"),
+            "predicted_action": ["BUY"] * 4,
+            "confidence": [1.0] * 4,
+            "outcome_return": [0.01] * 4,
+        }
+    )
+    config = BacktestConfig(initial_capital=1000, fee_bps=10, slippage_bps=0)  # round trip = 0.2%
+
+    every_row = run_prediction_backtest(feedback, config).metrics["total_return"]
+    held = run_prediction_backtest(feedback, config, charge_once=True).metrics["total_return"]
+
+    assert held == pytest.approx(1.009**2 * 1.01**2 - 1)  # half the round trip at entry and at exit
+    assert every_row == pytest.approx((1.01 - 0.002) ** 4 - 1)
+    assert annualized_for_stride(config, 5).periods_per_year == 50
