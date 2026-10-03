@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pandas as pd
 from sklearn.model_selection import TimeSeriesSplit
 
-from brain.backtesting import BacktestConfig, run_prediction_backtest
+from brain.backtesting import BacktestConfig, annualized_for_stride, run_prediction_backtest
 from brain.datasets import build_dataset_from_materialized
 from brain.features import FEATURE_COLUMNS, feature_columns_for_set
 from brain.inference import PredictionPolicy, predict_actions
@@ -127,7 +127,7 @@ def run_scoped_walk_forward_backtest(
     max_scope_assets: int | None = None,
 ) -> ScopedBacktestResult:
     columns = feature_columns or FEATURE_COLUMNS
-    config = config or BacktestConfig()
+    config = annualized_for_stride(config or BacktestConfig(), trade_stride)
     prediction_policy = prediction_policy or PredictionPolicy()
     scope_datasets = select_scope_datasets(datasets, target_ticker, scope, max_scope_assets=max_scope_assets)
     target = find_target_dataset(scope_datasets, target_ticker)
@@ -188,6 +188,7 @@ def run_scoped_walk_forward_backtest(
     baselines = {
         "no_trade": run_prediction_backtest(baseline_feedback(predictions, "HOLD"), config),
         "always_buy": run_prediction_backtest(baseline_feedback(predictions, "BUY"), config),
+        "buy_and_hold": run_prediction_backtest(baseline_feedback(predictions, "BUY"), config, charge_once=True),
     }
     if config.allow_short:
         baselines["always_sell"] = run_prediction_backtest(baseline_feedback(predictions, "SELL"), config)
