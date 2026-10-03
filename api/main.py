@@ -164,6 +164,11 @@ from api.routers.macro import router as macro_router  # noqa: E402
 
 app.include_router(macro_router, prefix="/api")
 
+# Same deferred-import reasoning; mounted like finance as a sub-resource collection.
+from api.routers.investments import router as investments_router  # noqa: E402
+
+app.include_router(investments_router, prefix="/api/investments")
+
 
 @app.get("/")
 def read_root():
