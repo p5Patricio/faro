@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test invoice: made-up RFCs and UUID, not a real document. -->
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+    Version="4.0" Fecha="2026-03-14T11:20:00" SubTotal="1000.00" Total="1000.00" Moneda="MXN"
+    TipoDeComprobante="I" FormaPago="03" MetodoPago="PUE" Exportacion="01" LugarExpedicion="06600">
+  <cfdi:Emisor Rfc="AAA010101AAA" Nombre="CONSULTORIO DE PRUEBA" RegimenFiscal="612"/>
+  <cfdi:Receptor Rfc="XAXX010101000" Nombre="PERSONA DE PRUEBA" DomicilioFiscalReceptor="06600"
+      RegimenFiscalReceptor="605" UsoCFDI="D01"/>
+  <cfdi:Conceptos>
+    <cfdi:Concepto ClaveProdServ="85121600" Cantidad="1" ClaveUnidad="E48" Descripcion="Consulta médica"
+        ValorUnitario="1000.00" Importe="1000.00" ObjetoImp="01"/>
+  </cfdi:Conceptos>
+  <cfdi:Complemento>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9"
+        FechaTimbrado="2026-03-14T11:21:00"/>
+  </cfdi:Complemento>
+</cfdi:Comprobante>

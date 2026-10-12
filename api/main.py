@@ -172,6 +172,11 @@ from api.routers.investments import router as investments_router  # noqa: E402
 
 app.include_router(investments_router, prefix="/api/investments")
 
+# Same deferred-import reasoning; `/api/finance/cfdi` is not a finance-router path.
+from api.routers.cfdi import router as cfdi_router  # noqa: E402
+
+app.include_router(cfdi_router, prefix="/api/finance/cfdi")
+
 
 @app.get("/")
 def read_root():
