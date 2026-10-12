@@ -1,0 +1,259 @@
+# config/tax/<año>.yaml — Parámetros fiscales (personas físicas, México) para Faro
+# INFORMATIVO, NO ES ASESORÍA FISCAL. Faro NO debe calcular impuestos definitivos con esto.
+# Consulta: 2026-10-03.
+#
+# IMPORTANTE SOBRE "status":
+#   Durante esta investigación, el proxy de red bloqueó la descarga directa (WebFetch) de TODOS los
+#   sitios oficiales (sat.gob.mx, dof.gob.mx, diputados.gob.mx, inegi.org.mx, cefp.gob.mx) y de los
+#   secundarios (mley.mx, ey.com). Sólo funcionó el buscador (WebSearch, extractos).
+#   Por regla del encargo, NINGÚN valor queda como "verificado": todos son "no_verificado" o "ambiguo".
+#   El campo "confianza" indica cuántas fuentes coincidentes respaldan el dato:
+#     alta  = varias fuentes secundarias independientes coinciden y/o el extracto venía de un dominio oficial
+#     media = una sola fuente o extracto parcial
+#   ANTES DE USAR EN PRODUCCIÓN: abrir el source_url oficial a mano y cambiar status a "verificado".
+#
+# Fuentes oficiales a revisar manualmente:
+#   LISR (texto vigente): https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf
+#   CFF: https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf
+#   LIF 2025: https://www.diputados.gob.mx/LeyesBiblio/pdf/LIF_2025.pdf  (URL inferida por patrón, NO VERIFICADA)
+#   LIF 2026: https://www.diputados.gob.mx/LeyesBiblio/pdf/LIF_2026.pdf  (URL inferida por patrón, NO VERIFICADA)
+#   UMA (INEGI): https://www.inegi.org.mx/temas/uma/
+#   RMF 2026 y anexos: https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/
+
+#
+# Lo carga brain/tax/params.py (cuando exista); los valores con status distinto de
+# 'verificado' deben mostrarse en la UI como "no verificado".
+
+year: 2025
+params:
+  retencion_intereses_tasa_anual:
+    value: 0.50
+    unit: "% anual sobre el capital que genera los intereses (pago provisional, arts. 54 y 135 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LIF_2025.pdf"
+    secondary_urls:
+      - "https://idconline.mx/fiscal-contable/2024/12/20/cinco-puntos-que-se-deben-conocer-de-la-lif-2025"
+      - "https://www.elcontribuyente.mx/2024/11/inflacion-vs-isr-lo-que-debes-saber-sobre-la-retencion-de-intereses-en-2025/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Art. 21 LIF 2025 según fuentes secundarias. Misma tasa que 2024."
+  isr_enajenacion_acciones_bolsa_tasa:
+    value: 10
+    unit: "% sobre ganancia neta del ejercicio, pago definitivo (art. 129 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://wwwmat.sat.gob.mx/articulo/59621/articulo-129"
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-129/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Aplica a acciones mexicanas, títulos que las representen, y acciones extranjeras cotizadas en bolsas concesionadas en México (SIC). No se acumula."
+  perdidas_bolsa_ejercicios_amortizacion:
+    value: 10
+    unit: "ejercicios siguientes (contra ganancias del mismo tipo)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-129/"
+      - "https://vlex.com.mx/vid/enajenacion-acciones-bolsa-valores-875056555"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: media
+    note: "El encargo mencionaba 5 años; las fuentes encontradas dicen DIEZ ejercicios para art. 129. 5 ejercicios corresponde a la pérdida por inflación en intereses (art. 134). Confirmar en texto oficial."
+  isr_dividendos_adicional_tasa:
+    value: 10
+    unit: "% sobre dividendo distribuido a persona física (art. 140 LISR, utilidades generadas desde 2014), pago definitivo vía retención"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-140/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Además el dividendo se acumula piramidado (factor 1.4286) con acreditamiento del ISR corporativo (dividendo x 0.4286) si la persona opta por ello. Ver art. 140 / 9 LISR."
+  dividendos_factor_piramidacion:
+    value: 1.4286
+    unit: "factor"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Arts. 10 y 140 LISR (según fuentes secundarias)."
+  dividendos_extranjeros_tasa_adicional:
+    value: 10
+    unit: "% sobre dividendo de sociedad residente en el extranjero (art. 142 fr. V LISR), pago definitivo"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://idconline.mx/fiscal-contable/2023/04/12/declarar-dividendos-del-extranjero-en-anual-basico-para-personas-fisicas"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: media
+    note: "Si se paga vía SIC, el intermediario suele retener; si no, la persona lo entera a más tardar el día 17 del mes siguiente. Quién retiene y el acreditamiento del impuesto extranjero requieren contador."
+  fibra_retencion_resultado_fiscal_tasa:
+    value: 30
+    unit: "% sobre resultado fiscal distribuido (art. 188 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-188/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "El excedente sobre resultado fiscal = reembolso de capital (no se retiene; reduce costo fiscal del CBFI). La retención NO es definitiva para la persona física: se acumula y acredita (inferido; confirmar)."
+  fondos_inversion_renta_variable_tasa_ganancia:
+    value: 10
+    unit: "% sobre ganancia neta en venta de acciones de fondos de renta variable (art. 88 LISR), definitivo"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://mley.mx/LISR/articulo/88/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: media
+    note: "Sólo por la parte de la cartera accionaria que cotiza en bolsa; los intereses de la cartera se acumulan (art. 87-88)."
+  uma_diaria:
+    value: 113.14
+    unit: "MXN"
+    vigencia: "2025-02-01 a 2026-01-31"
+    source_url: "https://www.inegi.org.mx/temas/uma/"
+    secondary_urls:
+      - "https://www.taxtodaymexico.com/?p=11538"
+      - "https://www.elcontribuyente.mx/2025/01/la-uma-2025-sube-4-21/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Incremento 4.21% vs 2024."
+  uma_mensual:
+    value: 3439.46
+    unit: "MXN"
+    source_url: "https://www.inegi.org.mx/temas/uma/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  uma_anual:
+    value: 41273.52
+    unit: "MXN"
+    source_url: "https://www.inegi.org.mx/temas/uma/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  deducciones_personales_tope_umas:
+    value: 5
+    unit: "UMA anuales (5 x 41,273.52 = 206,367.60 MXN, cálculo propio)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-151/"
+      - "https://idconline.mx/fiscal-contable/2024/04/15/limite-a-deducciones-personales-en-la-anual-de-personas-fisicas"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: alta
+    note: "Art. 151 último párrafo: lo menor entre 5 UMA anuales y 15% de ingresos totales (incluye exentos). AMBIGUO qué UMA anual usar si cambia en febrero (práctica común: la vigente al cierre del ejercicio)."
+  deducciones_personales_tope_porcentaje:
+    value: 15
+    unit: "% de ingresos totales (acumulables + exentos)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Excluidos del tope global (según fuentes): gastos médicos por incapacidad/discapacidad, aportaciones complementarias de retiro (fr. V, tope propio), donativos (tope propio 7%) y colegiaturas (decreto, tope propio)."
+  afore_voluntarias_tope_porcentaje:
+    value: 10
+    unit: "% de ingresos acumulables del ejercicio (art. 151 fr. V)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://www.elcontribuyente.mx/2026/04/como-deducir-tu-ahorro-para-el-retiro-ante-el-sat/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Sólo aportaciones complementarias / planes personales de retiro con permanencia hasta retiro."
+  afore_voluntarias_tope_umas:
+    value: 5
+    unit: "UMA anuales"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Lo menor entre 10% de ingresos acumulables y 5 UMA anuales."
+  art185_cuentas_especiales_ahorro_tope:
+    value: 152000
+    unit: "MXN por ejercicio (estímulo, art. 185 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-185/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Cifra fija en ley (no en UMA). Al retirar se acumula todo (capital + rendimientos)."
+  declaracion_anual_fecha_limite:
+    value: "2025-04-30"
+    unit: "fecha (por el ejercicio 2024; periodo 1-30 abril, art. 150 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Ojo: este bloque es el AÑO FISCAL 2025; su declaración vence 2026-04-30 (ver bloque 2026 campo declaracion_anual_ejercicio_anterior)."
+  declaracion_anual_ejercicio_2025_fecha_limite:
+    value: "2026-04-30"
+    unit: "fecha"
+    source_url: "https://www.sat.gob.mx/"
+    secondary_urls:
+      - "https://expansion.mx/finanzas-personales/2026/04/06/declaracion-anual-sat-fecha-para-presentar-sin-multas"
+      - "https://www.rankia.mx/noticias/fiscalidad/7251159-declaracion-anual-2026-sat-confirma-fechas-requisitos-para-personas-fisicas"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Periodo 1 al 30 de abril de 2026."
+  ingresos_intereses_umbral_declaracion:
+    value: 100000
+    unit: "MXN de intereses REALES en el ejercicio"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://wwwmat.sat.gob.mx/articulo/83662/articulo-150"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Si SÓLO hay salarios+intereses, total <= 400,000 e intereses reales <= 100,000 (y hubo retención), puede no declarar (arts. 98, 135, 150 LISR). Con cualquier otro ingreso (acciones, dividendos, extranjero, cripto) suele haber obligación."
+  salarios_umbral_declaracion:
+    value: 400000
+    unit: "MXN ingresos por salarios + intereses en el ejercicio"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Arts. 98 fr. III y 150 LISR."
+  resico_tope_ingresos:
+    value: 3500000
+    unit: "MXN ingresos anuales (art. 113-E LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/ley-isr/articulo-113-e/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Tasas 1.00%–2.50% mensuales sobre ingresos cobrados. Sólo actividad empresarial/profesional/arrendamiento; NO cubre ingresos por inversiones."
+  enajenacion_bienes_muebles_exencion_umas:
+    value: 3
+    unit: "UMA anuales de ganancia (art. 93 fr. XIX inciso b LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: media
+    note: "Aplicabilidad a criptoactivos es AMBIGUA (el inciso excluye acciones, partes sociales, títulos valor e 'inversiones del contribuyente')."
+  tipo_cambio_regla:
+    value: "FIX publicado por Banxico en el DOF el día anterior a la causación (art. 20 CFF); si no hay publicación, el último publicado"
+    unit: "regla"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf"
+    secondary_urls:
+      - "https://leyes-mx.com/codigo_fiscal_de_la_federacion/20.htm"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Si la divisa se adquirió, se usa el tipo de cambio de adquisición."
+  factor_actualizacion_regla:
+    value: "INPC mes anterior al más reciente del periodo / INPC mes anterior al más antiguo; si < 1, se usa 1 (art. 17-A CFF)"
+    unit: "regla"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/codigo-fiscal/articulo-17-a/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "OJO: art. 129 LISR y art. 124 tienen sus propias reglas de qué meses usar para actualizar costo; confirmar con contador."
