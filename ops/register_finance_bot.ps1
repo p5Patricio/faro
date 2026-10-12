@@ -72,6 +72,9 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# schtasks cannot set "run if missed" or "run on battery"; see that script.
+& (Join-Path $PSScriptRoot 'harden_scheduled_tasks.ps1') -TaskName 'FinanceBotSync'
+
 Write-Host ""
 Write-Host "Registered. It starts polling within 15 minutes. Commands:"
 Write-Host "  Run now     : schtasks /Run /TN `"Faro\FinanceBotSync`""

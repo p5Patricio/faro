@@ -6,8 +6,28 @@ from datetime import datetime
 from pathlib import Path
 
 import psycopg
+import pytest
 
+import ops.backup_db as backup_db
 from ops.backup_db import export_tables, pg_dump_command, prune, run_backup
+
+
+def test_scheduled_run_takes_folder_and_pg_dump_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls = {}
+    monkeypatch.setattr(backup_db, "load_dotenv", lambda: None)
+    monkeypatch.setattr(backup_db, "resolve_dsn", lambda: "postgresql://u@localhost/x")
+    monkeypatch.setattr(backup_db, "run_backup", lambda dsn, dest, **kw: calls.update(dest=dest, **kw) or {"status": "ok"})
+    monkeypatch.setenv("FARO_BACKUP_DIR", str(tmp_path))
+    monkeypatch.setenv("PG_DUMP_PATH", r"C:\pg\bin\pg_dump.exe")
+
+    assert backup_db.main([]) == 0
+    assert calls["dest"] == tmp_path and calls["pg_dump"] == r"C:\pg\bin\pg_dump.exe"
+
+    monkeypatch.delenv("FARO_BACKUP_DIR")
+    with pytest.raises(SystemExit):
+        backup_db.main([])
 
 
 def test_password_goes_to_the_environment_not_the_command_line(tmp_path: Path) -> None:

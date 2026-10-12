@@ -71,6 +71,9 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# schtasks cannot set "run on battery"; without it a logon on battery skips the app.
+& (Join-Path $PSScriptRoot 'harden_scheduled_tasks.ps1') -TaskName 'LocalAppServers'
+
 Write-Host ""
 Write-Host "Registered. It fires at your next logon. Commands:"
 Write-Host "  Start now   : schtasks /Run /TN `"Faro\LocalAppServers`""
