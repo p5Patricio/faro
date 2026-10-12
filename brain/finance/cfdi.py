@@ -2,10 +2,9 @@
 the standard library. Pure: no I/O. Informational: flags are hints for the
 user and their accountant, never a deduction decision.
 
-Sources and verification status: ``docs/sat/cfdi-e-importadores.md``. The
-``c_UsoCFDI`` labels D01 and D10 were read on SAT pages; D02-D09 come from
-secondary sources (``status: reportado``). ``FormaPago`` "01" (cash) is the
-well-known catalog value but was not re-read on ``catCFDI.xls``.
+Sources: ``docs/sat/cfdi-e-importadores.md``. The ``c_UsoCFDI`` labels and
+``FormaPago`` "01" (cash) match the SAT catalog ``catCFDI_V_4_20261001.xls``,
+extracted to ``config/sat/cat-cfdi-4.json`` (a test keeps them in sync).
 """
 
 from __future__ import annotations
@@ -22,14 +21,14 @@ CASH_PAYMENT_FORM = "01"
 
 PERSONAL_DEDUCTION_USES: dict[str, tuple[str, str]] = {
     "D01": ("Honorarios médicos, dentales y gastos hospitalarios", "verificado"),
-    "D02": ("Gastos médicos por incapacidad o discapacidad", "reportado"),
-    "D03": ("Gastos funerales", "reportado"),
-    "D04": ("Donativos", "reportado"),
-    "D05": ("Intereses reales pagados por créditos hipotecarios (casa habitación)", "reportado"),
-    "D06": ("Aportaciones voluntarias al SAR", "reportado"),
-    "D07": ("Primas por seguros de gastos médicos", "reportado"),
-    "D08": ("Gastos de transportación escolar obligatoria", "reportado"),
-    "D09": ("Depósitos en cuentas para el ahorro, primas con base en planes de pensiones", "reportado"),
+    "D02": ("Gastos médicos por incapacidad o discapacidad", "verificado"),
+    "D03": ("Gastos funerales", "verificado"),
+    "D04": ("Donativos", "verificado"),
+    "D05": ("Intereses reales efectivamente pagados por créditos hipotecarios (casa habitación)", "verificado"),
+    "D06": ("Aportaciones voluntarias al SAR", "verificado"),
+    "D07": ("Primas por seguros de gastos médicos", "verificado"),
+    "D08": ("Gastos de transportación escolar obligatoria", "verificado"),
+    "D09": ("Depósitos en cuentas para el ahorro, primas que tengan como base planes de pensiones", "verificado"),
     "D10": ("Pagos por servicios educativos (colegiaturas)", "verificado"),
 }
 

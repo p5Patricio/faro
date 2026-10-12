@@ -1,0 +1,628 @@
+{
+  "_fuente": {
+    "archivo": "catCFDI_V_4_20261001.xls",
+    "url": "http://omawww.sat.gob.mx/tramitesyservicios/Paginas/documentos/catCFDI_V_4_20261001.xls",
+    "pagina": "http://omawww.sat.gob.mx/tramitesyservicios/Paginas/anexo_20.htm",
+    "consultado": "2026-10-12",
+    "nota": "Sólo las hojas c_UsoCFDI y c_FormaPago, extraídas sin cambios. Para actualizar, descarga la versión vigente del Anexo 20 y vuelve a extraerlas."
+  },
+  "c_UsoCFDI": {
+    "version_cfdi": "4.0",
+    "version_catalogo": "2.0",
+    "revision": "0.0",
+    "publicado": "2023-04-22",
+    "vigente_desde": "2022-01-01",
+    "valores": [
+      {
+        "clave": "G01",
+        "descripcion": "Adquisición de mercancías.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "G02",
+        "descripcion": "Devoluciones, descuentos o bonificaciones.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "616",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "G03",
+        "descripcion": "Gastos en general.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I01",
+        "descripcion": "Construcciones.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I02",
+        "descripcion": "Mobiliario y equipo de oficina por inversiones.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I03",
+        "descripcion": "Equipo de transporte.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I04",
+        "descripcion": "Equipo de computo y accesorios.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I05",
+        "descripcion": "Dados, troqueles, moldes, matrices y herramental.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I06",
+        "descripcion": "Comunicaciones telefónicas.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I07",
+        "descripcion": "Comunicaciones satelitales.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "I08",
+        "descripcion": "Otra maquinaria y equipo.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "606",
+          "612",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "D01",
+        "descripcion": "Honorarios médicos, dentales y gastos hospitalarios.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D02",
+        "descripcion": "Gastos médicos por incapacidad o discapacidad.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D03",
+        "descripcion": "Gastos funerales.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D04",
+        "descripcion": "Donativos.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D05",
+        "descripcion": "Intereses reales efectivamente pagados por créditos hipotecarios (casa habitación).",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D06",
+        "descripcion": "Aportaciones voluntarias al SAR.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D07",
+        "descripcion": "Primas por seguros de gastos médicos.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D08",
+        "descripcion": "Gastos de transportación escolar obligatoria.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D09",
+        "descripcion": "Depósitos en cuentas para el ahorro, primas que tengan como base planes de pensiones.",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "D10",
+        "descripcion": "Pagos por servicios educativos (colegiaturas).",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605",
+          "606",
+          "608",
+          "611",
+          "612",
+          "614",
+          "607",
+          "615",
+          "625"
+        ]
+      },
+      {
+        "clave": "S01",
+        "descripcion": "Sin efectos fiscales.",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "605",
+          "606",
+          "608",
+          "610",
+          "611",
+          "612",
+          "614",
+          "616",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "607",
+          "615",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "CP01",
+        "descripcion": "Pagos",
+        "persona_fisica": true,
+        "persona_moral": true,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "601",
+          "603",
+          "605",
+          "606",
+          "608",
+          "610",
+          "611",
+          "612",
+          "614",
+          "616",
+          "620",
+          "621",
+          "622",
+          "623",
+          "624",
+          "607",
+          "615",
+          "625",
+          "626"
+        ]
+      },
+      {
+        "clave": "CN01",
+        "descripcion": "Nómina",
+        "persona_fisica": true,
+        "persona_moral": false,
+        "vigente_desde": "2022-01-01",
+        "vigente_hasta": null,
+        "regimen_receptor": [
+          "605.0"
+        ]
+      }
+    ]
+  },
+  "c_FormaPago": {
+    "version_cfdi": "4.0",
+    "version_catalogo": "1.0",
+    "revision": "0.0",
+    "publicado": null,
+    "vigente_desde": "2022-01-01",
+    "valores": [
+      {
+        "clave": "01",
+        "descripcion": "Efectivo",
+        "bancarizado": false
+      },
+      {
+        "clave": "02",
+        "descripcion": "Cheque nominativo",
+        "bancarizado": true
+      },
+      {
+        "clave": "03",
+        "descripcion": "Transferencia electrónica de fondos",
+        "bancarizado": true
+      },
+      {
+        "clave": "04",
+        "descripcion": "Tarjeta de crédito",
+        "bancarizado": true
+      },
+      {
+        "clave": "05",
+        "descripcion": "Monedero electrónico",
+        "bancarizado": true
+      },
+      {
+        "clave": "06",
+        "descripcion": "Dinero electrónico",
+        "bancarizado": true
+      },
+      {
+        "clave": "08",
+        "descripcion": "Vales de despensa",
+        "bancarizado": false
+      },
+      {
+        "clave": "12",
+        "descripcion": "Dación en pago",
+        "bancarizado": false
+      },
+      {
+        "clave": "13",
+        "descripcion": "Pago por subrogación",
+        "bancarizado": false
+      },
+      {
+        "clave": "14",
+        "descripcion": "Pago por consignación",
+        "bancarizado": false
+      },
+      {
+        "clave": "15",
+        "descripcion": "Condonación",
+        "bancarizado": false
+      },
+      {
+        "clave": "17",
+        "descripcion": "Compensación",
+        "bancarizado": false
+      },
+      {
+        "clave": "23",
+        "descripcion": "Novación",
+        "bancarizado": false
+      },
+      {
+        "clave": "24",
+        "descripcion": "Confusión",
+        "bancarizado": false
+      },
+      {
+        "clave": "25",
+        "descripcion": "Remisión de deuda",
+        "bancarizado": false
+      },
+      {
+        "clave": "26",
+        "descripcion": "Prescripción o caducidad",
+        "bancarizado": false
+      },
+      {
+        "clave": "27",
+        "descripcion": "A satisfacción del acreedor",
+        "bancarizado": false
+      },
+      {
+        "clave": "28",
+        "descripcion": "Tarjeta de débito",
+        "bancarizado": true
+      },
+      {
+        "clave": "29",
+        "descripcion": "Tarjeta de servicios",
+        "bancarizado": true
+      },
+      {
+        "clave": "30",
+        "descripcion": "Aplicación de anticipos",
+        "bancarizado": false
+      },
+      {
+        "clave": "31",
+        "descripcion": "Intermediario pagos",
+        "bancarizado": false
+      },
+      {
+        "clave": "99",
+        "descripcion": "Por definir",
+        "bancarizado": false
+      }
+    ]
+  }
+}

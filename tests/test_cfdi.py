@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -7,10 +8,22 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app, get_repository
-from brain.finance.cfdi import CfdiError, deduction_hints, parse_cfdi
+from brain.finance.cfdi import CASH_PAYMENT_FORM, PERSONAL_DEDUCTION_USES, CfdiError, deduction_hints, parse_cfdi
 from collector.local_repository import LocalPostgresRepository
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "cfdi40_honorarios.xml").read_bytes()
+SAT_CATALOG = Path(__file__).parents[1] / "config" / "sat" / "cat-cfdi-4.json"
+
+
+def test_deduction_labels_match_the_sat_catalog() -> None:
+    catalog = json.loads(SAT_CATALOG.read_text(encoding="utf-8"))
+    official = {row["clave"]: row["descripcion"].rstrip(".") for row in catalog["c_UsoCFDI"]["valores"]}
+    forms = {row["clave"]: row["descripcion"] for row in catalog["c_FormaPago"]["valores"]}
+
+    assert {use: label for use, (label, _) in PERSONAL_DEDUCTION_USES.items()} == {
+        use: official[use] for use in PERSONAL_DEDUCTION_USES
+    }
+    assert forms[CASH_PAYMENT_FORM] == "Efectivo"
 
 
 def test_parses_a_stamped_cfdi_40_into_cents_and_hints() -> None:

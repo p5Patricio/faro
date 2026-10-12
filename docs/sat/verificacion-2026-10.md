@@ -73,4 +73,12 @@ Cada parámetro verificado trae `evidence` (artículo y frase textual) y `verifi
 | INPC de octubre a diciembre (sin fecha) | El PDF `Cal_Dif-2026.pdf` resultó ser un comunicado sin esas fechas; la página del INPC sólo muestra la próxima publicación |
 | Hora actual de la LPR y regla de días inhábiles | Sólo está el aviso de 2019 |
 | Informativa de intereses del 15 de febrero | No se volvió a revisar (queda como reportado) |
-| `catCFDI_V_4_20261001.xls` | Descargado del Anexo 20 (versión del 1 de octubre de 2026); falta leerlo para generar `c_UsoCFDI` y `c_FormaPago` |
+
+## Catálogo CFDI (`catCFDI_V_4_20261001.xls`)
+
+Leído el 2026-10-12 desde la página del Anexo 20 del SAT. `c_UsoCFDI` (versión 2.0, publicada el 22-04-2023, vigente desde el 01-01-2022, 24 claves) y `c_FormaPago` (versión 1.0, vigente desde el 01-01-2022, 22 claves) están en `config/sat/cat-cfdi-4.json`, sin cambios.
+
+- Las claves D01 a D10 del importador de CFDI coinciden con el catálogo, y las diez quedan verificadas.
+- Dos descripciones no eran textuales y se corrigieron: **D05** ("Intereses reales *efectivamente* pagados...") y **D09** ("primas *que tengan como base* planes de pensiones").
+- La forma de pago `01` es "Efectivo".
+- Una prueba compara las etiquetas del importador contra el JSON, para que no se desincronicen.
