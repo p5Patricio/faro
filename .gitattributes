@@ -1,0 +1,2 @@
+# Migrations are checksummed by db/migrate.py: keep them LF on every checkout.
+*.sql text eol=lf
