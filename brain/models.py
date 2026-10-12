@@ -139,14 +139,21 @@ def walk_forward_evaluate(
     test_size: int | None = None,
     model_name: str = DEFAULT_MODEL_NAME,
     feature_columns: list[str] | None = None,
+    embargo_rows: int = 0,
 ) -> WalkForwardResult:
-    """Evaluate a classifier with chronological train/test folds."""
+    """Evaluate a classifier with chronological train/test folds.
+
+    ``embargo_rows`` rows are dropped between each train and test fold. Pass
+    the label horizon: a row labelled with the price ``horizon`` bars ahead
+    otherwise leaks test-period prices into the training fold."""
     if len(dataset) < max(30, n_splits + 2):
         raise ValueError("Not enough rows for walk-forward evaluation")
+    if embargo_rows < 0:
+        raise ValueError("embargo_rows must be non-negative")
 
     columns = feature_columns or FEATURE_COLUMNS
     X, y = split_features_target(dataset, feature_columns=columns)
-    splitter = TimeSeriesSplit(n_splits=n_splits, test_size=test_size)
+    splitter = TimeSeriesSplit(n_splits=n_splits, test_size=test_size, gap=embargo_rows)
     fold_metrics = []
     model_spec = get_model_spec(model_name)
 
@@ -175,6 +182,7 @@ def walk_forward_evaluate(
         "model_name": model_name,
         "estimator": model_spec.estimator,
         "features": columns,
+        "embargo_rows": embargo_rows,
         "mean_accuracy": float(metrics_df["accuracy"].mean()),
         "mean_balanced_accuracy": float(metrics_df["balanced_accuracy"].mean()),
         "mean_f1_macro": float(metrics_df["f1_macro"].mean()),

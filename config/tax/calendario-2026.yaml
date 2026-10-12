@@ -1,0 +1,59 @@
+# Calendario 2026 para Faro. Consultado 2026-10-03.
+# status: VERIFICADO | REPORTADO | INFERIDO | NO_VERIFICADO  (definiciones en calendario.md)
+# date: null cuando la fecha no se pudo confirmar (nunca se inventa).
+consulted: 2026-10-03
+events:
+  # ---------------- fiscal ----------------
+  - {date: 2026-02-15, title: "Instituciones financieras: informativa de intereses y enajenación de acciones (plazo legal; 15-feb cae domingo)", kind: fiscal, source_url: "https://www.sat.gob.mx/declaracion/14968/declaracion-de-informacion-de-intereses-y-enajenacion-de-acciones-del-sector-financiero", status: VERIFICADO}
+  - {date: 2026-04-01, title: "Inicia Declaración Anual 2025 personas físicas", kind: fiscal, source_url: "https://www.gob.mx/sat/articulos/declaracion-anual-2025-de-personas", status: VERIFICADO}
+  - {date: 2026-04-30, title: "Vence Declaración Anual 2025 personas físicas (y 1a parcialidad si aplica)", kind: fiscal, source_url: "https://www.gob.mx/sat/articulos/declaracion-anual-2025-de-personas", status: VERIFICADO}
+  - {date: null, title: "Entrega a clientes de constancias fiscales anuales de bancos/brokers (habitualmente feb-mar)", kind: fiscal, source_url: "https://www.sat.gob.mx/consulta/65043/conoce-como-generar-la-factura-electronica-de-retenciones-e-informacion-de-pagos-por-retenciones", status: NO_VERIFICADO}
+  # Pagos provisionales: regla día 17 VERIFICADA; corrimiento por inhábil INFERIDO (CFF art. 12). Solo si hay actividad empresarial/profesional/arrendamiento/RESICO.
+  - {date: 2026-01-19, title: "Pago provisional dic-2025 (17-ene es sábado)", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: INFERIDO}
+  - {date: 2026-02-17, title: "Pago provisional ene-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-03-17, title: "Pago provisional feb-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-04-17, title: "Pago provisional mar-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-05-18, title: "Pago provisional abr-2026 (17-may es domingo)", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: INFERIDO}
+  - {date: 2026-06-17, title: "Pago provisional may-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-07-17, title: "Pago provisional jun-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-08-17, title: "Pago provisional jul-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-09-17, title: "Pago provisional ago-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-10-19, title: "Pago provisional sep-2026 (17-oct es sábado)", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: INFERIDO}
+  - {date: 2026-11-17, title: "Pago provisional oct-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+  - {date: 2026-12-17, title: "Pago provisional nov-2026", kind: fiscal, source_url: "https://wwwmatnp.sat.gob.mx/declaracion/26984/declaracion-mensual-en-el-servicio-de-declaraciones-y-pagos", status: VERIFICADO}
+
+  # ---------------- macro: Banxico (anuncio 13:00 CDMX) ----------------
+  - {date: 2026-02-05, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.banxico.org.mx/canales/%7BE2DEEE54-A582-4F29-42CF-21E75B152275%7D.pdf", status: VERIFICADO}
+  - {date: 2026-03-26, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.banxico.org.mx/publicaciones-y-prensa/anuncios-de-las-decisiones-de-politica-monetaria/%7B44EB2DF8-E71A-1553-7322-F60A34382EBA%7D.pdf", status: VERIFICADO}
+  - {date: 2026-05-07, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.banxico.org.mx/publicaciones-y-prensa/anuncios-de-las-decisiones-de-politica-monetaria/%7B8A05C722-0A97-4527-2166-0CE802CE6838%7D.pdf", status: VERIFICADO}
+  - {date: 2026-06-25, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.banxico.org.mx/publicaciones-y-prensa/anuncios-de-las-decisiones-de-politica-monetaria/%7BF6667DDE-E87D-68A3-0EBB-A4DF9048E403%7D.pdf", status: VERIFICADO}
+  - {date: 2026-08-06, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.banxico.org.mx/publicaciones-y-prensa/anuncios-de-las-decisiones-de-politica-monetaria/%7B8DA3F519-341F-480E-1D4E-1AEE71DD08DA%7D.pdf", status: VERIFICADO}
+  - {date: 2026-09-24, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.banxico.org.mx/publicaciones-y-prensa/anuncios-de-las-decisiones-de-politica-monetaria/anuncios-politica-monetaria-t.html", status: REPORTADO}
+  - {date: 2026-11-05, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.bbvaresearch.com/wp-content/uploads/2026/03/AgendaEconomica_2026.pdf", status: REPORTADO}
+  - {date: 2026-12-17, title: "Banxico: decisión de política monetaria", kind: macro, source_url: "https://www.bbvaresearch.com/wp-content/uploads/2026/03/AgendaEconomica_2026.pdf", status: REPORTADO}
+
+  # ---------------- macro: FOMC (día de decisión, 14:00 ET) ----------------
+  - {date: 2026-01-28, title: "FOMC decisión (27-28 ene)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-03-18, title: "FOMC decisión (17-18 mar, con SEP)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-04-29, title: "FOMC decisión (28-29 abr)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-06-17, title: "FOMC decisión (16-17 jun, con SEP)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-07-29, title: "FOMC decisión (28-29 jul)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-09-16, title: "FOMC decisión (15-16 sep, con SEP)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-10-28, title: "FOMC decisión (27-28 oct)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+  - {date: 2026-12-09, title: "FOMC decisión (8-9 dic, con SEP)", kind: macro, source_url: "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm", status: VERIFICADO}
+
+  # ---------------- macro: INEGI INPC (06:00 CDMX) ----------------
+  - {date: 2026-10-08, title: "INEGI: INPC mensual septiembre 2026", kind: macro, source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2026/inpc/inpc_2q2026_09.pdf", status: REPORTADO}
+  - {date: 2026-10-22, title: "INEGI: INPC 1a quincena octubre 2026", kind: macro, source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2026/inpc/inpc_1q2026_09.pdf", status: REPORTADO}
+  - {date: null, title: "INEGI: INPC mensual octubre 2026 (DOF a más tardar día 10)", kind: macro, source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2025/especiales/Cal_Dif-2026.pdf", status: NO_VERIFICADO}
+  - {date: null, title: "INEGI: INPC 1a quincena noviembre 2026", kind: macro, source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2025/especiales/Cal_Dif-2026.pdf", status: NO_VERIFICADO}
+  - {date: null, title: "INEGI: INPC mensual noviembre 2026", kind: macro, source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2025/especiales/Cal_Dif-2026.pdf", status: NO_VERIFICADO}
+  - {date: null, title: "INEGI: INPC 1a quincena diciembre 2026", kind: macro, source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2025/especiales/Cal_Dif-2026.pdf", status: NO_VERIFICADO}
+
+  # ---------------- macro: China ----------------
+  - {date: null, title: "NBS China: CPI septiembre 2026 (09:30 Beijing)", kind: macro, source_url: "https://www.stats.gov.cn/english/PressRelease/ReleaseCalendar/202512/t20251226_1962154.html", status: NO_VERIFICADO}
+  - {date: 2026-11-09, title: "NBS China: CPI octubre 2026 (09:30 Beijing)", kind: macro, source_url: "https://www.financecalendar.com/?p=2105", status: REPORTADO}
+  - {date: 2026-12-09, title: "NBS China: CPI noviembre 2026 (09:30 Beijing)", kind: macro, source_url: "https://www.financecalendar.com/?p=2105", status: REPORTADO}
+  - {date: 2026-10-20, title: "China LPR (día 20, 09:00 Beijing)", kind: macro, source_url: "https://english.www.gov.cn/statecouncil/ministries/201908/17/content_WS5d5795bbc6d0c6695ff7ed8e.html", status: INFERIDO}
+  - {date: 2026-11-20, title: "China LPR (día 20, 09:00 Beijing)", kind: macro, source_url: "https://english.www.gov.cn/statecouncil/ministries/201908/17/content_WS5d5795bbc6d0c6695ff7ed8e.html", status: INFERIDO}
+  - {date: 2026-12-21, title: "China LPR (20-dic es domingo; se pospone)", kind: macro, source_url: "https://english.www.gov.cn/statecouncil/ministries/201908/17/content_WS5d5795bbc6d0c6695ff7ed8e.html", status: INFERIDO}
