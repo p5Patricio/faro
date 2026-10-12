@@ -21,13 +21,15 @@ frontend:
 |---|---|---|
 | API | `api/main.py` | Ticker-scoped market-data routes (`/api/prices/{ticker}`, `/api/analysis/{ticker}`, `/api/analyst-consensus/{ticker}`, ...). Has a **demo-data fallback** for every route: if Postgres is unreachable, or `ALLOW_DEMO_FALLBACK=true` (dev default) and the repo raises, it serves synthetic data instead of a 500. |
 | API | `api/routers/finance.py` | Personal-finance-ledger routes, mounted at `/api/finance`. **No demo fallback** — a personal ledger has no meaningful demo mode; always 503s in clear text when the DB is down. |
+| API | `api/routers/investments.py` | Investment ledger, mounted at `/api/investments` (accounts, idempotent operations, positions, yearly worksheet JSON/CSV). Derived figures come from the pure `brain/investments/ledger.py` (average cost per account, MXN with dated FX, `Decimal`). **No demo fallback**; 503 "falta aplicar la migración 0016" until `0016_investment_ledger.sql` is applied. Informational only: no tax computed, no INPC update. |
 | API | `api/routers/cfdi.py` | CFDI 4.0 import at `/api/finance/cfdi` (`PUT` one XML as text, idempotent by stamp UUID; `GET ?year=` with personal-deduction hints by `UsoCFDI`). Parser `brain/finance/cfdi.py` is stdlib-only and refuses DOCTYPEs. 503 until `0017_cfdi_documents.sql` is applied. Hints only, never a deduction verdict. |
-| API | `api/routers/heatmap.py` | `/api/heatmap` — S&P-100 treemap tiles. |
-| DB | `db/migrations/*.sql` | Sequential, hand-written SQL, applied manually (there is no migration runner — see Gotchas). |
+| API | `api/routers/heatmap.py` | `/api/heatmap?market=us\|mx\|ca` — treemap tiles with real market caps (flagged placeholder when missing). |
+| API | `api/routers/markets.py`, `api/routers/macro.py` | `/api/markets/overview` (Panorama: indices, FX, commodities, yields; carries `is_demo`) and `/api/macro/overview` (inflation and rates; **never** synthetic: `data_sufficient: false` + reason instead). |
+| DB | `db/migrations/*.sql` | Sequential, hand-written SQL, applied by `python -m db.migrate` (checksummed, records `schema_migrations`; CI runs it). The user applies them to the real database by hand — see Gotchas. |
 | DB access | `collector/local_repository.py` | `LocalPostgresRepository`, thin `psycopg3` wrapper. Time-series tables (prices, fundamentals, analyst consensus) follow a **restatement-is-a-new-row** philosophy: never overwrite a historical reading, key on `(asset_id, timestamp/fetched_at)`, read the latest with `ORDER BY ... DESC LIMIT 1`. |
 | Data collection | `collector/providers/` | One class per data source (`yfinance_provider.py`, `binance_provider.py`, `stooq_provider.py`), a shared `PriceProvider` protocol in `base.py`, and a `registry.py` to look providers up by name. |
 | ML pipeline | `brain/` | `features.py` (feature-set registry: `technical_v2`, `fundamental_v1`, `technical_alpha_v1`, `sentiment_v1`, composed via `compose_feature_set`), `backtesting.py`, `inference_job.py`, `portfolio_risk.py`. |
-| Ops | `ops/` | Scheduled/CLI jobs (retraining, materialization batches, the Telegram bot, `run_local_app.ps1`/`register_local_app.ps1` for the always-on local dashboard). |
+| Ops | `ops/` | Scheduled/CLI jobs (local backup `ops/backup_db.py` / `.ps1`: `pg_dump` + JSON export of personal tables to a local folder with retention, D12; retraining, materialization batches, the Telegram bot, `run_local_app.ps1`/`register_local_app.ps1` for the always-on local dashboard). |
 | Frontend | `ui/src/App.tsx` | The market-intelligence dashboard (single large component): ticker picker, ML "signal" (`ModelPanel`), risk panel, analyst-consensus panel, price chart, backtests, paper trading. Tab-switches into `ui/src/features/heatmap/` and `ui/src/features/finance/` for those two separate feature areas. |
 | Frontend | `ui/src/lib/apiBase.ts` | Single source of truth for `API_BASE_URL` (env var `VITE_API_BASE_URL`, default `http://localhost:8000/api`). |
 
@@ -65,10 +67,13 @@ frontend:
 
 ## Gotchas
 
-- A migration file existing in `db/migrations/` does **not** mean it's applied — there is no
-  migration runner. Apply new ones manually against the local Postgres instance
-  (`LOCAL_DATABASE_URL` in `.env`) before the feature that needs the table will work (it falls
-  back to demo data / a clean error otherwise, not a crash).
+- A migration file existing in `db/migrations/` does **not** mean it's applied to the real database:
+  `python -m db.migrate` targets `LOCAL_DATABASE_URL` from `.env`, and only the user runs it there.
+  Agents never run it directly; the pytest session applies migrations only to `TEST_DATABASE_URL`.
+  Code that reads a new table/column must degrade gracefully until the migration is applied.
+- The API rejects unexpected `Host` headers (DNS-rebinding guard): `API_ALLOWED_HOSTS` (default
+  `localhost,127.0.0.1`, `*` disables) and `API_TRUST_PROXY` (default false: `X-Forwarded-For` is
+  ignored by the rate limiter).
 - `vite build`'s bundler (Rolldown, via Vite 8) resolves some CJS packages' default exports
   differently than the `npm run dev` server's esbuild pre-bundling does. `optimizeDeps.include`
   does **not** fix this for the production build (it only affects dev pre-bundling) — see

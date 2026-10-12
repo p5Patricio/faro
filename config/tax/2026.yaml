@@ -1,0 +1,229 @@
+# config/tax/<año>.yaml — Parámetros fiscales (personas físicas, México) para Faro
+# INFORMATIVO, NO ES ASESORÍA FISCAL. Faro NO debe calcular impuestos definitivos con esto.
+# Consulta: 2026-10-03.
+#
+# IMPORTANTE SOBRE "status":
+#   Durante esta investigación, el proxy de red bloqueó la descarga directa (WebFetch) de TODOS los
+#   sitios oficiales (sat.gob.mx, dof.gob.mx, diputados.gob.mx, inegi.org.mx, cefp.gob.mx) y de los
+#   secundarios (mley.mx, ey.com). Sólo funcionó el buscador (WebSearch, extractos).
+#   Por regla del encargo, NINGÚN valor queda como "verificado": todos son "no_verificado" o "ambiguo".
+#   El campo "confianza" indica cuántas fuentes coincidentes respaldan el dato:
+#     alta  = varias fuentes secundarias independientes coinciden y/o el extracto venía de un dominio oficial
+#     media = una sola fuente o extracto parcial
+#   ANTES DE USAR EN PRODUCCIÓN: abrir el source_url oficial a mano y cambiar status a "verificado".
+#
+# Fuentes oficiales a revisar manualmente:
+#   LISR (texto vigente): https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf
+#   CFF: https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf
+#   LIF 2025: https://www.diputados.gob.mx/LeyesBiblio/pdf/LIF_2025.pdf  (URL inferida por patrón, NO VERIFICADA)
+#   LIF 2026: https://www.diputados.gob.mx/LeyesBiblio/pdf/LIF_2026.pdf  (URL inferida por patrón, NO VERIFICADA)
+#   UMA (INEGI): https://www.inegi.org.mx/temas/uma/
+#   RMF 2026 y anexos: https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/
+
+#
+# Lo carga brain/tax/params.py (cuando exista); los valores con status distinto de
+# 'verificado' deben mostrarse en la UI como "no verificado".
+
+year: 2026
+params:
+  retencion_intereses_tasa_anual:
+    value: 0.90
+    unit: "% anual sobre el capital que genera los intereses (pago provisional, arts. 54 y 135 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LIF_2026.pdf"
+    secondary_urls:
+      - "https://www.galicia.com.mx/links/files/Actualizaciones/GC.-Actualizacion.-Fiscal.-Paquete-economico-2026-1163366.1.pdf"
+      - "https://www.elimparcial.com/dinero/2025/09/11/ahorradores-pagaran-mas-impuestos-en-2026-con-esta-iniciativa-para-la-ley-de-ingresos/"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: media
+    note: "Varias fuentes reportan 0.90% para 2026 (LIF 2026 publicada DOF 7-nov-2025). El número de artículo difiere entre fuentes (21 vs 24) y no pude confirmar que la cifra aprobada = la propuesta. Confirmar en LIF 2026 oficial."
+  isr_enajenacion_acciones_bolsa_tasa:
+    value: 10
+    unit: "% sobre ganancia neta del ejercicio, pago definitivo (art. 129 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Sin cambio conocido para 2026 en las fuentes consultadas."
+  perdidas_bolsa_ejercicios_amortizacion:
+    value: 10
+    unit: "ejercicios siguientes"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: media
+    note: "Ver nota del bloque 2025."
+  isr_dividendos_adicional_tasa:
+    value: 10
+    unit: "% (art. 140 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  dividendos_factor_piramidacion:
+    value: 1.4286
+    unit: "factor"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  dividendos_extranjeros_tasa_adicional:
+    value: 10
+    unit: "% (art. 142 fr. V LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: media
+    note: "Ver nota 2025."
+  fibra_retencion_resultado_fiscal_tasa:
+    value: 30
+    unit: "% (art. 188 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  fondos_inversion_renta_variable_tasa_ganancia:
+    value: 10
+    unit: "% (art. 88 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: media
+    note: ""
+  uma_diaria:
+    value: 117.31
+    unit: "MXN"
+    vigencia: "2026-02-01 a 2027-01-31 (enero 2026 usa UMA 2025)"
+    source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2026/uma/uma2026.pdf"
+    secondary_urls:
+      - "https://www.adn40.mx/mexico/2026-01-08/uma-sube-2026-inegi-valor-dia-mes-ano/"
+      - "https://www.taxtodaymexico.com/?p=13057"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Incremento 3.69% (INPC dic-2025). Extracto del comunicado INEGI 1/26 aparece en buscador, pero no se pudo descargar."
+  uma_mensual:
+    value: 3566.22
+    unit: "MXN"
+    source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2026/uma/uma2026.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  uma_anual:
+    value: 42794.64
+    unit: "MXN"
+    source_url: "https://www.inegi.org.mx/contenidos/saladeprensa/boletines/2026/uma/uma2026.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  deducciones_personales_tope_umas:
+    value: 5
+    unit: "UMA anuales (5 x 42,794.64 = 213,973.20 MXN, cálculo propio)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: alta
+    note: "Ver nota 2025 sobre qué UMA usar."
+  deducciones_personales_tope_porcentaje:
+    value: 15
+    unit: "% de ingresos totales"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  afore_voluntarias_tope_porcentaje:
+    value: 10
+    unit: "% de ingresos acumulables"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  afore_voluntarias_tope_umas:
+    value: 5
+    unit: "UMA anuales"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  art185_cuentas_especiales_ahorro_tope:
+    value: 152000
+    unit: "MXN"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  declaracion_anual_fecha_limite:
+    value: "2027-04-30"
+    unit: "fecha (por el ejercicio 2026; periodo 1-30 abril, art. 150 LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: media
+    note: "INFERIDO de la regla 'mes de abril' del art. 150; el SAT/RMF 2027 podría dar facilidades. Si el 30 cae en inhábil, se recorre (art. 12 CFF) — revisar."
+  ingresos_intereses_umbral_declaracion:
+    value: 100000
+    unit: "MXN de intereses reales"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Monto fijo en ley, sin cambio conocido."
+  salarios_umbral_declaracion:
+    value: 400000
+    unit: "MXN"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  resico_tope_ingresos:
+    value: 3500000
+    unit: "MXN anuales (art. 113-E LISR)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    secondary_urls:
+      - "https://sdv.com.mx/compendio/resolucion-miscelanea-2026/regla-3-13-1/"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "RMF 2026 (DOF 28-dic-2025) exige e.firma y buzón tributario a RESICO a más tardar 2027-01-01 (fuentes secundarias)."
+  enajenacion_bienes_muebles_exencion_umas:
+    value: 3
+    unit: "UMA anuales (art. 93 fr. XIX b)"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/LISR.pdf"
+    consulted: 2026-10-03
+    status: ambiguo
+    confianza: media
+    note: "Aplicación a cripto ambigua."
+  tipo_cambio_regla:
+    value: "FIX DOF día anterior (art. 20 CFF)"
+    unit: "regla"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  factor_actualizacion_regla:
+    value: "INPC reciente / INPC antiguo, mínimo 1 (art. 17-A CFF)"
+    unit: "regla"
+    source_url: "https://www.diputados.gob.mx/LeyesBiblio/pdf/CFF.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: ""
+  rmf_publicacion:
+    value: "2025-12-28"
+    unit: "fecha DOF de la RMF 2026"
+    source_url: "https://www.sat.gob.mx/minisitio/NormatividadRMFyRGCE/documentos2026/rmf/anexos/Anexo-1-RMF-2026_DOF-28122025.pdf"
+    consulted: 2026-10-03
+    status: no_verificado
+    confianza: alta
+    note: "Fecha aparece en el nombre de archivo oficial del Anexo 1 (visto en buscador)."
