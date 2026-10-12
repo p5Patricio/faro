@@ -10,6 +10,7 @@ from math import cos, sin
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from psycopg_pool import ConnectionPool
 from pydantic import BaseModel, Field
@@ -69,6 +70,8 @@ app.add_middleware(
     allow_methods=["GET", "PUT", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+# Added after CORS so it runs first (Starlette wraps middleware outside-in).
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=APP_CONFIG.trusted_hosts)
 
 
 @app.middleware("http")
@@ -80,7 +83,7 @@ async def rate_limit_middleware(request: Request, call_next):
         and request.url.path.startswith("/api/")
     ):
         key = client_key_for(
-            forwarded_for=request.headers.get("x-forwarded-for"),
+            forwarded_for=request.headers.get("x-forwarded-for") if APP_CONFIG.trust_proxy else None,
             client_host=request.client.host if request.client else None,
         )
         decision = _RATE_LIMITER.check(key)
@@ -88,7 +91,7 @@ async def rate_limit_middleware(request: Request, call_next):
             logger.warning("rate limit hit: client=%s path=%s", key, request.url.path)
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Demasiadas solicitudes; probá de nuevo en un momento."},
+                content={"detail": "Demasiadas solicitudes; intenta de nuevo en un momento."},
                 headers={"Retry-After": str(decision.retry_after)},
             )
     return await call_next(request)
@@ -249,7 +252,7 @@ def get_universe():
 @app.get("/api/prices/{ticker}")
 def get_prices(
     ticker: str,
-    limit: int = 100,
+    limit: int = Query(default=100, ge=1, le=5000),
     repository: LocalPostgresRepository | None = Depends(get_repository),
     config: AppConfig = Depends(get_app_config),
 ):

@@ -152,6 +152,20 @@ def test_walk_forward_evaluate_returns_fold_metrics() -> None:
     assert 0 <= result.summary["mean_f1_macro"] <= 1
 
 
+def test_walk_forward_embargo_drops_rows_between_train_and_test() -> None:
+    dataset = build_supervised_dataset(
+        make_prices(140), label_method="fixed_horizon", horizon=3, buy_threshold=0.003, sell_threshold=-0.003
+    )
+
+    plain = walk_forward_evaluate(dataset, n_splits=3)
+    embargoed = walk_forward_evaluate(dataset, n_splits=3, embargo_rows=3)
+
+    plain_train = [fold["train_rows"] for fold in plain.fold_metrics]
+    embargoed_train = [fold["train_rows"] for fold in embargoed.fold_metrics]
+    assert embargoed_train == [rows - 3 for rows in plain_train]
+    assert embargoed.summary["embargo_rows"] == 3
+
+
 def test_model_registry_exposes_comparable_candidates() -> None:
     names = available_model_names()
 
