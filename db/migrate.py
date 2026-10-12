@@ -69,7 +69,14 @@ def discover_migrations(migrations_dir: Path = MIGRATIONS_DIR) -> list[Path]:
 
 
 def checksum_for(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    """SHA-256 of the file with CRLF normalized to LF.
+
+    A Windows checkout with ``core.autocrlf=true`` rewrites the same SQL with
+    CRLF, which otherwise reads as an edited historical migration and blocks
+    every pending one. Recorded checksums were taken from LF files, so they
+    still match.
+    """
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def ensure_schema_migrations_table(conn: psycopg.Connection) -> None:

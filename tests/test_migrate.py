@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,17 @@ def _write_migration(directory: Path, name: str, sql: str) -> Path:
     path = directory / name
     path.write_text(sql, encoding="utf-8")
     return path
+
+
+def test_checksum_ignores_crlf_line_endings(tmp_path: Path) -> None:
+    lf = tmp_path / "lf.sql"
+    crlf = tmp_path / "crlf.sql"
+    lf.write_bytes(b"create table t (id int);\nselect 1;\n")
+    crlf.write_bytes(b"create table t (id int);\r\nselect 1;\r\n")
+
+    assert checksum_for(crlf) == checksum_for(lf)
+    # LF files keep their historical checksum, so recorded rows still match.
+    assert checksum_for(lf) == hashlib.sha256(lf.read_bytes()).hexdigest()
 
 
 def test_discover_migrations_orders_lexicographically(tmp_path: Path) -> None:
