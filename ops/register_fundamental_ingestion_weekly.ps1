@@ -57,6 +57,9 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
+# schtasks cannot set "run if missed" or "run on battery"; see that script.
+& (Join-Path $PSScriptRoot 'harden_scheduled_tasks.ps1') -TaskPath '\' -TaskName 'FaroFundamentalIngestionWeekly'
+
 Write-Host ""
 Write-Host "Registered. Verify with:"
 Write-Host "  schtasks /Query /TN `"FaroFundamentalIngestionWeekly`" /V /FO LIST"

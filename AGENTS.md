@@ -46,6 +46,11 @@ frontend:
   elevation), and opens the dashboard in the default browser once the frontend is actually
   reachable. `-Status` / `-Stop` flags are supported. **After changing backend or frontend
   code, `-Stop` then re-run** — this mode does not hot-reload.
+- **Scheduled tasks** (`ops/register_*.ps1`, all under `\Faro\`): `schtasks /Create` defaults to
+  "AC power only" and no catch-up, so on this laptop runs were silently refused (0x800710E0) or
+  skipped. Every register script now ends with `ops/harden_scheduled_tasks.ps1` (run if missed,
+  run on battery); run it alone to fix existing tasks. `Faro\DailyBackup`
+  (`ops/register_backup_task.ps1`) reads `FARO_BACKUP_DIR` and `PG_DUMP_PATH` from `.env`.
 - Both modes read `VITE_API_BASE_URL` from the root `.env` (`ui/vite.config.ts` has
   `envDir: '..'`) — it must match whichever port the API is actually running on, baked in at
   Vite's build/start time (not runtime).

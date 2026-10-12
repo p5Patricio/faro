@@ -5,6 +5,9 @@ Usage::
 
     py -3.14 -m ops.backup_db --dest D:\\Respaldos\\Faro [--keep 14] [--no-dump] [--no-json]
 
+``--dest`` and ``--pg-dump`` default to ``FARO_BACKUP_DIR`` and ``PG_DUMP_PATH``
+(environment or ``.env``), which is how the daily scheduled task runs it.
+
 Writes, inside ``--dest``, one timestamped folder per run::
 
     faro-20261003-062000/
@@ -38,6 +41,7 @@ from datetime import datetime
 from pathlib import Path
 
 import psycopg
+from dotenv import load_dotenv
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
@@ -133,13 +137,24 @@ def run_backup(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # The scheduled task (ops/register_backup_task.ps1) passes no arguments:
+    # the folder and the pg_dump path come from the environment or .env.
+    load_dotenv()
     parser = argparse.ArgumentParser(description="Respaldo local de la base de datos de Faro")
-    parser.add_argument("--dest", required=True, type=Path, help="Carpeta local donde guardar los respaldos")
+    parser.add_argument(
+        "--dest", type=Path, default=os.getenv("FARO_BACKUP_DIR") or None,
+        help="Carpeta local donde guardar los respaldos (default: FARO_BACKUP_DIR)",
+    )
     parser.add_argument("--keep", type=int, default=14, help="Cuántos respaldos conservar (default 14)")
     parser.add_argument("--no-dump", action="store_true", help="Solo exportar JSON")
     parser.add_argument("--no-json", action="store_true", help="Solo pg_dump")
-    parser.add_argument("--pg-dump", default="pg_dump", help="Ruta a pg_dump si no está en el PATH")
+    parser.add_argument(
+        "--pg-dump", default=os.getenv("PG_DUMP_PATH") or "pg_dump",
+        help="Ruta a pg_dump si no está en el PATH (default: PG_DUMP_PATH)",
+    )
     args = parser.parse_args(argv)
+    if args.dest is None:
+        parser.error("--dest or FARO_BACKUP_DIR is required")
     if args.keep < 1:
         parser.error("--keep must be at least 1")
     args.dest.mkdir(parents=True, exist_ok=True)

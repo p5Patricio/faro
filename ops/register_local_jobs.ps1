@@ -60,6 +60,11 @@ schtasks /Create `
     /F `
     /TR "wscript.exe `"$HiddenVbs`" `"$WeeklyJob`""
 
+# schtasks cannot set "run if missed" (audit O-1) or "run on battery": without
+# them a laptop that is off, asleep or unplugged at 06:20 skips the day.
+& (Join-Path $PSScriptRoot 'harden_scheduled_tasks.ps1') -TaskName 'DailyOperationalCycle'
+& (Join-Path $PSScriptRoot 'harden_scheduled_tasks.ps1') -TaskName 'WeeklyRetrainingCycle'
+
 Write-Host ""
 Write-Host "Registered. Verify with:"
 Write-Host "  schtasks /Query /TN `"Faro\DailyOperationalCycle`" /V /FO LIST"
