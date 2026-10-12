@@ -6,11 +6,11 @@ Fecha de consulta de todas las fuentes: 2026-10-03.
 
 ## Estado de verificación (léelo primero)
 
-Desde el entorno donde se hizo la investigación, el proxy de red **bloqueó la lectura directa** de sat.gob.mx, dof.gob.mx, diputados.gob.mx, inegi.org.mx y banxico.org.mx; solo funcionó el buscador (extractos). Por eso:
+**Actualizado el 2026-10-12:** la fase B leyó los textos oficiales completos (LISR, CFF, LIF 2025 y 2026, INEGI, Banxico, Fed, NBS). Resultados, correcciones y la lista de preguntas para el contador en [`verificacion-2026-10.md`](verificacion-2026-10.md).
 
-- **Ningún parámetro fiscal está marcado como `verificado`** en `config/tax/<año>.yaml`: todos son `no_verificado` (con `confianza: alta|media`) o `ambiguo`.
-- En el calendario, `VERIFICADO` significa "el texto aparece en un resultado de un dominio oficial", no "se leyó la página completa".
-- Antes de que Faro use un valor en un reporte, alguien debe abrir el `source_url` oficial y cambiar `status` a `verificado`. Hasta entonces la interfaz debe mostrarlo como "no verificado".
+- En `config/tax/<año>.yaml`, un parámetro `verificado` trae `evidence` (artículo y cita) y `verified_on`. Los `ambiguo` y `no_verificado` deben mostrarse en la interfaz como "no verificado".
+- En el calendario, `VERIFICADO` ahora significa "se leyó en la fuente oficial completa" y lleva `checked`.
+- La investigación original (fase 3, abajo) se hizo sólo con extractos de buscador, porque el proxy bloqueaba los sitios oficiales; donde difiera de los YAML, valen los YAML.
 
 ## Documentos
 
