@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 import pandas as pd
@@ -52,8 +52,14 @@ class WalkForwardBacktestResult:
     baselines: dict[str, BacktestResult]
 
 
-def run_prediction_backtest(feedback: pd.DataFrame, config: BacktestConfig | None = None) -> BacktestResult:
-    """Backtest evaluated predictions using label outcome returns as trade outcomes."""
+def run_prediction_backtest(
+    feedback: pd.DataFrame, config: BacktestConfig | None = None, *, charge_once: bool = False
+) -> BacktestResult:
+    """Backtest evaluated predictions using label outcome returns as trade outcomes.
+
+    ``charge_once`` models one position held through the whole period (the
+    buy-and-hold baseline): half the round-trip cost on the first row (entry)
+    and half on the last (exit), instead of a full round trip on every row."""
     config = config or BacktestConfig()
     if feedback.empty:
         return BacktestResult(metrics=_empty_metrics(config), trades=pd.DataFrame())
@@ -71,10 +77,16 @@ def run_prediction_backtest(feedback: pd.DataFrame, config: BacktestConfig | Non
 
     rows = []
     equity = config.initial_capital
-    for _, row in evaluated.iterrows():
+    last_position = len(evaluated) - 1
+    for position, (_, row) in enumerate(evaluated.iterrows()):
         action = str(row["predicted_action"])
         gross_return = _gross_return_for_action(action, row["outcome_return"], config)
-        cost = config.round_trip_cost if action in TRADE_ACTIONS else 0.0
+        if action not in TRADE_ACTIONS:
+            cost = 0.0
+        elif charge_once:
+            cost = config.round_trip_cost / 2 * ((position == 0) + (position == last_position))
+        else:
+            cost = config.round_trip_cost
         net_return = (gross_return * config.position_size) - cost
         equity *= 1 + net_return
         rows.append(
@@ -110,7 +122,7 @@ def run_walk_forward_model_backtest(
     config: BacktestConfig | None = None,
 ) -> WalkForwardBacktestResult:
     """Train on chronological folds and backtest only out-of-sample predictions."""
-    config = config or BacktestConfig()
+    config = annualized_for_stride(config or BacktestConfig(), trade_stride)
     prediction_policy = prediction_policy or PredictionPolicy()
     columns = feature_columns or FEATURE_COLUMNS
     _validate_walk_forward_dataset(dataset, columns)
@@ -165,6 +177,7 @@ def run_walk_forward_model_backtest(
     baselines = {
         "no_trade": run_prediction_backtest(_baseline_feedback(predictions, "HOLD"), config),
         "always_buy": run_prediction_backtest(_baseline_feedback(predictions, "BUY"), config),
+        "buy_and_hold": run_prediction_backtest(_baseline_feedback(predictions, "BUY"), config, charge_once=True),
     }
     if config.allow_short:
         baselines["always_sell"] = run_prediction_backtest(_baseline_feedback(predictions, "SELL"), config)
@@ -232,6 +245,15 @@ def run_confidence_threshold_sweep(
     return sorted(rows, key=lambda row: row["total_return"], reverse=True)
 
 
+def annualized_for_stride(config: BacktestConfig, trade_stride: int) -> BacktestConfig:
+    """With one evaluated row every ``trade_stride`` bars, a year holds
+    ``periods_per_year / trade_stride`` rows; annualizing with the per-bar count
+    would inflate ``sharpe_like`` by about ``sqrt(trade_stride)``."""
+    if trade_stride <= 1:
+        return config
+    return replace(config, periods_per_year=max(1, round(config.periods_per_year / trade_stride)))
+
+
 def _gross_return_for_action(action: str, outcome_return: float, config: BacktestConfig) -> float:
     if action == "BUY":
         return float(outcome_return)
@@ -292,6 +314,7 @@ def _metrics_from_trades(trades: pd.DataFrame, config: BacktestConfig) -> dict:
         "average_net_return": _nullable_float(returns.mean()),
         "profit_factor": None if losses == 0 else float(gains / abs(losses)),
         "sharpe_like": _sharpe_like(returns, periods_per_year=config.periods_per_year),
+        "periods_per_year": config.periods_per_year,
         "fee_bps": config.fee_bps,
         "slippage_bps": config.slippage_bps,
         "position_size": config.position_size,
@@ -312,6 +335,7 @@ def _empty_metrics(config: BacktestConfig) -> dict:
         "average_net_return": None,
         "profit_factor": None,
         "sharpe_like": None,
+        "periods_per_year": config.periods_per_year,
         "fee_bps": config.fee_bps,
         "slippage_bps": config.slippage_bps,
         "position_size": config.position_size,
