@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test constancia: made-up RFCs and UUID, not a real document. -->
+<retenciones:Retenciones xmlns:retenciones="http://www.sat.gob.mx/esquemas/retencionpago/2"
+    xmlns:dividendos="http://www.sat.gob.mx/esquemas/retencionpago/1/dividendos"
+    xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+    Version="2.0" FolioInt="TEST-0002" FechaExp="2026-01-31T10:00:00" CveRetenc="14">
+  <retenciones:Emisor RfcE="AAA010101AAA" NomDenRazSocE="BROKER DE PRUEBA" RegimenFiscalE="601"/>
+  <retenciones:Receptor NacionalidadR="Nacional">
+    <retenciones:Nacional RfcR="BBB010101BBB" NomDenRazSocR="PERSONA DE PRUEBA" DomicilioFiscalR="06600"/>
+  </retenciones:Receptor>
+  <retenciones:Periodo MesIni="1" MesFin="12" Ejercicio="2025"/>
+  <retenciones:Totales MontoTotOperacion="620.75" MontoTotGrav="0.00" MontoTotExent="620.75" MontoTotRet="0.00"/>
+  <retenciones:Complemento>
+    <dividendos:Dividendos Version="1.0"><dividendos:DividOUtil CveTipDivOUtil="06" MontISRAcredRetMexico="0.00" MontISRAcredRetExtranjero="1.50" MontRetExtDivExt="0.00" TipoSocDistrDiv="Sociedad Nacional" MontISRAcredNal="0.00" MontDivAcumNal="500.00" MontDivAcumExt="120.75"/></dividendos:Dividendos>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="1A2B3C4D-0000-4000-8000-000000000002" FechaTimbrado="2026-01-31T10:01:00"/>
+  </retenciones:Complemento>
+</retenciones:Retenciones>

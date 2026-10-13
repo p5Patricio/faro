@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test constancia: made-up RFCs and UUID, not a real document. -->
+<retenciones:Retenciones xmlns:retenciones="http://www.sat.gob.mx/esquemas/retencionpago/2"
+    xmlns:intereses="http://www.sat.gob.mx/esquemas/retencionpago/1/intereses"
+    xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+    Version="2.0" FolioInt="TEST-0001" FechaExp="2026-01-31T10:00:00" CveRetenc="16">
+  <retenciones:Emisor RfcE="AAA010101AAA" NomDenRazSocE="BROKER DE PRUEBA" RegimenFiscalE="601"/>
+  <retenciones:Receptor NacionalidadR="Nacional">
+    <retenciones:Nacional RfcR="BBB010101BBB" NomDenRazSocR="PERSONA DE PRUEBA" DomicilioFiscalR="06600"/>
+  </retenciones:Receptor>
+  <retenciones:Periodo MesIni="1" MesFin="12" Ejercicio="2025"/>
+  <retenciones:Totales MontoTotOperacion="1250.50" MontoTotGrav="1250.50" MontoTotExent="0.00" MontoTotRet="12.34">
+    <retenciones:ImpRetenidos BaseRet="1250.50" ImpuestoRet="001" MontoRet="12.34" TipoPagoRet="Pago definitivo"/>
+  </retenciones:Totales>
+  <retenciones:Complemento>
+    <intereses:Intereses Version="1.0" SistFinanciero="SI" RetiroAORESRetInt="NO" OperFinancDerivad="NO" MontIntNominal="1250.50" MontIntReal="1000.25" Perdida="0.00"/>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="1A2B3C4D-0000-4000-8000-000000000001" FechaTimbrado="2026-01-31T10:01:00"/>
+  </retenciones:Complemento>
+</retenciones:Retenciones>
