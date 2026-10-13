@@ -553,6 +553,22 @@ def test_prediction_history_endpoint_returns_audit_rows() -> None:
     }
 
 
+def test_prediction_history_serves_unevaluated_predictions_as_null() -> None:
+    # Not-yet-evaluated rows carry NaN in the feedback columns; NaN is not valid JSON.
+    feedback = pd.DataFrame(
+        [{"prediction_id": 2, "predicted_action": "BUY", "confidence": 0.6, "actual_label": None,
+          "is_correct": float("nan"), "outcome_return": float("nan")}]
+    )
+    override_repository(FakeRepository(prediction_feedback=feedback))
+    client = TestClient(app)
+
+    response = client.get("/api/predictions/AAPL?only_evaluated=false")
+
+    clear_overrides()
+    assert response.status_code == 200
+    assert response.json()[0]["feedback"] == {"actual_label": None, "is_correct": None, "outcome_return": None}
+
+
 def test_prediction_history_endpoint_returns_empty_demo_history() -> None:
     app.dependency_overrides[get_repository] = lambda: None
     client = TestClient(app)

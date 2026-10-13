@@ -101,6 +101,17 @@ export function decimalToCents(text: string): number | null {
   return Number.isSafeInteger(cents) ? cents : null;
 }
 
+/**
+ * A quantity as the API sends it ("69.0000000000") without trailing zeros ("69",
+ * "0.125"), grouping thousands. String-based, so no digit is lost to a float.
+ */
+export function formatQuantity(text: string): string {
+  const [whole, fraction = ''] = text.split('.');
+  const digits = fraction.replace(/0+$/, '');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return digits ? `${grouped}.${digits}` : grouped;
+}
+
 /** The API's `detail` when it sent one (e.g. the missing-migration 503), else `fallback`. */
 export function errorDetail(error: unknown, fallback: string): string {
   if (axios.isAxiosError(error)) {

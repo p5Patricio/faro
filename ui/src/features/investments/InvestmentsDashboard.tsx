@@ -13,6 +13,7 @@ import {
   decimalToCents,
   errorDetail,
   fetchInvestments,
+  formatQuantity,
   putAccount,
   putOperation,
   type InstrumentType,
@@ -120,7 +121,7 @@ function PositionsPanel({ positions }: { positions: Position[] }) {
                     <span className="block text-xs text-ink-muted">{INSTRUMENT_LABELS[position.instrument_type]}</span>
                   </td>
                   <td className="py-2 pr-3 text-ink-secondary">{position.account_name ?? '—'}</td>
-                  <td className="py-2 pr-3 text-right tabular-nums">{position.quantity}</td>
+                  <td className="py-2 pr-3 text-right tabular-nums">{formatQuantity(position.quantity)}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">
                     {position.average_cost_mxn_cents === null
                       ? '—'
@@ -377,7 +378,7 @@ function OperationsPanel({ operations, accounts }: { operations: InvestmentOpera
                 <span className="text-ink">{KIND_LABELS[operation.kind]} · {operation.symbol}</span>
                 <span className="block text-xs text-ink-muted">
                   {formatShortDate(operation.trade_date)} · {names.get(operation.account_id) ?? '—'}
-                  {operation.quantity ? ` · ${operation.quantity} títulos` : ''}
+                  {operation.quantity ? ` · ${formatQuantity(operation.quantity)} ${formatQuantity(operation.quantity) === '1' ? 'título' : 'títulos'}` : ''}
                 </span>
               </span>
               <span className="text-right tabular-nums">

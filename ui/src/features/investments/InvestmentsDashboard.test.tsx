@@ -2,7 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import axios from 'axios';
 import { InvestmentsDashboard } from './InvestmentsDashboard.tsx';
-import { decimalToCents } from './api.ts';
+import { decimalToCents, formatQuantity } from './api.ts';
 
 vi.mock('axios', () => ({
   default: {
@@ -72,5 +72,14 @@ describe('decimalToCents', () => {
     expect(decimalToCents('0.07')).toBe(7);
     expect(decimalToCents('1.234')).toBeNull();
     expect(decimalToCents('-5')).toBeNull();
+  });
+});
+
+describe('formatQuantity', () => {
+  it('drops trailing zeros and groups thousands without a float round trip', () => {
+    expect(formatQuantity('69.0000000000')).toBe('69');
+    expect(formatQuantity('5660.0000000000')).toBe('5,660');
+    expect(formatQuantity('0.1250000000')).toBe('0.125');
+    expect(formatQuantity('12345678901234567890.5')).toBe('12,345,678,901,234,567,890.5');
   });
 });
