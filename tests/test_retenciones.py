@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app, get_repository
+from api.routers.retentions import _warnings
 from brain.investments.retenciones import RetencionesError, parse_retenciones, reconcile_year
 from collector.local_repository import LocalPostgresRepository
 
@@ -67,12 +68,25 @@ def test_reconcile_year_reports_each_status() -> None:
     rows = {row["concept"]: row for row in reconcile_year(documents, {"summary": summary})}
 
     assert rows["interest"]["status"] == "coincide" and rows["interest"]["constancia_real_cents"] == 100_025
+    assert rows["interest"]["constancia_loss_cents"] == 0
     assert rows["interest_withheld"]["status"] == "coincide"
     # Compared on the dividend paid (MontoTotOperacion), not the grossed-up accumulable amount.
     assert (rows["dividends"]["status"], rows["dividends"]["difference_cents"]) == ("difiere", 12_075)
     assert rows["dividends"]["constancia_accumulable_cents"] == 62_075
     assert (rows["sale"]["status"], rows["sale"]["constancia_cents"]) == ("sin_libro", 64_975)
     assert [r["status"] for r in reconcile_year([], {"summary": summary})] == ["sin_constancia"] * 3
+
+
+def test_generic_rfc_warning_is_grouped_per_issuer_and_year() -> None:
+    generic = b"XAXX010101000"
+    interest = parse_retenciones(INTEREST.replace(b"BBB010101BBB", generic))
+    dividends = parse_retenciones(DIVIDENDS.replace(b"BBB010101BBB", generic))
+    other_year = {**interest, "year": 2024}
+
+    grouped = _warnings([interest, dividends])
+    assert len(grouped) == 1 and "intereses" in grouped[0] and "dividendos" in grouped[0]
+    assert len(_warnings([interest, other_year])) == 2
+    assert _warnings([parse_retenciones(INTEREST)]) == []
 
 
 @pytest.fixture()

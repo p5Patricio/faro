@@ -200,6 +200,7 @@ def reconcile_year(
         }
         if concept == "interest":
             row["constancia_real_cents"] = total("intereses", "real_cents")
+            row["constancia_loss_cents"] = total("intereses", "loss_cents")
         if concept == "dividends":
             row["constancia_accumulable_cents"] = dividends_accumulable
         rows.append(row)

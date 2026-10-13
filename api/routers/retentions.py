@@ -56,13 +56,22 @@ def _summary(row: dict[str, Any]) -> dict[str, Any]:
     return {column: row[column] for column in SUMMARY_COLUMNS}
 
 
+CONCEPT_LABELS = {"intereses": "intereses", "dividendos": "dividendos", "enajenacion": "venta de acciones"}
+
+
 def _warnings(documents: list[dict[str, Any]]) -> list[str]:
+    """One warning per (issuer, year) for constancias issued to the generic RFC, naming the affected concepts."""
+    affected: dict[tuple[str, int], list[str]] = {}
+    for document in documents:
+        if document["receiver_is_generic"]:
+            concepts = affected.setdefault((document["emitter_rfc"], document["year"]), [])
+            label = CONCEPT_LABELS.get(document["concept"], document["concept"])
+            if label not in concepts:
+                concepts.append(label)
     return [
-        f"La constancia de {d['emitter_rfc']} ({d['concept']}, {d['month_start']}-{d['month_end']}/{d['year']}) "
-        f"se emitió al RFC genérico {GENERIC_RFC}: el SAT no la vincula con tu RFC. "
-        "Pide a tu intermediario que la reexpida con tu RFC."
-        for d in documents
-        if d["receiver_is_generic"]
+        f"Las constancias de {rfc} de {year} ({', '.join(concepts)}) se emitieron al RFC genérico {GENERIC_RFC}: "
+        "el SAT no las vincula con tu RFC. Pide a tu intermediario que las reexpida con tu RFC."
+        for (rfc, year), concepts in affected.items()
     ]
 
 

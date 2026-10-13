@@ -42,7 +42,7 @@ Out of scope: UI (next PR), automatic correction of ledger rows, tax computation
 - [x] R1 Parser + reconciliation (pure) — route: delegated writer (2+ non-trivial files)
 - [x] R2 Migration 0018 + repository + API router + AGENTS.md row — route: same writer
 - [x] R3 Tests (synthetic fixtures) + full backend suite: 978 passed
-- [ ] R4 Apply 0018 to the real DB (backup + user confirmation), import the 6 real XMLs locally,
+- [x] R4 Apply 0018 to the real DB (backup + user confirmation), import the 6 real XMLs locally,
       report the reconciliation for 2024 and 2025
 
 ## Acceptance criteria
@@ -62,6 +62,7 @@ Out of scope: UI (next PR), automatic correction of ledger rows, tax computation
   (x 1.4286, LISR art. 140) and would never match the ledger; the accumulable amount is reported
   as `constancia_accumulable_cents`. Full backend suite: 978 passed.
 
-## Next step
-
-R4 needs the user's confirmation to apply `0018` to the real database (after a backup).
+- 2026-10-12: R4 done after the user's confirmation. PR #27 merged; backup taken; `0018` applied to the
+  real DB; app restarted; the 6 real XMLs imported through the API (re-import created 0 duplicates).
+  Every 2024/2025 row is `sin_libro` (the ledger starts in 2026); 2024 documents carry the generic-RFC
+  warning. Follow-ups moved to `fiscal-documents-ui.md` (grouped warnings, interest real loss, UI).
