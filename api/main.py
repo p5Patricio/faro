@@ -383,7 +383,10 @@ def get_prediction_history(
             limit=limit,
             ascending=False,
         )
-        return [format_prediction_history_row(row) for row in feedback.to_dict(orient="records")]
+        # Predictions not evaluated yet have NaN in the feedback columns; NaN is not
+        # valid JSON, so the response would fail with a 500 (seen as CORS in the browser).
+        records = feedback.astype(object).where(feedback.notna(), None).to_dict(orient="records")
+        return [format_prediction_history_row(row) for row in records]
     except ValueError:
         if not should_use_demo_ticker(ticker, config):
             raise HTTPException(status_code=404, detail="Activo no encontrado") from None
