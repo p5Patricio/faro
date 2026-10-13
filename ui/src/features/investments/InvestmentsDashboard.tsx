@@ -4,6 +4,7 @@ import { EmptyState } from '../../components/ui/EmptyState.tsx';
 import { Panel } from '../../components/ui/Panel.tsx';
 import { SkeletonLines } from '../../components/ui/Skeleton.tsx';
 import { formatCents, formatDateOnly, formatShortDate, BASE_CURRENCY } from '../finance/lib/format.ts';
+import { ConstanciasPanel } from './ConstanciasPanel.tsx';
 import {
   CONCEPT_LABELS,
   INSTRUMENT_LABELS,
@@ -87,6 +88,7 @@ export function InvestmentsDashboard() {
         </Panel>
         <WorksheetPanel worksheet={data.worksheet} accounts={data.accounts} year={year} onYearChange={setYear} />
       </div>
+      <ConstanciasPanel year={year} />
       <OperationsPanel operations={data.operations} accounts={data.accounts} />
     </div>
   );

@@ -133,3 +133,52 @@ export async function putAccount(payload: { name: string; broker?: string }): Pr
 export async function putOperation(payload: InvestmentOperation): Promise<InvestmentOperation> {
   return (await axios.put<InvestmentOperation>(`${INVESTMENTS_URL}/transactions`, payload)).data;
 }
+
+export type ReconciliationConcept = 'interest' | 'interest_withheld' | 'dividends' | 'sale';
+export type ReconciliationStatus = 'coincide' | 'difiere' | 'sin_libro' | 'sin_constancia';
+
+export interface ReconciliationRow {
+  concept: ReconciliationConcept;
+  constancia_cents: number;
+  ledger_cents: number;
+  difference_cents: number;
+  status: ReconciliationStatus;
+  constancia_real_cents?: number;
+  constancia_loss_cents?: number;
+  constancia_accumulable_cents?: number;
+}
+
+export interface RetentionDocument {
+  uuid: string;
+  year: number;
+  month_start: number;
+  month_end: number;
+  concept: string;
+  emitter_rfc: string | null;
+  receiver_is_generic: boolean;
+  operation_cents: number;
+  withheld_cents: number;
+}
+
+export interface RetentionsYear {
+  year: number;
+  documents: RetentionDocument[];
+  reconciliation: ReconciliationRow[];
+  warnings: string[];
+  disclaimer: string;
+}
+
+export const RETENTIONS_URL = `${INVESTMENTS_URL}/retentions`;
+
+export async function fetchRetentions(year: number): Promise<RetentionsYear> {
+  return (await axios.get<RetentionsYear>(RETENTIONS_URL, { params: { year } })).data;
+}
+
+/** Uploads one constancia; a rejected file throws an `Error` carrying the API's Spanish detail. */
+export async function putRetention(xml: string): Promise<{ created: boolean }> {
+  try {
+    return (await axios.put<{ created: boolean }>(RETENTIONS_URL, { xml })).data;
+  } catch (caught) {
+    throw new Error(errorDetail(caught, 'No se pudo importar la constancia.'), { cause: caught });
+  }
+}

@@ -23,8 +23,9 @@ import { GoalsPanel } from './components/GoalsPanel.tsx';
 import { InvestableSurplusPanel } from './components/InvestableSurplusPanel.tsx';
 import { TransactionsPanel } from './components/TransactionsPanel.tsx';
 import { TransactionForm } from './components/TransactionForm.tsx';
+import { CfdiPanel } from './components/CfdiPanel.tsx';
 
-type FinanceSection = 'resumen' | 'categorias' | 'patrimonio' | 'recurrentes' | 'metas' | 'excedente' | 'movimientos';
+type FinanceSection = 'resumen' | 'categorias' | 'patrimonio' | 'recurrentes' | 'metas' | 'excedente' | 'movimientos' | 'facturas';
 
 interface SectionOption {
   value: FinanceSection;
@@ -39,6 +40,7 @@ const SECTION_OPTIONS: SectionOption[] = [
   { value: 'metas', label: 'Metas' },
   { value: 'excedente', label: 'Excedente' },
   { value: 'movimientos', label: 'Movimientos' },
+  { value: 'facturas', label: 'Facturas' },
 ];
 
 /**
@@ -181,6 +183,8 @@ export function FinanceDashboard() {
         )}
       </Panel>
     );
+  } else if (section === 'facturas') {
+    sectionContent = <CfdiPanel />;
   } else {
     sectionContent = (
       <TransactionsPanel
