@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test constancia: made-up RFCs and UUID, not a real document. -->
+<retenciones:Retenciones xmlns:retenciones="http://www.sat.gob.mx/esquemas/retencionpago/2"
+    xmlns:enajenaciondeacciones="http://www.sat.gob.mx/esquemas/retencionpago/1/enajenaciondeacciones"
+    xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital"
+    Version="2.0" FolioInt="TEST-0003" FechaExp="2026-01-31T10:00:00" CveRetenc="19">
+  <retenciones:Emisor RfcE="AAA010101AAA" NomDenRazSocE="BROKER DE PRUEBA" RegimenFiscalE="601"/>
+  <retenciones:Receptor NacionalidadR="Nacional">
+    <retenciones:Nacional RfcR="BBB010101BBB" NomDenRazSocR="PERSONA DE PRUEBA" DomicilioFiscalR="06600"/>
+  </retenciones:Receptor>
+  <retenciones:Periodo MesIni="1" MesFin="12" Ejercicio="2025"/>
+  <retenciones:Totales MontoTotOperacion="5000.00" MontoTotGrav="0.00" MontoTotExent="0.00" MontoTotRet="0.00"/>
+  <retenciones:Complemento>
+    <enajenaciondeacciones:EnajenaciondeAcciones Version="1.0" ContratoIntermediacion="CTR-TEST-1" Ganancia="800.00" Perdida="150.25"/>
+    <tfd:TimbreFiscalDigital Version="1.1" UUID="1A2B3C4D-0000-4000-8000-000000000003" FechaTimbrado="2026-01-31T10:01:00"/>
+  </retenciones:Complemento>
+</retenciones:Retenciones>

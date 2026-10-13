@@ -177,6 +177,11 @@ from api.routers.cfdi import router as cfdi_router  # noqa: E402
 
 app.include_router(cfdi_router, prefix="/api/finance/cfdi")
 
+# Same deferred-import reasoning; a sub-resource of the investments collection.
+from api.routers.retentions import router as retentions_router  # noqa: E402
+
+app.include_router(retentions_router, prefix="/api/investments/retentions")
+
 
 @app.get("/")
 def read_root():
