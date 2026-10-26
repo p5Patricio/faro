@@ -62,6 +62,8 @@ EXPORT_TABLES: tuple[str, ...] = (
     "finance_goals",
     "investment_accounts",
     "investment_transactions",
+    "cfdi_documents",
+    "retention_documents",
     "risk_profiles",
 )
 
