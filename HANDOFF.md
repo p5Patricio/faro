@@ -1,3 +1,7 @@
+> **Documento historico (2026-08-29).** Describe la migracion a PostgreSQL local y el estado de aquella sesion; varias
+> cosas ya no son ciertas (rama activa, commits sin subir, tareas sin registrar). **Lo vigente esta en `AGENTS.md`**; para
+> mudar el proyecto a otra computadora, `docs/MIGRACION-NUEVA-PC.md`.
+
 # Traspaso de Sesión — Faro
 
 Fecha: 2026-08-29. Este documento es para el próximo agente/sesión que continúe este

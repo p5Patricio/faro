@@ -14,7 +14,10 @@ Plataforma experimental para investigacion, entrenamiento y evaluacion de modelo
 | API | FastAPI con endpoints para activos, precios, analisis, backtests e historial de predicciones. |
 | Datos | PostgreSQL local como unica fuente; modo demo local cuando la base de datos no esta disponible; universo ampliado a S&P 100 (101 tickers) con snapshot fechado y disclosure de sesgo de supervivencia. |
 | ML | Pipeline base para features, labels, entrenamiento, inferencia, feedback y backtesting. |
-| Calidad | Suite de pruebas para API, collector, repositorio Postgres local y pipeline de modelo. |
+| Calidad | Suite de pruebas para API, collector, repositorio Postgres local y pipeline de modelo (~980 pruebas backend, ~150 de frontend). |
+| Finanzas personales | Libro de movimientos, presupuestos, patrimonio, pagos recurrentes y metas; bot de Telegram para registrar gastos. |
+| Inversiones | Libro de inversiones con costo promedio por cuenta y ganancias en MXN; conciliacion con las constancias de la casa de bolsa (CFDI de Retenciones). |
+| Fiscal (Mexico) | Facturas CFDI 4.0 por uso de CFDI, parametros fiscales verificados contra los textos oficiales (`docs/sat/`). Informativo: no calcula impuestos. |
 
 ## Experiencia
 
@@ -56,6 +59,11 @@ flowchart LR
 | `ui/` | Frontend React + Vite + Tailwind. |
 | `tests/` | Pruebas automatizadas del sistema. |
 | `openspec/` | SDD/OpenSpec para cambios profesionales y requisitos activos. |
+| `AGENTS.md` | **Punto de entrada para agentes de IA**: contexto, decisiones, herramientas, pendientes y propuestas. |
+| `docs/` | Roadmap (`ROADMAP.md`), auditoria, investigacion fiscal (`sat/`), guia para mudar el proyecto a otra computadora (`MIGRACION-NUEVA-PC.md`) y plantilla de `.env` (`env.template`). |
+| `odd/tasks/` | Plan y bitacora de avance de cada funcion. |
+| `config/` | Universos de activos, parametros fiscales (`tax/`) y catalogo CFDI del SAT (`sat/`). |
+| `ops/` | Tareas programadas, respaldos, traspaso entre computadoras, bot de Telegram. |
 | `CONTRIBUTING.md` | Guia para contribuir, verificar y trabajar sin filtrar secretos. |
 | `SECURITY.md` | Politica de seguridad, reporte privado y rotacion de credenciales. |
 | `CHANGELOG.md` | Historial de cambios relevantes. |
@@ -64,10 +72,10 @@ flowchart LR
 
 ## Configuracion
 
-1. Crea una copia local de variables:
+1. Crea una copia local de variables (la plantilla lista todas las que lee el codigo):
 
 ```bash
-cp .env.example .env
+cp docs/env.template .env
 ```
 
 2. Completa tus credenciales:
@@ -462,4 +470,4 @@ La interfaz muestra esa transparencia como `Modelo base -> decision final`, junt
 
 ## Roadmap
 
-- Aplicar perfiles de riesgo de usuario durante inferencia personalizada.
+El plan vigente esta en [`docs/ROADMAP.md`](docs/ROADMAP.md) y los pendientes detallados en [`AGENTS.md`](AGENTS.md).

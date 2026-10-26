@@ -46,5 +46,5 @@ Out of scope: bank statement importers (waiting for the user's Nu and BBVA files
 - 2026-10-12: F1-F3 by one delegated writer (targeted: pytest 10 passed, vitest 14 files passed, lint and tsc
   clean). Parent checks: backend 979 passed; UI lint clean, 150 tests passed, build OK. Browser check on
   the always-on app with the real imported data: the 2024 constancias show one grouped generic-RFC warning,
-  the reconciliation rows (all `sin_libro`) and the interest real loss (9.86); the Facturas tab renders its
+  the reconciliation rows (all `sin_libro`) and the interest real-loss row; the Facturas tab renders its
   empty state for 2026. Only console error: the pre-existing `/api/predictions` CORS one (unrelated).
