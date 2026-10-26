@@ -25,3 +25,7 @@ supabase/.temp/
 .ruff_cache/
 skills-lock.json
 .atl/.skill-registry.cache.json
+
+# Personal financial files (CFDI, statements, constancias, personal context): never commit.
+# This repo is public. Keep this rule in the tracked .gitignore (a clone has no .git/info/exclude).
+private/

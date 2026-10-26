@@ -1,6 +1,6 @@
 # Estado del Proyecto
 
-Ultima revision operativa: 2026-09-02.
+Ultima revision operativa: 2026-10-26. Para el estado detallado, decisiones y pendientes, ver `AGENTS.md`.
 
 Faro ya cuenta con una base funcional para investigar, entrenar, evaluar y monitorear modelos de decision de inversion. El sistema no promete precision perfecta ni debe operar capital real sin una etapa prolongada de validacion; esta construido para maximizar evidencia, trazabilidad y control de riesgo antes de tomar decisiones.
 
@@ -26,7 +26,12 @@ Faro ya cuenta con una base funcional para investigar, entrenar, evaluar y monit
 | Analisis fundamental | Feature set opcional `fundamental_v1` (Piotroski F-Score, Altman Z-Score, Novy-Marx gross profitability) sobre hechos XBRL de SEC EDGAR, calculado punto-en-el-tiempo por `filed_date` (nunca `period_end`). Solo acciones; ingestion standalone y apagada por defecto (no enganchada al job diario). Ver [Analisis Fundamental](README.md#analisis-fundamental) en el README. |
 | SDD | OpenSpec para planificar mejoras profesionales por bloques; base compartida de inteligencia financiera archivada. |
 | Frontend | Consola React decision-first: switcher de activos con command palette, tabs de evidencia, gauge de confianza con umbral, distribucion de probabilidad, sparkline de senales, drawer de perfil de riesgo, tablas unificadas, estados vacios que ensenan, pasada de accesibilidad (WCAG 2.2), auto-refresh. |
-| Calidad | Suite backend contra PostgreSQL real (~350 tests). Frontend con vitest + testing-library sobre los primitivos nuevos. |
+| Calidad | Suite backend contra PostgreSQL real (~980 tests). Frontend con vitest + testing-library (~150 tests). |
+| Finanzas personales | Movimientos, presupuestos, patrimonio, pagos recurrentes y metas; bot de Telegram para gastos; sin modo demo (el libro personal nunca muestra datos sinteticos). |
+| Mercados y macro | Panorama de indices, divisas, materias primas y rendimientos; mapa de calor con capitalizacion real (EE. UU., Mexico, Canada); inflacion y tasas de EE. UU. y Mexico (nunca sinteticas). |
+| Inversiones | Libro con costo promedio por cuenta, comisiones en el costo, ganancias en MXN con tipo de cambio fechado, FIBRAs, intereses y dividendos; hojas de trabajo por ano para el contador. |
+| Fiscal Mexico | Parametros 2025/2026 y calendario verificados contra el texto oficial; catalogo CFDI del SAT; importadores de facturas CFDI 4.0 y de constancias (CFDI de Retenciones) con conciliacion contra el libro; interfaz en Finanzas y en Inversiones. |
+| Operacion | Respaldo diario (`pg_dump` + JSON) y paquete de traspaso entre computadoras; tareas programadas ocultas, que se ejecutan si se omiten y con bateria; API con proteccion de `Host`. |
 
 ## Flujo Operativo Recomendado
 
